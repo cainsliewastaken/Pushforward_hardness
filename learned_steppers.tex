@@ -1,0 +1,879 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm,mathtools}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage[colorlinks=true,linkcolor=blue,citecolor=blue]{hyperref}
+
+% ---------------------------------------------------------------
+% Theorem environments
+% ---------------------------------------------------------------
+\newtheorem{theorem}{Theorem}
+\newtheorem{lemma}{Lemma}
+\newtheorem{proposition}{Proposition}
+\newtheorem{corollary}{Corollary}
+\theoremstyle{definition}
+\newtheorem{definition}{Definition}
+\newtheorem{assumption}{Assumption}
+\newtheorem{designrule}{Rule}
+\theoremstyle{remark}
+\newtheorem*{remark}{Remark}
+
+% ---------------------------------------------------------------
+% Notation macros (one symbol, one meaning)
+% ---------------------------------------------------------------
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\C}{\mathbb{C}}
+\newcommand{\Aset}{\mathcal{A}}          % data set (invariant set)
+\newcommand{\Net}{\mathcal{N}_\theta}    % network
+\newcommand{\Netstar}{\mathcal{N}^\star} % target of the network slot
+\newcommand{\Meth}{\mathcal{S}}          % method
+\newcommand{\Hard}{\mathcal{H}}          % hardness
+\newcommand{\Err}{\mathcal{E}}           % error function
+\newcommand{\Lip}{\operatorname{Lip}_{\Aset}}
+\newcommand{\supA}[1]{\|#1\|_{\infty}}
+\newcommand{\expt}[1]{\exp_{#1}}         % truncated exponential
+\newcommand{\sys}{\mathrm{sys}}
+\newcommand{\ran}{\mathrm{ran}}
+\newcommand{\ex}{\mathrm{ex}}
+
+\title{A hardness theory for learned time steppers\\[4pt]
+\large Injected error of neural time-stepping methods of arbitrary order}
+\author{Draft}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This note gives a theory for the injected error of a learned time stepper.
+A method is written as a known part plus a network slot.
+The hardness of a method is the Lipschitz constant of the flow map minus the known part.
+Under a capacity model, the injected error of a method is bounded by a power of its hardness.
+For Taylor methods of order $p$ with exact lower slots, the hardness is of order $h^p$.
+For the direct step ($p=0$), the hardness does not decrease with $h$.
+Errors in lower slots add to the hardness if they are functions of the state, and add to an irreducible floor otherwise.
+A test-mode calculus extends the results to unresolved modes, to methods that wrap the network in a Runge--Kutta integrator, and to methods that use past predicted states.
+The rollout error is the product of an amplification factor, analyzed in \cite{ainslie2026}, and the injected error, analyzed here.
+Proofs are in Appendix~\ref{app:proofs}.
+\end{abstract}
+
+\tableofcontents
+
+% ===============================================================
+\section{Notation and terms}\label{sec:notation}
+% ===============================================================
+
+Table~\ref{tab:symbols} lists the symbols.
+Table~\ref{tab:terms} lists the defined terms.
+Each term has one name and is used with that name throughout.
+
+\begin{table}[htbp]
+\centering
+\caption{Symbols.}\label{tab:symbols}
+\small
+\begin{tabular}{@{}p{0.25\textwidth}p{0.70\textwidth}@{}}
+\toprule
+Symbol & Meaning \\
+\midrule
+$f$ & vector field of $\dot x = f(x)$, $x \in \R^{n_{\mathrm{x}}}$ \\
+$g$ & $Df\, f$, the second time derivative as a function of the state \\
+$\Phi_t$ & flow map of $f$ over time $t$ \\
+$h$ & time step \\
+$t_{\mathrm{end}}$ & rollout horizon; $J = t_{\mathrm{end}}/h$ is the number of rollout steps \\
+$\Aset$ & data set, a compact invariant set of $\Phi_t$ \\
+$d$ & intrinsic dimension of $\Aset$ \\
+$x^{(k)}$ & $k$-th time derivative as a function of the state; $x^{(0)}(x) = x$ \\
+$M_k$, $L_k$ & $\sup_{\Aset}\|x^{(k)}\|$ and $\Lip(x^{(k)})$; $L = L_1$ \\
+$\Lip(u)$ & Lipschitz constant of $u$ on $\Aset$ \\
+$\supA{u}$ & $\sup_{x\in\Aset}\|u(x)\|$ \\
+$\Meth$ & a method \\
+$G_\Meth$ & step map of the method $\Meth$ \\
+$p$ & order of the network slot \\
+$F_k$ & estimate in the lower slot of order $k$ \\
+$e_k$, $e_k^\sys$, $e_k^\ran$ & slot error, its systematic part, its random part \\
+$\varepsilon^{(k)}_\sys$, $\varepsilon^{(k)}_\ran$ & $\Lip(e^\sys_k)$ and $\sup\|e^\ran_k\|$ \\
+$c_k$ & slot weight of the slot of order $k$ \\
+$Q_h$, $Q_h^\ex$ & known part, and known part with exact lower slots \\
+$\Net$ & network \\
+$\Netstar$ & target of the network slot \\
+$\Hard(\Meth)$ & hardness of the method $\Meth$ \\
+$\delta(\Meth)$ & injected error of the method $\Meth$ \\
+$\Err(B,\tau)$ & error function (Lipschitz bound $B$ of the fitted function, label noise $\tau$) \\
+$W$, $m$ & number of network weights, number of effective training samples \\
+$\nu$ & observation noise standard deviation \\
+$\rho$, $\alpha$ & rate and exponent of the capacity model \\
+$\delta_{\mathrm{opt}}$ & optimization floor \\
+$\lambda$, $z$ & test-mode rate, $z = h\lambda$ \\
+$\mu$, $\mu^\star$ & per-mode network value, per-mode value of the target \\
+$R_\Meth(\mu;z)$ & method multiplier \\
+$\psi(z)$ & known multiplier \\
+$R$ & stability polynomial of a Runge--Kutta method \\
+$\zeta$ & $h\mu^\star$ \\
+$s$, $r$ & number of stages and order of a Runge--Kutta method \\
+$a_{il}$, $b_i$, $\beta$, $\bar a$ & Runge--Kutta coefficients, $\beta = \sum_i|b_i|$, $\bar a = \max_i\sum_l|a_{il}|$ \\
+$\kappa_i$ & Runge--Kutta stages \\
+$\Lambda$ & Lipschitz bound of the trained network \\
+$q$, $\phi_i$, $C_q$ & order, coefficients, and constant of a finite-difference estimate \\
+$\nu'$ & bound on the noise amplitude \\
+$\vartheta$ & scale factor in the homogeneity condition \\
+$w$, $v$ & off-manifold variable $\dot x - f(x)$, velocity estimate \\
+$\epsilon_j$ & rollout error after $j$ steps \\
+$\chi$, $\Gamma$ & Lipschitz constant of the step map, amplification factor \\
+$\xi$ & parasitic root \\
+$\expt{n}(z)$ & truncated exponential $\sum_{k=0}^{n} z^k/k!$ \\
+$\gamma$ & growth rate per unit time of the learned step map \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[htbp]
+\centering
+\caption{Defined terms.}\label{tab:terms}
+\small
+\begin{tabular}{@{}p{0.42\textwidth}p{0.22\textwidth}p{0.30\textwidth}@{}}
+\toprule
+Term & Where defined & Short meaning \\
+\midrule
+method, step map & Definition~\ref{def:method} & rule that maps $x_j$ to $x_{j+1}$ \\
+lower slot, network slot & Definition~\ref{def:method} & places where estimates enter \\
+exact slot, state-based slot, history-based slot & Definition~\ref{def:slottype} & types of lower slot \\
+slot error, systematic part, random part & Definition~\ref{def:sloterror} & $e_k = e_k^\sys + e_k^\ran$ \\
+affine method, known part, slot weight & Definition~\ref{def:affine} & $G_\Meth = Q_h + c_p\Net$ \\
+Runge--Kutta wrapper, implicit Euler wrapper & Section~\ref{sec:nonaffine} & network inside integrator stages \\
+exponential known part & Definition~\ref{def:testmode} & known multiplier $e^{z_{\mathrm{lin}}}$ \\
+Taylor method of order $p$ & Definition~\ref{def:taylor} & known part is a Taylor sum \\
+injected error & Definition~\ref{def:injected} & one-step error on $\Aset$ \\
+error function, capacity model & Assumption~\ref{ass:capacity} & network error versus Lipschitz bound \\
+hardness & Definitions~\ref{def:hardness}, \ref{def:hardnessNA} & Lipschitz constant of what the network supplies \\
+target & Definition~\ref{def:hardnessNA} & $\Netstar$ \\
+test mode, method multiplier, known multiplier & Definition~\ref{def:testmode} & linear scalar analysis \\
+representable, per-mode hardness & Definition~\ref{def:permode} & existence and size of $\mu^\star$ \\
+parasitic root & Definition~\ref{def:permode} & extra root from history-based slots \\
+resolved mode, unresolved mode & Definition~\ref{def:testmode} & $|z|\le 1$, $|z|>1$ \\
+rollout error, amplification factor & Section~\ref{sec:rollout} & error after $J$ steps \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% ===============================================================
+\section{Setting}\label{sec:setting}
+% ===============================================================
+
+The system is $\dot x = f(x)$ with flow map $\Phi_t$.
+The data are pairs $(x, \Phi_h(x))$ with $x$ drawn from the data set $\Aset$.
+
+\begin{assumption}[Regularity]\label{ass:regular}
+The data set $\Aset$ is compact and invariant, $\Phi_t(\Aset) = \Aset$ for all $t \in \R$.
+For every order $k$ used below, $x^{(k)}$ is bounded and Lipschitz on $\Aset$.
+The derivatives are defined by $x^{(0)}(x) = x$, $x^{(1)} = f$, and $x^{(k+1)} = D x^{(k)}\, f$.
+\end{assumption}
+
+For chaotic dissipative systems, $\Aset$ is the global attractor.
+Its intrinsic dimension $d$ can be much smaller than $D$.
+
+% ===============================================================
+\section{Methods and slots}\label{sec:methods}
+% ===============================================================
+
+\begin{definition}[Method]\label{def:method}
+A method $\Meth$ is a step map
+\begin{equation}\label{eq:method}
+x_{j+1} = G_\Meth\big(x_j;\, F_1,\dots,F_{p-1};\, \Net\big).
+\end{equation}
+The estimates $F_k \approx x^{(k)}$, $k = 1,\dots,p-1$, fill the lower slots.
+The network $\Net$ fills the network slot.
+The integer $p \ge 0$ is the order of the network slot.
+\end{definition}
+
+\begin{definition}[Slot types]\label{def:slottype}
+A lower slot is an exact slot if $F_k = x^{(k)}$.
+It is a state-based slot if $F_k$ is a function of the current state $x_j$ only.
+It is a history-based slot if $F_k$ depends on predicted states $x_{j-1}, x_{j-2},\dots$.
+\end{definition}
+
+A finite-difference estimate is state-based during training, because it uses true states.
+The same estimate is history-based during rollout, because it uses predicted states.
+
+\begin{definition}[Slot error]\label{def:sloterror}
+The slot error of the lower slot of order $k$ is $e_k = F_k - x^{(k)}$.
+It is split as $e_k = e_k^\sys + e_k^\ran$.
+The systematic part $e_k^\sys$ is a deterministic function of the state.
+The random part $e_k^\ran$ has zero mean conditional on the state.
+The sizes are $\varepsilon^{(k)}_\sys = \Lip(e_k^\sys)$ and $\varepsilon^{(k)}_\ran = \sup\|e_k^\ran\|$.
+\end{definition}
+
+\begin{definition}[Affine method]\label{def:affine}
+A method is affine if
+\begin{equation}\label{eq:affine}
+G_\Meth = Q_h + c_p\,\Net, \qquad Q_h = \sum_{k=0}^{p-1} c_k F_k,
+\end{equation}
+with $F_0 = x^{(0)}$.
+The map $Q_h$ is the known part.
+The scalars $c_k$ are the slot weights.
+The known part with exact lower slots is $Q_h^\ex = \sum_{k=0}^{p-1} c_k x^{(k)}$.
+\end{definition}
+
+\begin{definition}[Taylor method of order $p$]\label{def:taylor}
+The Taylor method of order $p$ is the affine method with $c_k = h^k/k!$ for $k = 0,\dots,p$.
+The Taylor method of order $0$ is the direct step, $G_\Meth = \Net$.
+The Taylor method of order $1$ is the Euler step, $G_\Meth = x + h\Net$.
+\end{definition}
+
+\begin{definition}[Injected error]\label{def:injected}
+The injected error of a method is $\delta(\Meth) = \supA{G_\Meth - \Phi_h}$.
+\end{definition}
+
+% ===============================================================
+\section{Capacity model}\label{sec:capacity}
+% ===============================================================
+
+\begin{assumption}[Observation noise]\label{ass:noise}
+The observed next state is $\Phi_h(x) + \eta$ with $\eta$ independent of $x$, zero mean, and standard deviation $\nu$.
+The input state is observed without noise.
+\end{assumption}
+
+\begin{assumption}[Capacity model]\label{ass:capacity}
+Consider a network class with $W$ weights and a final linear output layer.
+Train it on $m$ effective samples to regress a function $u$ with $\Lip(u) \le B$ and label noise of standard deviation $\tau$.
+The trained network $\hat u$ satisfies
+\begin{equation}\label{eq:capacity}
+\supA{\hat u - u} \le \Err(B, \tau) + \delta_{\mathrm{opt}}.
+\end{equation}
+The error function $\Err$ is nondecreasing in $B$ and jointly homogeneous of degree one,
+\begin{equation}\label{eq:homog}
+\Err(\vartheta B, \vartheta \tau) = \vartheta\, \Err(B, \tau) \quad \text{for all } \vartheta > 0.
+\end{equation}
+At fixed noise level $\nu$, the error function has the form
+\begin{equation}\label{eq:rate}
+\Err(B, \nu) = \rho(W, m, \nu)\, B^{\alpha}, \qquad 0 < \alpha \le 1.
+\end{equation}
+\end{assumption}
+
+Two regimes give standard values of $\rho$ and $\alpha$ for Lipschitz functions on a set of dimension $d$.
+In the approximation-limited regime, $\alpha = 1$ and $\rho \propto W^{-1/d}$ up to logarithmic factors \cite{yarotsky2017}.
+In the data-limited regime, $\alpha = d/(d+2)$ and $\rho \propto \nu^{2/(d+2)} m^{-1/(d+2)}$ up to logarithmic factors \cite{stone1982}.
+Both forms satisfy Eq.~\eqref{eq:homog}.
+For samples taken from one trajectory, $m$ is the effective sample size after a mixing correction \cite{mohri2008}.
+% VERIFY: the cited rates are stated for Euclidean domains and L2 error; the versions on a d-dimensional set and in sup norm need a citation.
+
+\begin{lemma}[Output scaling does not change the injected error]\label{lem:scaling}
+For an affine method with exact lower slots, under Assumptions~\ref{ass:noise} and~\ref{ass:capacity},
+\begin{equation}\label{eq:scaling}
+\delta(\Meth) \le \Err\big(\Lip(\Phi_h - Q_h^\ex),\, \nu\big) + \delta_{\mathrm{opt}}\,|c_p|.
+\end{equation}
+The bound depends on $c_p$ only through the optimization floor term.
+\end{lemma}
+
+Lemma~\ref{lem:scaling} is proved in Appendix~\ref{app:scaling}.
+The injected error depends on what the known part leaves for the network.
+It does not depend on how the network output is scaled.
+
+% ===============================================================
+\section{Hardness of affine methods}\label{sec:affine}
+% ===============================================================
+
+For an affine method with exact lower slots, the network is trained to fit $(\Phi_h - Q_h^\ex)/c_p$.
+
+\begin{definition}[Hardness of an affine method]\label{def:hardness}
+The hardness of an affine method is
+\begin{equation}\label{eq:hardness}
+\Hard(\Meth) = \Lip\big(\Phi_h - Q_h^\ex\big).
+\end{equation}
+\end{definition}
+
+\begin{theorem}[Hardness bounds the injected error]\label{thm:affine}
+Let $\Meth$ be an affine method whose lower slots are exact or state-based.
+Under Assumptions~\ref{ass:noise} and~\ref{ass:capacity},
+\begin{equation}\label{eq:thm1}
+\delta(\Meth) \le \rho\,\Big[\Hard(\Meth) + \sum_{k=1}^{p-1} |c_k|\, \varepsilon^{(k)}_\sys\Big]^{\alpha}
++ \sum_{k=1}^{p-1} |c_k|\, \varepsilon^{(k)}_\ran + |c_p|\,\delta_{\mathrm{opt}},
+\end{equation}
+where $\rho = \rho(W, m, \nu_{\mathrm{eff}})$ and $\nu_{\mathrm{eff}}^2 = \nu^2 + \sum_{k} c_k^2\, \mathrm{Var}(e_k^\ran)$.
+\end{theorem}
+
+Theorem~\ref{thm:affine} is proved in Appendix~\ref{app:affine}.
+The systematic part of a slot error adds to the hardness.
+The random part of a slot error adds to a floor that no network can remove.
+
+\begin{lemma}[Taylor known part]\label{lem:taylor}
+Let $Q^{(n)}_h = \sum_{k=0}^{n} \frac{h^k}{k!}\, x^{(k)}$ with $n \ge 0$.
+Under Assumption~\ref{ass:regular},
+\begin{align}
+\supA{\Phi_h - Q^{(n)}_h} &\le \frac{M_{n+1}\, h^{n+1}}{(n+1)!}, \label{eq:taylorsup}\\
+\Lip\big(\Phi_h - Q^{(n)}_h\big) &\le \frac{L_{n+1}\, e^{hL}\, h^{n+1}}{(n+1)!}. \label{eq:taylorlip}
+\end{align}
+\end{lemma}
+
+\begin{lemma}[Direct step]\label{lem:direct}
+Under Assumption~\ref{ass:regular}, $\|\Phi_h(x) - \Phi_h(x')\| \ge e^{-hL}\|x - x'\|$ for all $x, x' \in \Aset$.
+The hardness of the direct step satisfies $\Hard \ge e^{-hL}$.
+\end{lemma}
+
+Lemmas~\ref{lem:taylor} and~\ref{lem:direct} are proved in Appendices~\ref{app:taylor} and~\ref{app:direct}.
+
+\begin{corollary}[Hardness of Taylor methods]\label{cor:taylor}
+For the Taylor method of order $p$ with exact lower slots,
+\begin{equation}\label{eq:cortaylor}
+\Hard = \Lip\big(\Phi_h - Q^{(p-1)}_h\big) \le \frac{L_p\, e^{hL}\, h^p}{p!}, \qquad p \ge 1,
+\end{equation}
+and $\Hard \ge e^{-hL}$ for $p = 0$.
+\end{corollary}
+
+Corollary~\ref{cor:taylor} follows from Lemmas~\ref{lem:taylor} and~\ref{lem:direct} with $n = p-1$.
+The Euler step has hardness at most $L e^{hL} h$.
+The direct step has hardness at least $e^{-hL}$.
+This is the identity argument.
+The Taylor method of order $p$ removes one more power of $h$ for each exact lower slot.
+
+\begin{designrule}[Order selection]\label{rule:order}
+The bound in Eq.~\eqref{eq:cortaylor} for order $p$ is smaller than the bound for order $p-1$ if and only if
+\begin{equation}\label{eq:rule1}
+h\, L_p < p\, L_{p-1}.
+\end{equation}
+\end{designrule}
+
+Rule~\ref{rule:order} follows from the ratio of the two bounds in Eq.~\eqref{eq:cortaylor}, which is $h L_p / (p L_{p-1})$.
+For $p = 1$ it reads $h L < 1$, with $L_0 = 1$.
+
+\begin{lemma}[Finite-difference slot error]\label{lem:fd}
+Let $F_1(x) = h^{-1}\sum_{i=0}^{q} \phi_i\, \Phi_{-ih}(x)$ with coefficients that satisfy
+\begin{equation}\label{eq:fdorder}
+\sum_{i=0}^{q} \phi_i \frac{(-i)^k}{k!} = \begin{cases} 1 & k = 1,\\ 0 & k \ne 1,\end{cases} \qquad k = 0,\dots,q.
+\end{equation}
+Under Assumption~\ref{ass:regular}, the systematic part of the slot error satisfies
+\begin{equation}\label{eq:fd}
+\varepsilon^{(1)}_\sys = \Lip(F_1 - f) \le C_q\, L_{q+1}\, e^{qhL}\, h^{q}, \qquad C_q = \sum_{i=0}^{q} |\phi_i|\,\frac{i^{q+1}}{(q+1)!}.
+\end{equation}
+\end{lemma}
+
+Lemma~\ref{lem:fd} is proved in Appendix~\ref{app:fd}.
+The two-point backward difference has $q = 1$, $\phi_0 = 1$, $\phi_1 = -1$, and $C_1 = 1/2$.
+The three-point backward difference has $q = 2$, $(\phi_0, \phi_1, \phi_2) = (3/2, -2, 1/2)$, and $C_2 = 1$.
+
+\begin{designrule}[Acceptable lower slots]\label{rule:fd}
+In a Taylor method of order $p$, a state-based lower slot of order $k$ keeps the hardness of order $h^p$ if and only if $\varepsilon^{(k)}_\sys = O(h^{p-k})$.
+For a finite-difference estimate of $x^{(1)}$ of order $q$, this condition is $q \ge p - 1$.
+\end{designrule}
+
+Rule~\ref{rule:fd} follows from Eq.~\eqref{eq:thm1} with $c_k = h^k/k!$, and from Eq.~\eqref{eq:fd}, which gives $c_1 \varepsilon^{(1)}_\sys = O(h^{q+1})$.
+
+\begin{corollary}[Noise floor of finite-difference slots]\label{cor:noise}
+Under Assumption~\ref{ass:noise}, a finite-difference estimate from Lemma~\ref{lem:fd} evaluated on noisy states has random part with $\varepsilon^{(1)}_\ran \le \nu' \sum_i |\phi_i| / h$, where $\nu'$ bounds the noise amplitude.
+The floor term $c_1 \varepsilon^{(1)}_\ran \le \nu' \sum_i |\phi_i|$ does not decrease with $h$.
+The order-$p$ term of the flow map is larger than this floor only if
+\begin{equation}\label{eq:noisewindow}
+h > \Big(\frac{p!\, \nu' \sum_i |\phi_i|}{M_p}\Big)^{1/p}.
+\end{equation}
+\end{corollary}
+
+Corollary~\ref{cor:noise} gives a lower limit on $h$.
+Rule~\ref{rule:order} gives an upper limit on $h$.
+
+% ===============================================================
+\section{Non-affine methods}\label{sec:nonaffine}
+% ===============================================================
+
+A Runge--Kutta wrapper places the network inside stages.
+The step map is
+\begin{equation}\label{eq:rk}
+G_\Meth[\Net](x) = x + h \sum_{i=1}^{s} b_i\, \kappa_i, \qquad \kappa_i = \Net\Big(x + h\sum_{l<i} a_{il}\, \kappa_l\Big),
+\end{equation}
+for an explicit method with $s$ stages.
+A method of the form Eq.~\eqref{eq:rk} is a Runge--Kutta wrapper.
+The implicit Euler wrapper is the method $x_{j+1} = x_j + h\Net(x_{j+1})$.
+Set $\beta = \sum_i |b_i|$ and $\bar a = \max_i \sum_l |a_{il}|$.
+
+\begin{assumption}[Target of the network slot]\label{ass:target}
+There is a map $\Netstar$ with $G_\Meth[\Netstar] = \Phi_h$ on $\Aset$.
+For a Runge--Kutta method of order $r$, $\Netstar = f + O(h^r)$ in $\Lip$.
+\end{assumption}
+
+For analytic $f$ and small $h$, the map $\Netstar$ in Assumption~\ref{ass:target} is the inverse modified vector field of \cite{zhu2020imde}.
+The expansion fails when $h|\lambda| \gtrsim 1$ for an eigenvalue $\lambda$ of $Df$.
+Section~\ref{sec:testmode} treats that case.
+
+\begin{assumption}[Wrapper regression]\label{ass:wrapper}
+Training $G_\Meth[\Net]$ on flow-map data gives a network whose distance to $\Netstar$ obeys Assumption~\ref{ass:capacity} with $u = \Netstar$ and label noise $\nu/h$.
+\end{assumption}
+
+\begin{lemma}[Runge--Kutta sensitivity]\label{lem:rk}
+Let $\mathcal N_1$, $\mathcal N_2$ be defined on a set that contains all stage points, and let $\mathcal N_1$ be $\Lambda$-Lipschitz there.
+For the explicit method in Eq.~\eqref{eq:rk},
+\begin{equation}\label{eq:rksens}
+\supA{G_\Meth[\mathcal N_1] - G_\Meth[\mathcal N_2]} \le h\,\beta\,(1 + h\Lambda\bar a)^{s-1}\, \|\mathcal N_1 - \mathcal N_2\|_{\infty}.
+\end{equation}
+\end{lemma}
+
+\begin{definition}[Hardness of a non-affine method]\label{def:hardnessNA}
+The map $\Netstar$ in Assumption~\ref{ass:target} is the target.
+For an affine method with exact lower slots, the target is $(\Phi_h - Q_h^\ex)/c_p$.
+The hardness of the method in Eq.~\eqref{eq:rk} is $\Hard(\Meth) = h\,\Lip(\Netstar)$.
+\end{definition}
+
+\begin{theorem}[Hardness of Runge--Kutta wrappers]\label{thm:nonaffine}
+Under Assumptions~\ref{ass:capacity}, \ref{ass:target}, and~\ref{ass:wrapper}, with $\Lambda$ a Lipschitz bound for the trained network,
+\begin{equation}\label{eq:thm2}
+\delta(\Meth) \le \beta\,(1 + h\Lambda\bar a)^{s-1}\, \Big[\Err\big(\Hard(\Meth), \nu\big) + h\,\delta_{\mathrm{opt}}\Big].
+\end{equation}
+For a Runge--Kutta method of order $r$, $\Hard(\Meth) = h\big(L + O(h^r)\big)$.
+\end{theorem}
+
+Lemma~\ref{lem:rk} and Theorem~\ref{thm:nonaffine} are proved in Appendices~\ref{app:rk} and~\ref{app:nonaffine}.
+For methods with $b_i \ge 0$, $\beta = 1$.
+At small $h$, every Runge--Kutta wrapper has the same leading hardness $hL$ as the Euler step.
+The order $r$ changes the target $\Netstar$ at order $h^r$.
+It also changes the behavior of unresolved modes, as shown in Section~\ref{sec:testmode}.
+
+% ===============================================================
+\section{Test-mode calculus}\label{sec:testmode}
+% ===============================================================
+
+Theorems~\ref{thm:affine} and~\ref{thm:nonaffine} use expansions in $hL$.
+This section applies each method to one linear mode.
+The analysis holds for any value of $h\lambda$.
+
+\begin{definition}[Test mode]\label{def:testmode}
+The test mode is $\dot x = \lambda x$ with $\lambda \in \C$ and $z = h\lambda$.
+In the test mode, the network slot is $\Net(x) = \mu x$ with $\mu \in \C$.
+The method multiplier $R_\Meth(\mu; z)$ is defined by $G_\Meth(x) = R_\Meth(\mu; z)\, x$ when all history-based slots use the true trajectory.
+For an affine method, $R_\Meth(\mu;z) = \psi(z) + c_p \mu$, where $\psi(z)$ is the known multiplier.
+A mode is a resolved mode if $|z| \le 1$ and an unresolved mode if $|z| > 1$.
+An exponential known part is a known part with known multiplier $e^{z_{\mathrm{lin}}}$, where $z_{\mathrm{lin}} = h\lambda_{\mathrm{lin}}$ and $\lambda_{\mathrm{lin}}$ is the rate of the exact linear operator on the mode.
+\end{definition}
+
+\begin{definition}[Representable, per-mode hardness, parasitic root]\label{def:permode}
+The test mode is representable by $\Meth$ if some $\mu^\star$ satisfies $R_\Meth(\mu^\star; z) = e^z$.
+If it is not representable, the method has the irreducible per-step error $\min_\mu |R_\Meth(\mu; z) - e^z|$.
+The per-mode hardness is
+\begin{equation}\label{eq:permode}
+\Hard(\Meth; z) = \big|\partial_\mu R_\Meth(\mu^\star; z)\; \mu^\star\big|.
+\end{equation}
+A parasitic root is a root of the characteristic polynomial of the rollout recurrence other than $e^z$.
+It exists only for methods with history-based slots.
+\end{definition}
+
+For an affine method, $\Hard(\Meth; z) = |e^z - \psi(z)|$.
+This equals Definition~\ref{def:hardness} applied to the test mode, because $\Phi_h - Q^\ex_h$ is then the map $x \mapsto (e^z - \psi(z))x$.
+For the method in Eq.~\eqref{eq:rk}, $\Hard(\Meth; z) = |\zeta R'(\zeta)|$ with $\zeta = h\mu^\star$.
+The factor $|\zeta|$ equals Definition~\ref{def:hardnessNA} applied to the test mode.
+The factor $|R'(\zeta)|$ is the exact test-mode value of the sensitivity bound in Eq.~\eqref{eq:rksens}.
+
+\begin{proposition}[Per-mode hardness of standard methods]\label{prop:table}
+Table~\ref{tab:permode} gives the per-mode hardness, the representability condition, and the parasitic roots.
+\end{proposition}
+
+\begin{table}[htbp]
+\centering
+\caption{Per-mode hardness. Here $\expt{n}(z) = \sum_{k=0}^n z^k/k!$ and $R$ is the stability polynomial of the Runge--Kutta method. The exponential known part uses the exact linear part $z_{\mathrm{lin}}$ of $z$.}\label{tab:permode}
+\small
+\begin{tabular}{@{}p{0.34\textwidth}p{0.27\textwidth}p{0.17\textwidth}p{0.12\textwidth}@{}}
+\toprule
+Method & $\Hard(\Meth; z)$ & Representable & Parasitic root \\
+\midrule
+Direct step & $|e^{z}|$ & all $z$ & none \\
+Euler step & $|e^z - 1|$ & all $z$ & none \\
+Implicit Euler wrapper & $|e^z|\,|e^z - 1|$ & all $z$ & none \\
+Explicit Runge--Kutta wrapper & $|\zeta R'(\zeta)|$, $R(\zeta) = e^z$ & $e^z \in R(\C)$ & none \\
+Taylor order $p$, exact lower slots & $|e^z - \expt{p-1}(z)|$ & all $z$ & none \\
+Taylor order 2, backward difference, history-based & $|e^z + e^{-z} - 2|$ & all $z$ & $e^{-z}$ \\
+Exponential known part & $|e^{z_{\mathrm{lin}}}|\,|e^{z - z_{\mathrm{lin}}} - 1|$ & all $z$ & none \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Proposition~\ref{prop:table} is proved in Appendix~\ref{app:table}.
+For affine methods, the per-mode hardness is the distance between $e^z$ and the known multiplier.
+The direct step has known multiplier $0$.
+The Euler step has known multiplier $1$.
+The Taylor method of order $p$ has known multiplier $\expt{p-1}(z)$.
+
+\begin{proposition}[Crossovers on the real axis]\label{prop:cross}
+For real $z$:
+\begin{enumerate}[label=(\alph*)]
+\item The Euler step has smaller per-mode hardness than the direct step if and only if $z > -\ln 2$.
+\item The implicit Euler wrapper has smaller per-mode hardness than the Euler step if and only if $z < 0$.
+\item The implicit Euler wrapper has smaller per-mode hardness than the direct step if and only if $z < \ln 2$.
+\item The Taylor method of order 2 with exact lower slots has smaller per-mode hardness than the direct step if and only if $z > -1$.
+\item The Taylor method of order 2 with exact lower slots has smaller per-mode hardness than the Euler step if and only if $z > z_\ast$, where $z_\ast \approx -1.5936$ solves $2e^{z} - 2 - z = 0$.
+\item The Taylor method of order 2 with the history-based backward difference has smaller per-mode hardness than both the direct step and the Euler step if and only if $z > -\ln 2$.
+\item As $z \to -\infty$, the Taylor method of order 2 with exact lower slots has per-mode hardness $|z| - 1 + e^z$, which grows without bound.
+\end{enumerate}
+\end{proposition}
+
+\begin{proposition}[Imaginary axis]\label{prop:imag}
+For $z = \mathrm{i}\omega$ with real $\omega$, the per-mode hardness of the direct step is $1$, of the Euler step is $2|\sin(\omega/2)|$, of the Taylor method of order 2 with exact lower slots is $|e^{\mathrm{i}\omega} - 1 - \mathrm{i}\omega| = \omega^2/2 + O(\omega^3)$, and of the Taylor method of order 2 with the history-based backward difference is $4\sin^2(\omega/2)$.
+\end{proposition}
+
+\begin{proposition}[Representability limit of explicit Runge--Kutta wrappers]\label{prop:floor}
+For real $\zeta$, the stability polynomial of the classical second-order Runge--Kutta method has minimum $1/2$ at $\zeta = -1$.
+The stability polynomial of the classical fourth-order Runge--Kutta method has minimum $0.2704$ at $\zeta \approx -1.5961$.
+A decaying real test mode with $e^z$ below this minimum is not representable by a real $\mu$.
+The limits are $z < -\ln 2 \approx -0.693$ for the second-order method and $z < -1.308$ for the fourth-order method.
+\end{proposition}
+
+Propositions~\ref{prop:cross}, \ref{prop:imag}, and~\ref{prop:floor} are proved in Appendix~\ref{app:cross}.
+A nonlinear network can couple two real modes into a complex pair, and complex $\zeta$ reaches smaller $|R(\zeta)|$.
+This removes the representability limit at the cost of a phase error.
+% VERIFY: the magnitude of this phase error has not been derived.
+
+\begin{proposition}[Second-order reformulation]\label{prop:secondorder}
+Let $g = Df\, f$.
+Every solution of $\dot x = f(x)$ is a solution of $\ddot x = g(x)$ with $\dot x(0) = f(x(0))$.
+For any solution of $\ddot x = g(x)$, the off-manifold variable $w = \dot x - f(x)$ satisfies
+\begin{equation}\label{eq:offmanifold}
+\dot w = -Df(x)\, w.
+\end{equation}
+\end{proposition}
+
+\begin{lemma}[Volume of the two-step recurrence]\label{lem:det}
+For the recurrence $x_{j+1} = 2x_j - x_{j-1} + c_2\,\Net(x_j)$, the map $(x_j, x_{j-1}) \mapsto (x_{j+1}, x_j)$ has Jacobian determinant $1$ for every $\Net$ and every $c_2$.
+\end{lemma}
+
+Proposition~\ref{prop:secondorder} and Lemma~\ref{lem:det} are proved in Appendix~\ref{app:secondorder}.
+Methods that integrate $\ddot x = g$ without resetting $\dot x$ to an estimate of $f(x)$ at each step contain the dynamics of Eq.~\eqref{eq:offmanifold}.
+In the test mode, $Df = \lambda$ and $w$ grows like $e^{-\lambda t}$.
+For a normal constant $Df$, the growth rate of $w$ is $-\min \operatorname{Re}\operatorname{spec}(Df)$.
+% VERIFY: for non-normal, time-dependent Df the growth rate of w is not in general the negative of a Lyapunov exponent of the flow. This is an open point.
+
+% ===============================================================
+\section{Rollout error}\label{sec:rollout}
+% ===============================================================
+
+The rollout error is $\epsilon_j = \|\hat x_j - x_j\|$, where $\hat x_j$ is the predicted state and $x_j$ is the true state.
+
+\begin{proposition}[Rollout error of one-step methods]\label{prop:rollout}
+Let the method have no history-based slots.
+Let $\|G_\Meth(x) - G_\Meth(x')\| \le \chi\|x - x'\|$ on a set that contains the true and predicted states.
+Then
+\begin{equation}\label{eq:rollout}
+\epsilon_J \le \delta(\Meth)\, \frac{\chi^J - 1}{\chi - 1}, \qquad \chi \ne 1,
+\end{equation}
+and $\epsilon_J \le J\,\delta(\Meth)$ for $\chi = 1$.
+With $\chi = e^{\gamma h}$, the amplification factor is $(e^{\gamma t_{\mathrm{end}}} - 1)/(e^{\gamma h} - 1)$.
+\end{proposition}
+
+Proposition~\ref{prop:rollout} is proved in Appendix~\ref{app:rollout}.
+It is Eq.~(20) of \cite{ainslie2026} with the injected error written out.
+The amplification factor is analyzed in \cite{ainslie2026}.
+The injected error is bounded by Theorems~\ref{thm:affine} and~\ref{thm:nonaffine}.
+
+For methods with history-based slots, the test-mode rollout recurrence has characteristic roots $e^z$ and $\xi$.
+The amplification factor over $J$ steps is then of order $\sum_{j<J} \max(|e^z|, |\xi|)^j$.
+For the Taylor method of order 2 with the history-based backward difference, $\xi = e^{-z}$.
+On a decaying mode, $|\xi| > 1$.
+
+% ===============================================================
+\section{Procedure for a proposed method}\label{sec:procedure}
+% ===============================================================
+
+The following steps evaluate a proposed method.
+Each step points to the result it uses.
+
+\begin{enumerate}[label=\arabic*.]
+\item Write the step map in the form of Eq.~\eqref{eq:method}.
+Classify each lower slot as an exact slot, a state-based slot, or a history-based slot (Definition~\ref{def:slottype}).
+\item If a lower slot is history-based, compute the parasitic roots in the test mode (Definition~\ref{def:permode}).
+If $|\xi| > 1$ on modes present in the data, reject the method or reset the slot from a state-based estimate at each step.
+If the method integrates $\ddot x = g$ with a tracked velocity, apply Proposition~\ref{prop:secondorder}.
+\item Check representability on the resolved modes and the unresolved modes (Definition~\ref{def:permode}, Proposition~\ref{prop:floor}).
+\item Compute the hardness.
+Use Corollary~\ref{cor:taylor} or Theorem~\ref{thm:nonaffine} for the resolved modes.
+Use Table~\ref{tab:permode} for the unresolved modes.
+\item Add the slot errors.
+Add $\sum_k |c_k| \varepsilon^{(k)}_\sys$ to the hardness and $\sum_k |c_k|\varepsilon^{(k)}_\ran$ to the floor (Theorem~\ref{thm:affine}).
+Check Rule~\ref{rule:fd} and Eq.~\eqref{eq:noisewindow}.
+\item Choose the capacity regime, which sets $\rho$ and $\alpha$ from $W$, $m$, $\nu$, and $d$ (Assumption~\ref{ass:capacity}).
+\item Compare two methods $\Meth$ and $\Meth'$ in the same capacity regime by
+\begin{equation}\label{eq:compare}
+\frac{\epsilon_J(\Meth)}{\epsilon_J(\Meth')} \approx \frac{\Gamma(\Meth)}{\Gamma(\Meth')}\Big(\frac{\Hard(\Meth)}{\Hard(\Meth')}\Big)^{\alpha},
+\end{equation}
+where $\Gamma$ is the amplification factor.
+Eq.~\eqref{eq:compare} holds when the floor terms are small compared with the hardness terms.
+The rate $\rho$ cancels in Eq.~\eqref{eq:compare}.
+The network size enters through $\alpha$ and through the size of the floor terms relative to $\rho\,\Hard^\alpha$.
+\end{enumerate}
+
+% ===============================================================
+\section{Worked cases}\label{sec:cases}
+% ===============================================================
+
+\subsection{Direct step and Euler step}
+By Corollary~\ref{cor:taylor}, the Euler step has hardness at most $Le^{hL}h$ and the direct step has hardness at least $e^{-hL}$.
+By Theorem~\ref{thm:affine} with $\alpha = 1$, the ratio of the hardness bounds is at most $L e^{2hL} h$.
+By Proposition~\ref{prop:cross}(a), a decaying mode with $z < -\ln 2$ has smaller per-mode hardness under the direct step.
+The Euler step is preferred on resolved modes.
+The direct step is preferred on decaying modes with $z < -\ln 2$.
+
+\subsection{Runge--Kutta wrappers}
+By Theorem~\ref{thm:nonaffine}, a Runge--Kutta wrapper of any order has leading hardness $hL$, the same as the Euler step.
+The order changes the target at order $h^r$.
+By Proposition~\ref{prop:floor}, the fourth-order wrapper cannot represent decaying real modes with $z < -1.308$.
+By Proposition~\ref{prop:cross}(b), the implicit Euler wrapper has smaller per-mode hardness than the Euler step on every decaying mode.
+
+\subsection{Taylor method of order 2 with exact lower slot}
+By Corollary~\ref{cor:taylor}, the hardness is at most $L_2 e^{hL} h^2/2$.
+By Rule~\ref{rule:order}, this bound is smaller than the Euler bound if $hL_2 < 2L$.
+By Proposition~\ref{prop:cross}(g), the per-mode hardness grows like $|z|$ on decaying unresolved modes.
+The exact lower slot contributes the term $z$ to the known multiplier, and the network must cancel it.
+An exponential known part for the linear operator removes this growth (Table~\ref{tab:permode}).
+
+\subsection{Taylor method of order 2 with backward-difference lower slot}
+During training the slot is state-based.
+By Lemma~\ref{lem:fd} with $q = 1$, $\varepsilon^{(1)}_\sys \le L_2 e^{hL} h/2$.
+By Theorem~\ref{thm:affine}, the hardness term is at most $L_2 e^{hL} h^2$, twice the exact-slot bound.
+During rollout the slot is history-based.
+The parasitic root is $e^{-z}$ (Table~\ref{tab:permode}).
+For decaying modes, $|e^{-z}| > 1$.
+The method is not suitable for rollout on dissipative systems unless the slot is reset from a state-based estimate at each step.
+
+\subsection{Runge--Kutta--Nystr\"om integration of the second-order term}\label{sec:rkn}
+A Runge--Kutta--Nystr\"om method for $\ddot x = \Net(x)$ with velocity estimate $v_j$ has the form
+\begin{equation}\label{eq:rkn}
+x_{j+1} = x_j + h v_j + h^2 \sum_i \bar b_i\, \Net(X_i), \qquad X_i = x_j + \tilde c_i h v_j + h^2 \sum_{l<i} \bar a_{il}\, \Net(X_l),
+\end{equation}
+with $\sum_i \bar b_i = 1/2$.
+Here $\tilde c_i$ are the stage times of the method.
+By Proposition~\ref{prop:secondorder}, the true trajectory solves $\ddot x = g(x)$ with $\dot x = f(x)$.
+The source of $v_j$ sets the behavior.
+\begin{enumerate}[label=(\alph*)]
+\item $v_j = f(x_j)$, an exact slot.
+The method is a one-step method.
+In the test mode, the known multiplier contains $1 + z$, and $\Hard(\Meth; z) = |e^z - 1 - z|\,(1 + O(|z|))$ on resolved modes.
+The leading hardness equals that of the Taylor method of order 2 with exact lower slots.
+Under Assumption~\ref{ass:target} applied to Eq.~\eqref{eq:rkn}, the target differs from $g$ by $O(h)$ or less, with the power set by the order conditions of the tableau.
+% VERIFY: the power for specific RKN tableaux.
+On decaying unresolved modes the per-mode hardness grows like $|z|$, as in Proposition~\ref{prop:cross}(g).
+\item $v_j$ from a backward difference of predicted states, a history-based slot.
+The rollout recurrence has the parasitic root $e^{-z}$.
+\item $v_j$ tracked as a state variable, $v_{j+1} = v_j + h\sum_i b_i \Net(X_i)$.
+The continuous system contains Eq.~\eqref{eq:offmanifold}.
+Deviations from $v = f(x)$ grow on decaying modes for any integrator.
+\item $v_j$ from a state-based network for $x^{(1)}$ with slot error $e_1$.
+The method is a one-step method.
+By Rule~\ref{rule:fd}, the order-2 hardness is kept if $\varepsilon^{(1)}_\sys = O(h)$.
+The random part adds $h\,\varepsilon^{(1)}_\ran$ to the floor.
+\end{enumerate}
+Configurations (a) and (d) are one-step methods.
+Relative to the Taylor method of order 2, they change the target, not the leading hardness.
+
+% ===============================================================
+\section{Testable predictions}\label{sec:predictions}
+% ===============================================================
+
+\begin{enumerate}[label=P\arabic*.]
+\item At fixed $W$ and $m$, the injected error scales like $h^0$ for the direct step, $h^{\alpha}$ for the Euler step, and $h^{p\alpha}$ for the Taylor method of order $p$ with exact lower slots, on resolved modes (Corollary~\ref{cor:taylor}, Theorem~\ref{thm:affine}).
+\item At small $h$, the Euler step and Runge--Kutta wrappers of any order have injected errors that agree to leading order (Theorem~\ref{thm:nonaffine}).
+\item The injected error spectrum per wavenumber follows the per-mode hardness of Table~\ref{tab:permode} evaluated at $z_k = h\lambda_k$.
+\item The Taylor method of order 2 with exact lower slots has large injected error on decaying unresolved modes. An exponential known part removes it (Proposition~\ref{prop:cross}(g)).
+\item The fourth-order Runge--Kutta wrapper has an injected error floor on real decaying modes with $z < -1.308$ (Proposition~\ref{prop:floor}).
+\item The Taylor method of order 2 with the history-based backward difference diverges on dissipative systems and does not diverge from the parasitic root on systems with purely imaginary test-mode rates (Table~\ref{tab:permode}).
+\item Replacing an exact lower slot by a finite-difference estimate of order $q$ keeps the order-$p$ scaling of P1 if and only if $q \ge p-1$ (Rule~\ref{rule:fd}).
+\item In the approximation-limited regime, the ratio of injected errors of two methods does not depend on $W$ (Eq.~\eqref{eq:compare}).
+\end{enumerate}
+
+% ===============================================================
+\section{Status of the results}\label{sec:status}
+% ===============================================================
+
+Lemmas~\ref{lem:scaling}, \ref{lem:taylor}, \ref{lem:direct}, \ref{lem:fd}, \ref{lem:rk}, and~\ref{lem:det} and Propositions~\ref{prop:table}--\ref{prop:secondorder} and~\ref{prop:rollout} are proved under the stated assumptions.
+Theorems~\ref{thm:affine} and~\ref{thm:nonaffine} are proved given Assumption~\ref{ass:capacity}, and Theorem~\ref{thm:nonaffine} also needs Assumptions~\ref{ass:target} and~\ref{ass:wrapper}.
+Assumption~\ref{ass:capacity} is a model.
+Its form with a single exponent $\alpha$ can be tested by fitting the injected error against the hardness across methods at fixed $W$ and $m$.
+The test-mode calculus of Section~\ref{sec:testmode} is exact for linear normal dynamics.
+For nonlinear dynamics it is a leading-order model on each mode.
+A proof that joins the resolved-mode results of Section~\ref{sec:affine} with the unresolved-mode results of Section~\ref{sec:testmode} is not given here.
+An inertial-manifold splitting is one candidate.
+
+% ===============================================================
+\appendix
+\section{Proofs}\label{app:proofs}
+% ===============================================================
+
+\subsection{Proof of Lemma~\ref{lem:scaling}}\label{app:scaling}
+Let $U = \Phi_h - Q_h^\ex$.
+The step error is $G_\Meth - \Phi_h = c_p\Net - U$.
+The network is trained on labels $y = (\Phi_h(x) + \eta - Q_h^\ex(x))/c_p$.
+These are the function $U/c_p$ plus label noise of standard deviation $\nu/|c_p|$.
+By Eq.~\eqref{eq:capacity},
+\begin{equation*}
+\supA{\Net - U/c_p} \le \Err\big(\Lip(U)/|c_p|,\, \nu/|c_p|\big) + \delta_{\mathrm{opt}}.
+\end{equation*}
+Multiply by $|c_p|$ and apply Eq.~\eqref{eq:homog} with $\vartheta = |c_p|$:
+\begin{equation*}
+\supA{c_p\Net - U} \le \Err\big(\Lip(U), \nu\big) + |c_p|\,\delta_{\mathrm{opt}}.
+\end{equation*}
+The left side is $\delta(\Meth)$. \qed
+
+\subsection{Proof of Theorem~\ref{thm:affine}}\label{app:affine}
+Write $Q_h = Q_h^\ex + \sum_k c_k e_k^\sys + \sum_k c_k e_k^\ran$.
+Define $U = \Phi_h - Q_h^\ex - \sum_k c_k e_k^\sys$.
+The step error is
+\begin{equation*}
+G_\Meth - \Phi_h = \big(c_p\Net - U\big) + \sum_k c_k e_k^\ran.
+\end{equation*}
+The labels are $U + \eta - \sum_k c_k e^\ran_k$, divided by $c_p$.
+The noise term $\eta - \sum_k c_k e^\ran_k$ has zero mean given the state and variance $\nu_{\mathrm{eff}}^2$.
+By the argument of Appendix~\ref{app:scaling}, $\supA{c_p\Net - U} \le \Err(\Lip(U), \nu_{\mathrm{eff}}) + |c_p|\delta_{\mathrm{opt}}$.
+The Lipschitz seminorm is subadditive and absolutely homogeneous, so
+\begin{equation*}
+\Lip(U) \le \Lip(\Phi_h - Q_h^\ex) + \sum_k |c_k|\, \Lip(e_k^\sys) = \Hard(\Meth) + \sum_k |c_k|\,\varepsilon^{(k)}_\sys.
+\end{equation*}
+Since $\Err$ is nondecreasing in its first argument, Eq.~\eqref{eq:rate} gives the first term of Eq.~\eqref{eq:thm1}.
+The triangle inequality gives $\supA{\sum_k c_k e_k^\ran} \le \sum_k |c_k|\varepsilon^{(k)}_\ran$. \qed
+
+\subsection{Proof of Lemma~\ref{lem:taylor}}\label{app:taylor}
+Fix $x \in \Aset$.
+By invariance, $\Phi_t(x) \in \Aset$ for all $t$.
+By Assumption~\ref{ass:regular}, $\frac{d^k}{dt^k}\Phi_t(x) = x^{(k)}(\Phi_t(x))$ for $k \le n+1$.
+Taylor's theorem with integral remainder gives
+\begin{equation}\label{eq:taylorrem}
+\Phi_h(x) - Q^{(n)}_h(x) = \int_0^h \frac{(h-t)^n}{n!}\, x^{(n+1)}\big(\Phi_t(x)\big)\,dt.
+\end{equation}
+The norm of the integrand is at most $M_{n+1}(h-t)^n/n!$.
+Integration gives $M_{n+1} h^{n+1}/(n+1)!$, which is Eq.~\eqref{eq:taylorsup}.
+
+For $x, x' \in \Aset$, subtract Eq.~\eqref{eq:taylorrem} at $x'$ from Eq.~\eqref{eq:taylorrem} at $x$.
+The integrand difference is bounded by $\frac{(h-t)^n}{n!} L_{n+1}\|\Phi_t(x) - \Phi_t(x')\|$.
+By Gr\"onwall's inequality on $\Aset$, $\|\Phi_t(x) - \Phi_t(x')\| \le e^{tL}\|x - x'\| \le e^{hL}\|x - x'\|$ for $0 \le t \le h$.
+Integration gives Eq.~\eqref{eq:taylorlip}. \qed
+
+\subsection{Proof of Lemma~\ref{lem:direct}}\label{app:direct}
+By invariance, $\Phi_{-h}$ maps $\Aset$ to $\Aset$.
+By Gr\"onwall's inequality applied backward in time, $\|\Phi_{-h}(\tilde x) - \Phi_{-h}(\tilde x')\| \le e^{hL}\|\tilde x - \tilde x'\|$ for $\tilde x, \tilde x' \in \Aset$.
+Set $\tilde x = \Phi_h(x)$ and $\tilde x' = \Phi_h(x')$.
+Then $\|x - x'\| \le e^{hL}\|\Phi_h(x) - \Phi_h(x')\|$.
+Rearranging gives the first claim.
+Taking $x \ne x'$ gives $\Lip(\Phi_h) \ge e^{-hL}$.
+The direct step has $Q_h^\ex = 0$, so $\Hard = \Lip(\Phi_h)$. \qed
+
+\subsection{Proof of Lemma~\ref{lem:fd}}\label{app:fd}
+For $i \ge 0$, apply Taylor's theorem to $t \mapsto \Phi_t(x)$ on the interval from $0$ to $-ih$:
+\begin{equation*}
+\Phi_{-ih}(x) = \sum_{k=0}^{q} \frac{(-ih)^k}{k!}\, x^{(k)}(x) + T_i(x), \qquad T_i(x) = \int_0^{-ih} \frac{(-ih - t)^q}{q!}\, x^{(q+1)}\big(\Phi_t(x)\big)\,dt.
+\end{equation*}
+Multiply by $\phi_i/h$ and sum over $i$.
+By Eq.~\eqref{eq:fdorder}, the coefficient of $h^{k-1} x^{(k)}$ is $1$ for $k = 1$ and $0$ for $k \ne 1$.
+Therefore $F_1 - f = h^{-1}\sum_i \phi_i T_i$.
+For $x, x' \in \Aset$, the argument of Appendix~\ref{app:taylor} run backward in time gives
+\begin{equation*}
+\|T_i(x) - T_i(x')\| \le L_{q+1}\, e^{ihL}\, \frac{(ih)^{q+1}}{(q+1)!}\, \|x - x'\|.
+\end{equation*}
+Sum over $i$ with weights $|\phi_i|/h$ and use $e^{ihL} \le e^{qhL}$ for $i \le q$.
+This gives Eq.~\eqref{eq:fd}.
+For $q = 1$, $(\phi_0, \phi_1) = (1, -1)$ satisfies Eq.~\eqref{eq:fdorder}, and $C_1 = 1 \cdot 1^2/2 = 1/2$.
+For $q = 2$, $(\phi_0, \phi_1, \phi_2) = (3/2, -2, 1/2)$ satisfies Eq.~\eqref{eq:fdorder}, and $C_2 = (2 \cdot 1 + \tfrac12 \cdot 8)/6 = 1$. \qed
+
+\subsection{Proof of Lemma~\ref{lem:rk}}\label{app:rk}
+Let $\kappa_i^{(1)}$ and $\kappa_i^{(2)}$ be the stages for $\mathcal N_1$ and $\mathcal N_2$, with stage points $X_i^{(1)}$ and $X_i^{(2)}$.
+Set $\Delta_i = \|\kappa_i^{(1)} - \kappa_i^{(2)}\|$ and $\Delta_0 = \|\mathcal N_1 - \mathcal N_2\|_\infty$.
+Then
+\begin{equation*}
+\Delta_i \le \|\mathcal N_1(X_i^{(1)}) - \mathcal N_1(X_i^{(2)})\| + \|\mathcal N_1(X_i^{(2)}) - \mathcal N_2(X_i^{(2)})\| \le \Lambda h \sum_{l<i} |a_{il}|\,\Delta_l + \Delta_0.
+\end{equation*}
+By induction, $\Delta_i \le \Delta_0(1 + h\Lambda\bar a)^{i-1}$.
+The case $i = 1$ holds because the sum is empty.
+If the bound holds for all $l < i$, then $\Delta_i \le \Delta_0 + h\Lambda\bar a\,\Delta_0(1 + h\Lambda\bar a)^{i-2} \le \Delta_0(1 + h\Lambda\bar a)^{i-1}$.
+The step maps differ by $h\sum_i b_i(\kappa_i^{(1)} - \kappa_i^{(2)})$, with norm at most $h\beta\Delta_0(1 + h\Lambda\bar a)^{s-1}$. \qed
+
+\subsection{Proof of Theorem~\ref{thm:nonaffine}}\label{app:nonaffine}
+By Assumption~\ref{ass:target}, $G_\Meth[\Net] - \Phi_h = G_\Meth[\Net] - G_\Meth[\Netstar]$ on $\Aset$.
+By Lemma~\ref{lem:rk} with $\mathcal N_1 = \Net$ and $\mathcal N_2 = \Netstar$,
+\begin{equation*}
+\delta(\Meth) \le h\beta(1 + h\Lambda\bar a)^{s-1}\,\|\Net - \Netstar\|_\infty.
+\end{equation*}
+By Assumption~\ref{ass:wrapper}, $\|\Net - \Netstar\|_\infty \le \Err(\Lip(\Netstar), \nu/h) + \delta_{\mathrm{opt}}$.
+By Eq.~\eqref{eq:homog} with $\vartheta = h$,
+\begin{equation*}
+h\,\Err(\Lip(\Netstar), \nu/h) = \Err(h\Lip(\Netstar), \nu) = \Err(\Hard(\Meth), \nu).
+\end{equation*}
+This gives Eq.~\eqref{eq:thm2}.
+By Assumption~\ref{ass:target}, $\Lip(\Netstar) = L + O(h^r)$. \qed
+
+\subsection{Proof of Proposition~\ref{prop:table}}\label{app:table}
+The exact multiplier of the test mode over one step is $e^z$.
+\begin{enumerate}[label=(\roman*)]
+\item Direct step. $R = \mu$, $\mu^\star = e^z$, $\partial_\mu R = 1$, so $\Hard = |e^z|$.
+\item Euler step. $R = 1 + h\mu$, $h\mu^\star = e^z - 1$, $\partial_\mu R = h$, so $\Hard = |e^z - 1|$.
+\item Implicit Euler wrapper, $x_{j+1} = x_j + h\mu x_{j+1}$. $R = 1/(1 - h\mu)$. The condition $R = e^z$ gives $h\mu^\star = 1 - e^{-z}$, which exists for all $z$. $\partial_\mu R = h/(1 - h\mu)^2 = h e^{2z}$ at $\mu^\star$. So $\Hard = |1 - e^{-z}|\,|e^{2z}| = |e^z|\,|e^z - 1|$.
+\item Explicit Runge--Kutta wrapper. $R_\Meth = R(h\mu)$ with $R$ the stability polynomial. Representability requires $e^z \in R(\C)$. With $\zeta = h\mu^\star$, $\partial_\mu R_\Meth = hR'(\zeta)$, so $\Hard = |\zeta R'(\zeta)|$.
+\item Taylor method of order $p$ with exact lower slots. $x^{(k)}(x) = \lambda^k x$, so $\psi(z) = \sum_{k<p} z^k/k! = \expt{p-1}(z)$. $\Hard = |e^z - \expt{p-1}(z)|$.
+\item Taylor method of order 2 with backward difference. On the true trajectory, $x_{j-1} = e^{-z}x_j$, so $hF_1 = (1 - e^{-z})x_j$ and $\psi(z) = 2 - e^{-z}$. $\Hard = |e^z - 2 + e^{-z}|$. In rollout, $hF_1 = x_j - x_{j-1}$ and the network term equals $(e^z - 2 + e^{-z})x_j$ at $\mu^\star$. The recurrence is $x_{j+1} = (e^z + e^{-z})x_j - x_{j-1}$. Its characteristic polynomial is $\xi^2 - (e^z + e^{-z})\xi + 1 = (\xi - e^z)(\xi - e^{-z})$. The parasitic root is $e^{-z}$.
+\item Exponential known part. $\psi(z) = e^{z_{\mathrm{lin}}}$, so $\Hard = |e^z - e^{z_{\mathrm{lin}}}| = |e^{z_{\mathrm{lin}}}|\,|e^{z - z_{\mathrm{lin}}} - 1|$. \qed
+\end{enumerate}
+
+\subsection{Proofs of Propositions~\ref{prop:cross}, \ref{prop:imag}, and~\ref{prop:floor}}\label{app:cross}
+All $z$ are real in Proposition~\ref{prop:cross}.
+\begin{enumerate}[label=(\alph*)]
+\item For $z \ge 0$, $e^z - 1 < e^z$. For $z < 0$, $1 - e^z < e^z$ if and only if $e^z > 1/2$, that is $z > -\ln 2$.
+\item The ratio of the implicit Euler and Euler per-mode hardness is $e^z$, which is below $1$ if and only if $z < 0$.
+\item The ratio of the implicit Euler and direct-step per-mode hardness is $|e^z - 1|$, which is below $1$ if and only if $z < \ln 2$.
+\item $e^z - 1 - z \ge 0$ for all real $z$. The condition $e^z - 1 - z < e^z$ is $z > -1$.
+\item For $z \ge 0$, $e^z - 1 - z < e^z - 1$. For $z < 0$, the condition is $e^z - 1 - z < 1 - e^z$, that is $2e^z - 2 - z < 0$. The function $2e^z - 2 - z$ is convex, is zero at $z = 0$ and at $z_\ast$, and is negative between them. Numerical root finding gives $z_\ast = -1.5936$.
+\item Set $u = e^z$. The per-mode hardness is $u + 1/u - 2 \ge 0$. Against the direct step, $u + 1/u - 2 < u$ if and only if $u > 1/2$. Against the Euler step with $u < 1$, $u + 1/u - 2 < 1 - u$ is $2u^2 - 3u + 1 < 0$, that is $1/2 < u < 1$. Against the Euler step with $u \ge 1$, $u + 1/u - 2 < u - 1$ is $1/u < 1$, which holds for $u > 1$. Both conditions reduce to $z > -\ln 2$.
+\item For $z < 0$, $|e^z - 1 - z| = e^z - 1 - z = |z| - 1 + e^z$.
+\end{enumerate}
+For Proposition~\ref{prop:imag}, $|e^{\mathrm{i}\omega}| = 1$ and $|e^{\mathrm{i}\omega} - 1| = 2|\sin(\omega/2)|$.
+The expansion $e^{\mathrm{i}\omega} - 1 - \mathrm{i}\omega = -\omega^2/2 + O(\omega^3)$ gives the order-2 value.
+Also $e^{\mathrm{i}\omega} + e^{-\mathrm{i}\omega} - 2 = 2\cos\omega - 2 = -4\sin^2(\omega/2)$.
+
+For Proposition~\ref{prop:floor}, the second-order polynomial $1 + \zeta + \zeta^2/2$ has derivative $1 + \zeta$, zero at $\zeta = -1$, with value $1/2$.
+The fourth-order polynomial $\expt{4}(\zeta)$ has derivative $\expt{3}(\zeta)$.
+This cubic has one real root, $\zeta \approx -1.5961$, found numerically.
+The value there is $0.2704$.
+Both polynomials tend to $+\infty$ as $\zeta \to \pm\infty$, so these values are the minima on the real line.
+The limits on $z$ are $\ln(1/2) = -0.693$ and $\ln(0.2704) = -1.308$. \qed
+
+\subsection{Proofs of Proposition~\ref{prop:secondorder} and Lemma~\ref{lem:det}}\label{app:secondorder}
+If $\dot x = f(x)$, then $\ddot x = Df(x)\dot x = Df(x) f(x) = g(x)$ and $\dot x(0) = f(x(0))$.
+For any solution of $\ddot x = g(x)$, set $w = \dot x - f(x)$.
+Then $\dot w = \ddot x - Df(x)\dot x = Df(x)f(x) - Df(x)\dot x = -Df(x)\,w$.
+
+For Lemma~\ref{lem:det}, the Jacobian of $(x_j, x_{j-1}) \mapsto (x_{j+1}, x_j)$ is the block matrix
+\begin{equation*}
+\begin{pmatrix} 2I + c_2\, D\Net(x_j) & -I \\ I & 0 \end{pmatrix}.
+\end{equation*}
+For a block matrix $\begin{pmatrix} Y_{11} & Y_{12} \\ Y_{21} & 0\end{pmatrix}$ with $n_{\mathrm{x}} \times n_{\mathrm{x}}$ blocks, exchanging the two block columns gives the determinant $(-1)^{n_{\mathrm{x}}}\det(Y_{12})\det(Y_{21})$.
+Here $\det(Y_{12}) = (-1)^{n_{\mathrm{x}}}$ and $\det(Y_{21}) = 1$, so the determinant is $1$. \qed
+
+\subsection{Proof of Proposition~\ref{prop:rollout}}\label{app:rollout}
+By the triangle inequality,
+\begin{equation*}
+\epsilon_{j+1} = \|G_\Meth(\hat x_j) - \Phi_h(x_j)\| \le \|G_\Meth(\hat x_j) - G_\Meth(x_j)\| + \|G_\Meth(x_j) - \Phi_h(x_j)\|.
+\end{equation*}
+The first term is at most $\chi\,\epsilon_j$.
+The second term is at most $\delta(\Meth)$ because $x_j \in \Aset$.
+With $\epsilon_0 = 0$, induction gives $\epsilon_J \le \delta(\Meth)\sum_{j=0}^{J-1} \chi^j$.
+The geometric sum gives Eq.~\eqref{eq:rollout}. \qed
+
+% ===============================================================
+\begin{thebibliography}{9}
+\bibitem{ainslie2026}
+C.~Ainslie, P.~Hassanzadeh, M.~W.~Mahoney, and A.~Chattopadhyay.
+Eigenanalysis framework for autoregressive neural emulators of multi-scale chaotic dynamics.
+arXiv:2608.16084, 2026.
+
+\bibitem{mohri2008}
+M.~Mohri and A.~Rostamizadeh.
+Rademacher complexity bounds for non-i.i.d.\ processes.
+In \emph{Advances in Neural Information Processing Systems 21}, 2008.
+
+\bibitem{stone1982}
+C.~J.~Stone.
+Optimal global rates of convergence for nonparametric regression.
+\emph{Annals of Statistics}, 10(4):1040--1053, 1982.
+% VERIFY: volume and pages.
+
+\bibitem{yarotsky2017}
+D.~Yarotsky.
+Error bounds for approximations with deep ReLU networks.
+\emph{Neural Networks}, 94:103--114, 2017.
+% VERIFY: volume and pages.
+
+\bibitem{zhu2020imde}
+A.~Zhu, P.~Jin, and Y.~Tang.
+Inverse modified differential equations for discovery of dynamics.
+arXiv:2009.01058, 2020.
+\end{thebibliography}
+
+\end{document}

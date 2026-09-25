@@ -1,0 +1,5 @@
+Read CLAUDE.md, then EXPERIMENTS.md, then paper/learned_steppers.pdf (Sections 3-10 and
+Tables 1-3). Summarize back to me in a few paragraphs: the methods you will implement, the
+predictions being tested, and anything in the plan that is ambiguous or that you think is wrong.
+Then ask me about compute resources and whether to reuse my Spectral_Stability repo before
+writing any code. Start with Milestone 1 only after I confirm.
