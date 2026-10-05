@@ -69,7 +69,7 @@ def main():
         src = torch.load(os.path.join(run_dir(cfg, dt, "onestep", "scratch"), "ckpts.pt"), map_location=dev)
         assert src["names"] == names
         for k, v in src["stats"].items():         # same normalization as the model being fine-tuned
-            assert torch.allclose(v, data["stats"][k].cpu(), rtol=1e-12, atol=0), k
+            assert torch.allclose(v.cpu(), data["stats"][k].cpu(), rtol=1e-12, atol=0), k
         TH = src["theta"][max(src["theta"])].clone()
     TH.requires_grad_(True)
     opt = torch.optim.Adam([TH], lr=cfg["lr"])
