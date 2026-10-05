@@ -38,7 +38,7 @@ def main():
                                   horizon=max(Ts))
         data = cache[dt]
         for k in ("mu", "sd", "sf"):
-            assert torch.allclose(data["stats"][k].cpu(), ck["stats"][k]), (run, k)
+            assert torch.allclose(data["stats"][k].cpu(), ck["stats"][k].cpu()), (run, k)
         uT = data["uT_test"]
         arch = Arch(ck["cfg"]["hidden"], ck["cfg"]["act"])
         final = max(ck["theta"])
