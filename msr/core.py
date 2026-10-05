@@ -63,27 +63,29 @@ def nsteps(T, dt):
     return p
 
 
-def train_window(cfg):
-    T = [pr.get("T_train", 0.0) for pr in cfg["protocols"].values()]
-    return max(T + [cfg["onestep_window"]])
+def train_steps(pr, dt):
+    """Unrolled steps of a protocol: fixed physical window (T_train) or fixed step count (p_train)."""
+    if "p_train" in pr:
+        return pr["p_train"]
+    return nsteps(pr["T_train"], dt) if "T_train" in pr else None
 
 
-def make_data(cfg, dt, dev, train=True, stats=None):
-    """Training starts with true trajectories over the longest training window, held-out starts with
-    true trajectories up to the longest measurement horizon, and the dt-independent normalization
-    (first 4096 training starts on a dt = 0.01 grid over the training window) unless `stats` is given
-    (measurements reuse the normalization saved with the checkpoints)."""
+def make_data(cfg, dt, dev, train=True, stats=None, horizon=None):
+    """Training starts with true trajectories over the longest training window at this dt, held-out
+    starts with true trajectories up to `horizon` (default: the longest measurement horizon), and the
+    dt-independent normalization (first 4096 training starts on a dt = 0.01 grid over `stats_window`)
+    unless `stats` is given (measurements reuse the normalization saved with the checkpoints)."""
     tr = Truth(cfg)
-    Ttr = train_window(cfg)
+    ptr = max([train_steps(pr, dt) or 0 for pr in cfg["protocols"].values()] + [nsteps(cfg["onestep_window"], dt)])
     if train or stats is None:
         u0_tr = attractor_starts(tr, cfg["n_train"] if train else 4096, cfg["data_seed_train"], cfg["transient"], dev)
-        ref = tr.traj(u0_tr[:4096], 0.01, nsteps(Ttr, 0.01)).reshape(-1, 3)
+        ref = tr.traj(u0_tr[:4096], 0.01, nsteps(cfg.get("stats_window", 0.64), 0.01)).reshape(-1, 3)
         stats = dict(mu=ref.mean(0), sd=ref.std(0), sf=tr.f(ref).std(0))
     u0_te = attractor_starts(tr, cfg["n_test"], cfg["data_seed_test"], cfg["transient"], dev)
-    pmax = nsteps(max(cfg["horizons"]), dt)
+    pmax = nsteps(horizon or max(cfg["horizons"]), dt)
     d = dict(truth=tr, dt=dt, pmax=pmax, stats=stats, uT_test=tr.traj(u0_te, dt, pmax))
     if train:
-        d["uT_train"] = tr.traj(u0_tr, dt, nsteps(Ttr, dt))
+        d["uT_train"] = tr.traj(u0_tr, dt, ptr)
     return d
 
 

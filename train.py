@@ -20,7 +20,7 @@ import torch
 from torch.func import vmap
 
 from msr.config import load_cfg, run_dir
-from msr.core import Arch, Model, loss_onestep, loss_unrolled, make_data, nsteps, stack_consts, sq
+from msr.core import Arch, Model, loss_onestep, loss_unrolled, make_data, nsteps, stack_consts, sq, train_steps
 
 
 def ckpt_steps(cfg):
@@ -51,7 +51,8 @@ def main():
     if a.init == "ft":                       # fine-tuning: shorter schedule, lower peak lr
         cfg["steps"], cfg["lr"] = cfg["steps_ft"], cfg["lr_ft"]
     dt, pr = a.dt, cfg["protocols"][a.proto]
-    unrolled = "T_train" in pr
+    p = train_steps(pr, dt)
+    unrolled = p is not None
     assert unrolled or a.init == "scratch"
     out = run_dir(cfg, dt, a.proto, a.init)
     os.makedirs(out, exist_ok=True)
@@ -67,15 +68,16 @@ def main():
     else:
         src = torch.load(os.path.join(run_dir(cfg, dt, "onestep", "scratch"), "ckpts.pt"), map_location=dev)
         assert src["names"] == names
+        for k, v in src["stats"].items():         # same normalization as the model being fine-tuned
+            assert torch.allclose(v, data["stats"][k].cpu(), rtol=1e-12, atol=0), k
         TH = src["theta"][max(src["theta"])].clone()
     TH.requires_grad_(True)
     opt = torch.optim.Adam([TH], lr=cfg["lr"])
     M, B = len(names), cfg["batch"]
     uTr, uTe = data["uT_train"], data["uT_test"]
     ntr = uTr.shape[1]
-    p = nsteps(pr["T_train"], dt) if unrolled else None
     pwin = nsteps(cfg["onestep_window"], dt)
-    pev = nsteps(max(pr.get("T_train", 0.0) for pr in cfg["protocols"].values()), dt)
+    pev = nsteps(cfg.get("eval_T", 0.64), dt)
     gen = torch.Generator(device=dev).manual_seed(int(round(1e6 * dt)) + zlib.crc32((a.proto + a.init).encode()))
 
     f_one = vmap(lambda th, c, X, Y: loss_onestep(arch, th, c, X, Y))

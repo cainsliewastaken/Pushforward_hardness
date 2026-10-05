@@ -44,6 +44,8 @@ def main():
     # cost ~ GPU work: p x steps (in units of 1e5 unrolled steps); measurements ~ 2 units
     for dt in cfg["dts"]:
         for proto, pr in cfg["protocols"].items():
+            if not pr.get("in_sweep", True):
+                continue
             p = nsteps(pr["T_train"], dt) if "T_train" in pr else 1
             inits = cfg["inits"] if "T_train" in pr else ["scratch"]
             for init in inits:

@@ -245,7 +245,7 @@ def main():
     # ---------- plot 5: |sum P q| / |e| vs T
     def ratio_curve(rs, dt):
         return np.array(Ts), np.array([r["ratio_q"] for r in rs])
-    grid(None, r"$|\sum_i\hat P\mathbf q_i|/|e(t_p)|$", "fig5_nonlinear_ratio_vs_T.pdf", logy=True, y_of=ratio_curve)
+    grid(None, r"$|\sum_i\hat P\mathbf{q}_i|/|e(t_p)|$", "fig5_nonlinear_ratio_vs_T.pdf", logy=True, y_of=ratio_curve)
     for f, lab in [("ratio_q", "Plot 5: |sum P q| / |e(t_p)|"), ("S_eps", "Plot 5 (context): |sum P eps|"),
                    ("S_q", "Plot 5 (context): |sum P q|")]:
         md.append(md_table(f"{lab} at T = " + ", ".join(map(str, Ts)) + " (seed means)", "dt", dts, cols,
@@ -266,7 +266,7 @@ def main():
     ax.set_xscale("symlog", linthresh=1e-2)
     ax.set_yscale("log")
     ax.set_xlabel(r"$\max_{k,i}(1-\rho_i)/\Delta t$")
-    ax.set_ylabel(r"$\mathcal R_e(H)$")
+    ax.set_ylabel(r"$\mathcal{R}_e(H)$")
     ax.set_title("T = 1.28, all models (colour dt, marker class)", fontsize=8)
     ax = axs[1]
     for pr in PROTOS:
@@ -278,7 +278,7 @@ def main():
     ax.set_xscale("log")
     ax.set_yscale("log")
     ax.set_xlabel(r"$\Delta t$")
-    ax.set_ylabel(r"$\mathcal R_e(H)$, T = 1.28")
+    ax.set_ylabel(r"$\mathcal{R}_e(H)$, T = 1.28")
     ax.legend(fontsize=6, ncol=2)
     fig.tight_layout()
     fig.savefig(os.path.join(figs, "fig6_Re_H.pdf"))

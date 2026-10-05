@@ -19,6 +19,13 @@ protocols:
   onestep: {}                   # one-step loss on true pairs
   unroll032: {T_train: 0.32}    # L_p, p = T_train / dt
   unroll064: {T_train: 0.64}
+  # fixed step count instead of fixed physical window (follow-up test; not part of sweep.py,
+  # run by followup.sh only where the step count is missing from the T_train protocols above)
+  unrollp16: {p_train: 16, in_sweep: false}
+  unrollp32: {p_train: 32, in_sweep: false}
+stats_window: 0.64      # normalization statistics window (fixed so every run shares the same constants)
+eval_T: 0.64            # training-time held-out rollout error is logged at this horizon
+long_horizons: [0.32, 0.64, 1.28, 2.56, 5.12]   # eval_long.py: rollout error only
 inits: [scratch, ft]    # unrolled protocols: from the seed's initialization, or fine-tuned from the onestep model
 onestep_window: 0.64    # one-step pairs (u_T(t_i), u_T(t_i+1)) are drawn with t_i in [0, onestep_window)
 
