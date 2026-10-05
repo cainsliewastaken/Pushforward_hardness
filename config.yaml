@@ -23,6 +23,9 @@ protocols:
   # run by followup.sh only where the step count is missing from the T_train protocols above)
   unrollp16: {p_train: 16, in_sweep: false}
   unrollp32: {p_train: 32, in_sweep: false}
+  # long window: plain (curriculum stage 2) and damped, w_q = exp(-gamma t_q) (follow-up; not in sweep.py)
+  unroll128: {T_train: 1.28, in_sweep: false}
+  unroll128g9: {T_train: 1.28, gamma: 9.0, in_sweep: false}
 stats_window: 0.64      # normalization statistics window (fixed so every run shares the same constants)
 eval_T: 0.64            # training-time held-out rollout error is logged at this horizon
 long_horizons: [0.32, 0.64, 1.28, 2.56, 5.12]   # eval_long.py: rollout error only

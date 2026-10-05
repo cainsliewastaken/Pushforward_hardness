@@ -20,7 +20,7 @@ import torch
 from torch.func import vmap
 
 from msr.config import load_cfg, run_dir
-from msr.core import Arch, Model, loss_onestep, loss_unrolled, make_data, nsteps, stack_consts, sq, train_steps
+from msr.core import Arch, Model, loss_onestep, loss_unrolled, loss_weights, make_data, nsteps, stack_consts, sq, train_steps
 
 
 def ckpt_steps(cfg):
@@ -44,6 +44,7 @@ def main():
     ap.add_argument("--proto", required=True)
     ap.add_argument("--init", default="scratch", choices=["scratch", "ft"])
     ap.add_argument("--suffix", default="", help="appended to the run directory (variants of a protocol)")
+    ap.add_argument("--from-run", default=None, help="fine-tune from this run directory (default: the onestep run)")
     ap.add_argument("--set", nargs="*", default=[], help="config overrides key=yaml_value")
     a = ap.parse_args()
     cfg = load_cfg(a.cfg, a.set)
@@ -67,7 +68,9 @@ def main():
     if a.init == "scratch":
         TH = torch.stack([arch.init(s, dev) for _, s in names])
     else:
-        src = torch.load(os.path.join(run_dir(cfg, dt, "onestep", "scratch"), "ckpts.pt"), map_location=dev)
+        srcdir = os.path.join(cfg["out_root"], "runs", a.from_run) if a.from_run else run_dir(cfg, dt, "onestep", "scratch")
+        src = torch.load(os.path.join(srcdir, "ckpts.pt"), map_location=dev)
+        assert abs(src["dt"] - dt) < 1e-12
         assert src["names"] == names
         for k, v in src["stats"].items():         # same normalization as the model being fine-tuned
             assert torch.allclose(v.cpu(), data["stats"][k].cpu(), rtol=1e-12, atol=0), k
@@ -79,10 +82,11 @@ def main():
     ntr = uTr.shape[1]
     pwin = nsteps(cfg["onestep_window"], dt)
     pev = nsteps(cfg.get("eval_T", 0.64), dt)
-    gen = torch.Generator(device=dev).manual_seed(int(round(1e6 * dt)) + zlib.crc32((a.proto + a.init).encode()))
+    gen = torch.Generator(device=dev).manual_seed(int(round(1e6 * dt)) + zlib.crc32((a.proto + a.init + a.suffix).encode()))
 
     f_one = vmap(lambda th, c, X, Y: loss_onestep(arch, th, c, X, Y))
-    f_unr = vmap(lambda th, c, U: loss_unrolled(arch, th, c, U, p))
+    w = loss_weights(pr.get("gamma", 0.0), dt, p) if unrolled else None
+    f_unr = vmap(lambda th, c, U: loss_unrolled(arch, th, c, U, p, w))
 
     @torch.no_grad()
     def evaluate():
@@ -133,7 +137,7 @@ def main():
     hdr = ["step", "lr"] + [f"onestep_{c}{s}" for c, s in names] + [f"eT_{c}{s}" for c, s in names]
     np.savetxt(os.path.join(out, "log.csv"), np.array(log), delimiter=",", header=",".join(hdr), comments="")
     with open(os.path.join(out, "meta.json"), "w") as fh:
-        json.dump(dict(dt=dt, proto=a.proto, init=a.init, suffix=a.suffix, lr=cfg["lr"], p=p, names=names, wall_s=time.time() - t0,
+        json.dump(dict(dt=dt, proto=a.proto, init=a.init, suffix=a.suffix, from_run=a.from_run, gamma=pr.get("gamma", 0.0), lr=cfg["lr"], p=p, names=names, wall_s=time.time() - t0,
                        device=dev, P=arch.P, ckpts=sorted(saved)), fh, indent=1)
     print(f"[{a.proto}/{a.init} dt={dt}] done {time.time() - t0:.0f}s", flush=True)
 

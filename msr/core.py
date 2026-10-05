@@ -184,13 +184,19 @@ def loss_onestep(arch, th, c, X, Y):
     return 0.5 * sq(Y - gt(arch, th, X, c))
 
 
-def loss_unrolled(arch, th, c, uT, p):
-    """L_p = (1/p) sum_{q=1..p} (1/2)|e(t_q)|^2 from the starts uT[0]."""
+def loss_unrolled(arch, th, c, uT, p, w=None):
+    """L_p = sum_q w_q (1/2)|e(t_q)|^2 / sum_q w_q from the starts uT[0], q = 1..p. Default w_q = 1, i.e.
+    (1/p) sum_q; damped training uses w_q = exp(-gamma t_q) (see loss_weights)."""
     u, L = uT[0], 0.0
     for q in range(1, p + 1):
         u = gt(arch, th, u, c)
-        L = L + 0.5 * sq(uT[q] - u)
-    return L / p
+        L = L + (1.0 if w is None else w[q - 1]) * 0.5 * sq(uT[q] - u)
+    return L / (p if w is None else sum(w))
+
+
+def loss_weights(gamma, dt, p):
+    """Per-step weights exp(-gamma t_q), t_q = q dt: damping per unit physical time (alpha = exp(-gamma dt) per step)."""
+    return None if not gamma else [math.exp(-gamma * q * dt) for q in range(1, p + 1)]
 
 
 def gl_nodes(k, dev):
