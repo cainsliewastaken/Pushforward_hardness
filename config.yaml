@@ -24,6 +24,7 @@ protocols:
   unrollp16: {p_train: 16, in_sweep: false}
   unrollp32: {p_train: 32, in_sweep: false}
   # long window: plain (curriculum stage 2) and damped, w_q = exp(-gamma t_q) (follow-up; not in sweep.py)
+  unroll016: {T_train: 0.16, in_sweep: false}    # width test: first stage of the window chain
   unroll128: {T_train: 1.28, in_sweep: false}
   unroll128g9: {T_train: 1.28, gamma: 9.0, in_sweep: false}
 stats_window: 0.64      # normalization statistics window (fixed so every run shares the same constants)
