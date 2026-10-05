@@ -43,6 +43,7 @@ def main():
     ap.add_argument("--dt", type=float, required=True)
     ap.add_argument("--proto", required=True)
     ap.add_argument("--init", default="scratch", choices=["scratch", "ft"])
+    ap.add_argument("--suffix", default="", help="appended to the run directory (variants of a protocol)")
     ap.add_argument("--set", nargs="*", default=[], help="config overrides key=yaml_value")
     a = ap.parse_args()
     cfg = load_cfg(a.cfg, a.set)
@@ -54,7 +55,7 @@ def main():
     p = train_steps(pr, dt)
     unrolled = p is not None
     assert unrolled or a.init == "scratch"
-    out = run_dir(cfg, dt, a.proto, a.init)
+    out = run_dir(cfg, dt, a.proto, a.init) + a.suffix
     os.makedirs(out, exist_ok=True)
 
     t0 = time.time()
@@ -132,7 +133,7 @@ def main():
     hdr = ["step", "lr"] + [f"onestep_{c}{s}" for c, s in names] + [f"eT_{c}{s}" for c, s in names]
     np.savetxt(os.path.join(out, "log.csv"), np.array(log), delimiter=",", header=",".join(hdr), comments="")
     with open(os.path.join(out, "meta.json"), "w") as fh:
-        json.dump(dict(dt=dt, proto=a.proto, init=a.init, p=p, names=names, wall_s=time.time() - t0,
+        json.dump(dict(dt=dt, proto=a.proto, init=a.init, suffix=a.suffix, lr=cfg["lr"], p=p, names=names, wall_s=time.time() - t0,
                        device=dev, P=arch.P, ckpts=sorted(saved)), fh, indent=1)
     print(f"[{a.proto}/{a.init} dt={dt}] done {time.time() - t0:.0f}s", flush=True)
 

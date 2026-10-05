@@ -21,6 +21,7 @@ def main():
     ap.add_argument("--dt", type=float, required=True)
     ap.add_argument("--proto", required=True)
     ap.add_argument("--init", default="scratch")
+    ap.add_argument("--suffix", default="")
     ap.add_argument("--steps", nargs="*", type=int, default=None, help="subset of checkpoint steps")
     ap.add_argument("--models", type=int, default=None, help="measure only the first N models (tests)")
     ap.add_argument("--set", nargs="*", default=[])
@@ -28,7 +29,7 @@ def main():
     cfg = load_cfg(a.cfg, a.set)
     dev = "cuda" if torch.cuda.is_available() else "cpu"
     torch.set_num_threads(cfg["threads"])
-    rd = run_dir(cfg, a.dt, a.proto, a.init)
+    rd = run_dir(cfg, a.dt, a.proto, a.init) + a.suffix
     ck = torch.load(os.path.join(rd, "ckpts.pt"), map_location=dev)
     tcfg = ck["cfg"]
     data = make_data(cfg, a.dt, dev, train=False, stats={k: v.to(dev) for k, v in ck["stats"].items()})
