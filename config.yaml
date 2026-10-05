@@ -1,0 +1,42 @@
+# multistep_roughness sweep configuration. Rerun with other widths / horizons by editing this file
+# (or with --set key=value on any script).
+sigma: 10.0
+rho: 28.0
+beta: 2.6666666666666665
+substeps: 10            # RK4 substeps per emulator step (truth map G)
+transient: 20.0         # time units of spin-up per start
+data_seed_train: 1000
+data_seed_test: 2000
+n_train: 131072         # training starts; every minibatch is drawn from these
+n_test: 4096            # held-out starts: M1, M2, M4, M5
+n_grad: 1024            # first n_grad held-out starts: M3 (velocities), M6, training-time evaluation
+n_kernel: 512           # first n_kernel held-out starts: M7 (rollout kernel), FD identity checks
+
+dts: [0.01, 0.02, 0.04, 0.08]
+seeds: [0, 1, 2]
+classes: [euler, direct]
+protocols:
+  onestep: {}                   # one-step loss on true pairs
+  unroll032: {T_train: 0.32}    # L_p, p = T_train / dt
+  unroll064: {T_train: 0.64}
+inits: [scratch, ft]    # unrolled protocols: from the seed's initialization, or fine-tuned from the onestep model
+onestep_window: 0.64    # one-step pairs (u_T(t_i), u_T(t_i+1)) are drawn with t_i in [0, onestep_window)
+
+hidden: [256, 256, 256] # same network at every dt
+act: silu
+lr: 1.0e-3
+lr_end: 1.0e-6
+warmup: 1000
+steps: 100000
+clip: 1.0               # per-model gradient-norm clipping
+batch: 1024             # starts per minibatch
+n_ckpt_log: 10          # log-spaced checkpoints in [10, steps), plus the final step (and step 0)
+log_every: 250
+
+horizons: [0.08, 0.16, 0.32, 0.64, 1.28]
+gl_points: 10           # Gauss-Legendre points for Bbar (5 leaves ~1e-7 quadrature error when |e| is attractor-sized)
+fd_step: 1.0e-5         # central finite-difference step (identity checks)
+chunk: 1024             # per-sample-gradient chunk (M6 row norms)
+chunk_cot: 32           # cotangents per batched backward pass (M3, trace of K)
+threads: 1              # torch CPU threads per process
+out_root: ${SCRATCH}/multistep_roughness
