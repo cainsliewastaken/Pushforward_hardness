@@ -48,6 +48,8 @@ def main():
     cfg = load_cfg(a.cfg, a.set)
     dev = "cuda" if torch.cuda.is_available() else "cpu"
     torch.set_num_threads(cfg["threads"])
+    if a.init == "ft":                       # fine-tuning: shorter schedule, lower peak lr
+        cfg["steps"], cfg["lr"] = cfg["steps_ft"], cfg["lr_ft"]
     dt, pr = a.dt, cfg["protocols"][a.proto]
     unrolled = "T_train" in pr
     assert unrolled or a.init == "scratch"
@@ -91,9 +93,15 @@ def main():
 
     cks = set(ckpt_steps(cfg))
     saved, log = {0: TH.detach().clone()}, []
+
+    def save():
+        torch.save(dict(names=names, theta=saved, stats={k: v.cpu() for k, v in data["stats"].items()},
+                        cfg=cfg, dt=dt, proto=a.proto, init=a.init), os.path.join(out, "ckpts.pt"))
+
     for k in range(cfg["steps"] + 1):
         if k in cks:
             saved[k] = TH.detach().clone()
+            save()
         if k % cfg["log_every"] == 0 or k == cfg["steps"]:
             one, eT = evaluate()
             log.append([k, lr_at(cfg, min(k, cfg["steps"] - 1))] + one.tolist() + eT.tolist())
@@ -118,8 +126,7 @@ def main():
         TH.grad *= torch.clamp(cfg["clip"] / (gn + 1e-300), max=1.0)[:, None]
         opt.step()
 
-    torch.save(dict(names=names, theta=saved, stats={k: v.cpu() for k, v in data["stats"].items()},
-                    cfg=cfg, dt=dt, proto=a.proto, init=a.init), os.path.join(out, "ckpts.pt"))
+    save()
     hdr = ["step", "lr"] + [f"onestep_{c}{s}" for c, s in names] + [f"eT_{c}{s}" for c, s in names]
     np.savetxt(os.path.join(out, "log.csv"), np.array(log), delimiter=",", header=",".join(hdr), comments="")
     with open(os.path.join(out, "meta.json"), "w") as fh:

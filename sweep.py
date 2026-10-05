@@ -41,6 +41,7 @@ def main():
             deps=deps, cost=cost, ok=os.path.join(run_dir(cfg, dt, proto, init), f"{kind}.ok"),
             log=os.path.join(logs, f"{kind}_{tag}.log"))
 
+    # cost ~ GPU work: p x steps (in units of 1e5 unrolled steps); measurements ~ 2 units
     for dt in cfg["dts"]:
         for proto, pr in cfg["protocols"].items():
             p = nsteps(pr["T_train"], dt) if "T_train" in pr else 1
@@ -48,12 +49,17 @@ def main():
             for init in inits:
                 tag = run_tag(dt, proto, init)
                 deps = [f"train:{run_tag(dt, 'onestep', 'scratch')}"] if init == "ft" else []
-                add("train", dt, proto, init, deps, cost=p + (1000 if proto == "onestep" else 0))
-                add("measure", dt, proto, init, [f"train:{tag}"], cost=nsteps(max(cfg["horizons"]), dt))
+                steps = cfg["steps_ft"] if init == "ft" else cfg["steps"]
+                add("train", dt, proto, init, deps, cost=p * steps / 1e5)
+                add("measure", dt, proto, init, [f"train:{tag}"], cost=2.0)
 
+    # placement: each GPU holds at most per_gpu processes and at most `cap` cost units, except that an
+    # idle GPU always accepts a task (so the largest run gets a GPU to itself)
+    cap = max(t["cost"] for t in tasks.values())
+    load = {g: 0.0 for g in range(a.gpus)}
+    count = {g: 0 for g in range(a.gpus)}
     done = {n for n, t in tasks.items() if os.path.exists(t["ok"])}
     failed, running = {}, {}
-    slots = [g for g in range(a.gpus) for _ in range(a.per_gpu)]
     T0 = time.time()
     while True:
         for n, (proc, g, t0) in list(running.items()):
@@ -61,7 +67,8 @@ def main():
             if rc is None:
                 continue
             del running[n]
-            slots.append(g)
+            load[g] -= tasks[n]["cost"]
+            count[g] -= 1
             if rc == 0:
                 open(tasks[n]["ok"], "w").close()
                 done.add(n)
@@ -75,9 +82,15 @@ def main():
         for n in blocked:
             failed[n] = "dep"
         ready.sort(key=lambda n: (-tasks[n]["cost"]))
-        while ready and slots:
-            n = ready.pop(0)
-            g = slots.pop(0)
+        for n in list(ready):
+            c = tasks[n]["cost"]
+            fits = [g for g in load if count[g] == 0 or (count[g] < a.per_gpu and load[g] + c <= cap + 1e-9)]
+            if not fits:
+                continue
+            g = min(fits, key=lambda g: load[g])
+            load[g] += c
+            count[g] += 1
+            ready.remove(n)
             env = dict(os.environ, CUDA_VISIBLE_DEVICES="" if a.cpu else str(g))
             os.makedirs(os.path.dirname(tasks[n]["ok"]), exist_ok=True)
             fh = open(tasks[n]["log"], "w")

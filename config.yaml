@@ -28,6 +28,8 @@ lr: 1.0e-3
 lr_end: 1.0e-6
 warmup: 1000
 steps: 100000
+steps_ft: 20000         # fine-tuned unrolled runs (start from the converged onestep model)
+lr_ft: 1.0e-4           # peak lr for fine-tuning (same warmup + cosine shape)
 clip: 1.0               # per-model gradient-norm clipping
 batch: 1024             # starts per minibatch
 n_ckpt_log: 10          # log-spaced checkpoints in [10, steps), plus the final step (and step 0)
