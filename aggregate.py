@@ -35,6 +35,16 @@ def load(cfg):
             if os.path.exists(f):
                 for (cls, seed, step), r in torch.load(f, weights_only=False).items():
                     D[(dt, proto, init, cls, seed, step)] = r
+            # final checkpoints: Bbar-based quantities recomputed with more Gauss-Legendre points
+            fg = os.path.join(run_dir(cfg, dt, proto, init), "meas_gl.pt")
+            if os.path.exists(fg):
+                for (cls, seed, step), byn in torch.load(fg, weights_only=False).items():
+                    r = D[(dt, proto, init, cls, seed, step)]
+                    n = max(byn)
+                    for k in ("rhob_m1", "sum_ln_rhob", "frac_rhob_nonpos", "S_q", "ratio_q", "recon_relerr"):
+                        r[k] = byn[n][k]
+                    r["recon_relerr_t"] = np.array([np.nan, byn[n]["recon_relerr_max"]])
+                    r["gl_points"] = n
     return D
 
 
@@ -98,14 +108,14 @@ def main():
     cj = os.path.join(R, "checks.json")
     if os.path.exists(cj):
         chk = json.load(open(cj))
-    trained = dict(Psi=[], gS=[], rec=[], rec_max_e=[])
+    trained = dict(Psi=[], gS=[], rec=[], rec40=[])
     for k, r in D.items():
         if r.get("diverged"):
             continue
         if "chk_Psi_fd" in r:
             trained["Psi"].append(r["chk_Psi_fd"])
             trained["gS"].append(r["chk_gSigma_fd"])
-        trained["rec"].append(np.nanmax(r["recon_relerr_t"][1:]))
+        (trained["rec40"] if r.get("gl_points") else trained["rec"]).append(np.nanmax(r["recon_relerr_t"][1:]))
     md.append("## Identity checks\n")
     if chk:
         for key, lab in [("chk_Jstate", "state Jacobian (forward mode) vs autograd"),
@@ -118,7 +128,10 @@ def main():
         md.append(f"- Trained models (final checkpoints, T = 0.32 and 1.28): Psi g vs FD max {max(trained['Psi']):.2e}; "
                   f"g^(Sigma) vs FD max {max(trained['gS']):.2e}")
     if trained["rec"]:
-        md.append(f"- Reconstruction at every checkpoint, model and p <= p(1.28): max rel. error {max(trained['rec']):.2e}")
+        md.append(f"- Reconstruction, intermediate checkpoints ({cfg['gl_points']}-point GL, p <= p(1.28)): max rel. error {max(trained['rec']):.2e} "
+                  f"(quadrature error where |e| is attractor-sized; share > 1e-8: {np.mean(np.array(trained['rec']) > 1e-8):.2f})")
+    if trained['rec40']:
+        md.append(f"- Reconstruction, final checkpoints (40-point GL, recompute_gl.py): max rel. error {max(trained['rec40']):.2e}")
     md.append("")
 
     # ---------- plot 1: R(1.28) vs dt

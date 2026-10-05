@@ -1,0 +1,55 @@
+% Numerical checks for multistep_rollout_kernel.tex (Lorenz-63), written for that draft's macros
+% (\uu, \ee, \Gt, \Hop, \Ph, \Psp, \Kq, \KK, \LL, \dt, \Rgh, \lgn). Paste after Section "Status and
+% numerical checks". Every statement below is a measurement, not a proof; numbers are from
+% ~/multistep_roughness (results.md, tables.md, tables_followup.md), ranges are min--max over 3 seeds.
+
+\section{Numerical checks on Lorenz-63}\label{sec:numerics}
+
+\paragraph{Setup.}
+Lorenz-63 ($\sigma=10$, $\rho=28$, $\beta=8/3$), truth map RK4 with 10 substeps per step, $\dt\in\{0.01,0.02,0.04,0.08\}$.
+Both model classes use the same network, an MLP $3\to256\to256\to256\to3$ with SiLU (133k parameters), $\Pi = \I$.
+Training: Adam, minibatches of 1024 starts from 131{,}072 starts on the attractor; one-step loss, and $L_w$ with $w_q = 1/p$ over horizons $\tau = 0.32$ and $0.64$, from scratch or fine-tuned from the one-step model; follow-ups at $\tau = 0.16, 1.28, 2.56$.
+Kernels are evaluated matrix-free (Lanczos with one forward- and one reverse-mode pass per product) on held-out starts.
+The largest Lyapunov exponent of Lorenz-63 is $\lambda_1\approx0.91$, so $\tau = 1.28$ is about $1.2$ Lyapunov times.
+
+\paragraph{Exact identities.}
+Lemma~\ref{lem:features}: $\Psp g$ against central differences of the rollout, relative error $1.1\times10^{-8}$ at random parameters; for trained models a scan of the difference step reaches $1.5\times10^{-9}$.
+The error expansion $\ee(t_p) = \sum_{i<p}\Ph(t_p,t_i)(\eps_i + \mathbf q_i)$ with the mean-value Jacobian by Gauss--Legendre quadrature holds to $10^{-11}$--$10^{-7}$ once the quadrature is converged (40 points where $|\ee|$ is a sizable fraction of the attractor; 10 points leave up to $4\times10^{-2}$ there).
+
+\paragraph{Continuous-time limit (Theorem~\ref{thm:limit}; check (ii)).}
+For Euler models $\lambda_{\max}(\Kq)$ is the same function of $\tau_q$ for all four $\dt$, in every training protocol: about $4.7\times10^2$ at $\tau_q = 0.08$, $1.5\times10^3$ at $0.16$, $10^4$ at $0.32$, $10^6$ at $0.64$ and $2.2$--$2.5\times10^7$ at $1.28$.
+The largest eigenvalue of the Gauss--Newton matrix of $L_w$ itself, at the start of fine-tuning, collapses the same way (within 10\% across $\dt$): $5.7\times10^2$, $2.6\times10^3$, $10^5$, $4\times10^7$ and $6.5\times10^9$ for $\tau = 0.16, 0.32, 0.64, 1.28, 2.56$.
+For direct-step models neither collapses: at fixed $\tau$ both grow like $\dt^{-2}$ (at $\tau_q = 0.08$: $1.1\times10^3$, $4.6\times10^3$, $2.2\times10^4$, $9.2\times10^4$ for $\dt = 0.08,\dots,0.01$), which is the $(\tau/\dt)^2$ growth of the bound in Section~\ref{sec:direct} for features without a factor $\dt$.
+
+\paragraph{Short horizons (Proposition~\ref{prop:short}; check (iii), indirectly).}
+Between $\tau_q = 0.08$ and $0.16$, $\lambda_{\max}(\Kq)$ grows by $3.2$ and the curvature of $L_w$ between $\tau = 0.16$ and $0.32$ by $4.5$, close to the factor $\tau^2$ ratio of $4$; from $\tau\approx0.32$ on, the growth is faster than $\tau^2$.
+$\bar K^{(q)}$ was not formed.
+
+\paragraph{Growth with the horizon (Theorem~\ref{thm:rate}) and the long-horizon remark (check (iv), partly).}
+The curvature of $L_w$ grows by about $40$ from $\tau = 0.32$ to $0.64$, $400$ from $0.64$ to $1.28$ and $160$ from $1.28$ to $2.56$: log-rates of about $11$, $9$ and $4$ per unit horizon, decreasing toward $2\lambda_1\approx1.8$, as finite-time exponents approaching the asymptotic one would.
+The endpoint kernel becomes nearly rank one: $\operatorname{tr}\Kq/\lambda_{\max}(\Kq)$ falls from $4$--$7$ at $\tau_q = 0.08$ to about $1.5$ for Euler models at $\tau_q\ge0.64$.
+The alignment of the top eigenvector with the leading Lyapunov direction was not measured.
+
+\paragraph{Learning rate and trainability.}
+The draft's remark that the safe gradient-descent learning rate shrinks with $\sum_q w_q(\sigma^{(q)})^2$ predicts that rollout training becomes harder with the physical horizon, independently of $p$ and $\dt$ for Euler models.
+Observed with Adam:
+fine-tuning on $\tau\le0.64$ lowers the held-out value of $L_w$ (end/start $0.2$--$0.9$ for Euler at peak learning rate $10^{-4}$), while at $\tau = 1.28$ and $2.56$ it ends above its starting value (up to $16$ times at $10^{-4}$; 6 of 9 Euler runs still above at $10^{-6}$; 5 of 6 after a curriculum $0.32\to0.64\to1.28$).
+At equal $\tau = 1.28$, $p = 32$ ($\dt = 0.04$) and $p = 16$ ($\dt = 0.08$) fail alike; at equal $p = 32$, $\tau = 0.32$ succeeds and $\tau = 2.56$ fails.
+The gradient-descent threshold itself does not transfer to Adam: of 126 fine-tuned models, many with learning rate times $\lambda_{\max}$ between $10$ and $300$ still descended, and the best single threshold (on $\lambda_{\max}$ alone, near $10^6$) classifies $83\%$ of runs correctly.
+A loss with $w_q\propto e^{-9\tau_q}$, which weights each horizon about equally given the measured error growth, lowers the curvature at $\tau = 1.28$ from $4\times10^7$ to $3\times10^4$ and trains without damage, but the resulting models equal the one-step model at every evaluation horizon.
+
+\paragraph{The nonlinear remainder.}
+$|\sum_i\Ph\mathbf q_i|/|\ee(t_p)|$ is below $10^{-2}$ up to $\tau = 0.64$ for every Euler model and $0.04$--$0.7$ at $\tau = 1.28$ (direct: up to $0.26$ and $1.9$).
+The first-order description underlying $K^{\mathrm{roll}}_w$ is accurate over the horizons on which rollout training succeeded, and not beyond.
+
+\paragraph{What rollout training changes.}
+For Euler models the learned contraction along the rollout error, $\mathbf n^\top\nabla\Gt\,\mathbf n$ with $\mathbf n = \ee/|\ee|$, matches the true map's along the same direction in every protocol (to about 10\% wherever it differs from one by more than $10^{-2}$), while the direction moves: at $\dt = 0.01$ its mean minus one changes from $+1.5\times10^{-3}$ (one-step training) to between $-1.4\times10^{-2}$ and $-2.8\times10^{-2}$ (rollout training), with the true map giving the same values along the new directions.
+This is the behaviour Proposition~\ref{prop:factor} suggests: the backward propagation $\LL^\top W\ee$ weights one-step errors by how the propagators amplify them, so rollout training moves the one-step error out of amplified directions rather than changing the learned Jacobian.
+
+\paragraph{Euler and direct.}
+The variation of the one-step error map along the rollout error, $\max|\mathbf n^\top(\bm\zeta(\uu_p) - \bm\zeta(\uu_T))|/(\dt\,|\ee|)$ with $\bm\zeta = \Gt - \G$, is $5$--$11$ for Euler models at every $\dt$ and $6$, $14$, $29$, $64$ for direct models at $\dt = 0.08,\dots,0.01$.
+Rollout errors at $\tau = 1.28$ are smaller for Euler with disjoint seed ranges in all five protocols at $\dt = 0.01$, four at $0.02$ and three at $0.04$, and indistinguishable at $0.08$.
+
+\paragraph{Not covered.}
+Check (i) ($\lambda_{\max}(\Kq)$ against $e^{2|\ell|\dt}\varphi(\ell,\tau_q)^2\max_i s_i^2$; $\ell$ and $s_i$ were not computed), check (v) ($F^{\mathrm{roll}}(s)$ and its Krylov values), and the eigenvector alignment in (iv).
+Three seeds per setting; one width (256, not converged in width: doubling it halves the one-step loss at $\dt = 0.08$); one optimizer family.

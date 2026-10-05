@@ -90,4 +90,18 @@ python aggregate.py                    # figs/*.pdf, tables/*.csv, tables.md
 ```
 
 Single pieces: `train.py --dt 0.01 --proto unroll064 --init ft`, `measure_run.py` with the same
-arguments. Any config entry can be overridden with `--set key=value` (e.g. `--set "hidden=[512,512,512]" out_root=...`).
+arguments.
+
+Follow-up experiments (results in `results.md`), each launched on an interactive node by its shell script:
+
+```
+followup.sh    # fixed step count (protocols unrollp16/unrollp32), 40-point recompute, long horizons
+followup2.sh   # long-window fine-tunes refit at lr 1e-6 (train.py --suffix _lr1e-6 --set lr_ft=1.0e-6)
+followup3.sh   # curriculum (train.py --from-run <run>) and damped loss (protocol unroll128g9, w_q = exp(-gamma t_q))
+followup4.sh   # trainability.py: Gauss-Newton curvature of each unrolled run's own loss
+python recompute_gl.py; python eval_long.py; python followup_report.py   # tables_followup.md, fig8, fig9
+cat results_main.md $SCRATCH/multistep_roughness/tables.md $SCRATCH/multistep_roughness/tables_followup.md > results.md
+```
+
+Measurement note: intermediate checkpoints carry M1-M5 on 1024 held-out starts with 10-point quadrature;
+final checkpoints carry M1-M7 on the full sets, with the Bbar quantities recomputed at 40 points. Any config entry can be overridden with `--set key=value` (e.g. `--set "hidden=[512,512,512]" out_root=...`).
