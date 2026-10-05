@@ -22,6 +22,7 @@ def main():
     ap.add_argument("--proto", required=True)
     ap.add_argument("--init", default="scratch")
     ap.add_argument("--steps", nargs="*", type=int, default=None, help="subset of checkpoint steps")
+    ap.add_argument("--models", type=int, default=None, help="measure only the first N models (tests)")
     ap.add_argument("--set", nargs="*", default=[])
     a = ap.parse_args()
     cfg = load_cfg(a.cfg, a.set)
@@ -35,14 +36,14 @@ def main():
     steps = sorted(ck["theta"]) if a.steps is None else a.steps
     final = max(ck["theta"])
     out, t0 = {}, time.time()
-    for j, (cls, seed) in enumerate(ck["names"]):
+    for j, (cls, seed) in enumerate(ck["names"][:a.models]):
         m = Model(arch, cls, a.dt, data["stats"])
         for s in steps:
             th = ck["theta"][s][j]
             if not torch.isfinite(th).all():
                 out[(cls, seed, s)] = dict(diverged=True)
                 continue
-            out[(cls, seed, s)] = measure(m, th, data, cfg, checks=(s == final))
+            out[(cls, seed, s)] = measure(m, th, data, cfg, checks=(s == final), full=(s == final))
         print(f"[{rd}] {cls} seed {seed} measured ({time.time() - t0:.0f}s)", flush=True)
     torch.save(out, os.path.join(rd, "meas.pt"))
 

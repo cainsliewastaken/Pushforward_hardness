@@ -10,7 +10,7 @@ data_seed_test: 2000
 n_train: 131072         # training starts; every minibatch is drawn from these
 n_test: 4096            # held-out starts: M1, M2, M4, M5
 n_grad: 1024            # first n_grad held-out starts: M3 (velocities), M6, training-time evaluation
-n_kernel: 512           # first n_kernel held-out starts: M7 (rollout kernel), FD identity checks
+n_kernel: 128           # first n_kernel held-out starts: M7 (rollout kernel), FD identity checks (brief: n <= 128)
 
 dts: [0.01, 0.02, 0.04, 0.08]
 seeds: [0, 1, 2]

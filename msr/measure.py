@@ -5,6 +5,8 @@ vector-Jacobian products in theta, and Lanczos (scipy eigsh) for spectral norms 
 Sizes (config): M1, M2, M4, M5 on all n_test held-out starts; M3 and M6 on the first n_grad;
 M7 (rollout kernel) on the first n_kernel.
 """
+import time
+
 import numpy as np
 import torch
 from scipy.sparse.linalg import LinearOperator, eigsh
@@ -57,15 +59,27 @@ def forward_quantities(m, th, uT, truth, n_gl):
                 rho=rho, rhob=rhob, rhof=rhof)
 
 
-def measure(m, th, data, cfg, checks=False):
+def measure(m, th, data, cfg, checks=False, full=True):
+    """full: M1-M7 on the configured sizes. not full (intermediate checkpoints): M1-M5 on the first
+    n_grad held-out starts, no M6/M7."""
     truth, dt = data["truth"], m.dt
-    uT = data["uT_test"]
+    uT = data["uT_test"] if full else data["uT_test"][:, :cfg["n_grad"]]
     dev = uT.device
     pmax = uT.shape[0] - 1
     Ts = cfg["horizons"]
     ps = [nsteps(T, dt) for T in Ts]
     th = th.detach()
+    t0 = [time.time()]
+
+    def tick(name):
+        if cfg.get("timing"):
+            if uT.is_cuda:
+                torch.cuda.synchronize()
+            print(f"    {name}: {time.time() - t0[0]:.1f}s", flush=True)
+        t0[0] = time.time()
+
     F = forward_quantities(m, th, uT, truth, cfg["gl_points"])
+    tick("forward quantities (J, Bbar, q, rho)")
     e = F["e"]
     out = dict(T=np.array(Ts), p=np.array(ps))
 
@@ -112,6 +126,15 @@ def measure(m, th, data, cfg, checks=False):
     out["rhob_m1_t"] = (rhob[1:] - 1).mean(1).cpu().numpy()
     out["rhof_m1_t"] = (rhof[1:] - 1).mean(1).cpu().numpy()
 
+    tick("M1 M2 M4 M5")
+    if not full:
+        g = per_horizon_velocities(m, th, uT, cfg["chunk_cot"])
+        gsum = torch.cumsum(g, 0) / torch.arange(1, pmax + 1, device=dev)[:, None]
+        out["c_q"] = np.array([_cos(g[0], g[q]) for q in range(pmax)])
+        out["c_Sigma"] = np.array([_cos(g[0], gsum[q]) for q in range(pmax)])
+        out["g_norm_q"] = torch.linalg.norm(g, dim=1).cpu().numpy()
+        out["full"] = False
+        return out
     # M6: M has rows n_i^T (d_theta H(v_i) - d_theta H(ubar_i)) / |e_k(t_i)| over (k, i <= p-1)
     ng = cfg["n_grad"]
     v6, u6, n6, e6 = v[:, :ng], ub[:, :ng], nv[:, :ng], en[:, :ng]
@@ -129,6 +152,7 @@ def measure(m, th, data, cfg, checks=False):
         for s in range(0, ng, cfg["chunk"]):
             sl = slice(s, s + cfg["chunk"])
             rownorm[i, sl] = torch.linalg.norm(prow(th, v6[i, sl], u6[i, sl], n6[i, sl], e6[i, sl]), dim=1)
+    tick("M6 row norms")
     spec, mrow = [], []
     for p in ps:
         if p <= 1:
@@ -141,6 +165,7 @@ def measure(m, th, data, cfg, checks=False):
         mrow.append(float(rownorm[:p - 1].max()))
     out["M6_spec"], out["M6_maxrow"] = np.array(spec), np.array(mrow)
 
+    tick("M6 spectral norms")
     # M3: cosines of the one-step velocity g^(1) with per-horizon g^(q) and cumulative g^(Sigma)(p)
     g = per_horizon_velocities(m, th, uT[:, :ng], cfg["chunk_cot"])
     gsum = torch.cumsum(g, 0) / torch.arange(1, pmax + 1, device=dev)[:, None]
@@ -148,6 +173,7 @@ def measure(m, th, data, cfg, checks=False):
     out["c_Sigma"] = np.array([_cos(g[0], gsum[q]) for q in range(pmax)])
     out["g_norm_q"] = torch.linalg.norm(g, dim=1).cpu().numpy()
 
+    tick("M3")
     # M7: rollout kernel K^(p) = (1/n) Psi Psi^T on the first n_kernel starts
     nk = cfg["n_kernel"]
     lam, trK, PTe = [], [], []
@@ -156,6 +182,7 @@ def measure(m, th, data, cfg, checks=False):
         _, vjp_fn = vjp(f, th)
         Kv = lambda x: jvp(f, (th,), (vjp_fn(x)[0],))[1] / nk
         lam.append(_top_eig(Kv, 3 * nk, dev))
+        tick(f"  M7 lambda_max p={p}")
         tr = 0.0
         eye = torch.eye(3 * nk, device=dev)
         for s in range(0, 3 * nk, cfg["chunk_cot"]):
@@ -169,12 +196,14 @@ def measure(m, th, data, cfg, checks=False):
             a = torch.einsum("nba,nb->na", F["J"][i + 1, :nk], a)
             acc = acc + sq(a)
         PTe.append(float(torch.sqrt(acc)))
+        tick(f"  M7 trace, P^T e p={p}")
     out["K_lam_max"] = np.array(lam)
     out["K_tr_over_lam"] = np.array(trK) / np.array(lam)
     out["PT_ehat"] = np.array(PTe)
 
     if checks:
         out.update(identity_checks(m, th, uT[:, :nk], cfg))
+        tick("identity checks")
     return out
 
 
