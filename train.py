@@ -66,7 +66,7 @@ def main():
     os.makedirs(out, exist_ok=True)
 
     t0 = time.time()
-    data = make_data(cfg, dt, dev)
+    data = make_data(cfg, dt, dev, horizon=max(max(cfg["horizons"]), (p or 0) * dt))   # held-out trajectories cover the window
     arch = Arch(cfg["hidden"], cfg["act"])
     names = [(c, s) for c in cfg["classes"] for s in cfg["seeds"]]
     models = [Model(arch, c, dt, data["stats"]) for c, _ in names]
