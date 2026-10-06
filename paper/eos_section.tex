@@ -66,7 +66,14 @@ Let $\Net$ be twice continuously differentiable in $\theta$ at the training inpu
 \begin{equation}\label{eos:eq:kstep}
 \ip{\varphi}{K'\varphi} = \ip{\varphi}{K\varphi} - 2\eta\,g_\varphi\cdot\bar S(\varphi)g_E + \eta^2|\bar S(\varphi)g_E|^2 .
 \end{equation}
-\item $g_E = \sum_k\hat e_kg_{v_k}$, where the $g_{v_k}$ are orthogonal and $|g_{v_k}| = \sqrt{\lambda_k}$; hence $|g'_\varphi - g_\varphi|\le\eta\|\bar S(\varphi)\|_{op}\|E\|_K$, and the part of $g'_\varphi - g_\varphi$ due to the $k$-th component of the error has length at most $\eta\|\bar S(\varphi)\|_{op}\sqrt{\lambda_k}\,|\hat e_k|$.
+\item $g_E = \sum_k\hat e_kg_{v_k}$, where the $g_{v_k}$ are orthogonal and $|g_{v_k}| = \sqrt{\lambda_k}$. Hence
+\[
+|g'_\varphi - g_\varphi|\le\eta\|\bar S(\varphi)\|_{op}\|E\|_K ,
+\]
+and the part of $g'_\varphi - g_\varphi$ due to the $k$-th component of the error, $-\eta\hat e_k\bar S(\varphi)g_{v_k}$, satisfies
+\[
+\eta\,|\hat e_k|\,|\bar S(\varphi)g_{v_k}|\le\eta\|\bar S(\varphi)\|_{op}\sqrt{\lambda_k}\,|\hat e_k| .
+\]
 \item For every $k$ with $\lambda_k > 0$,
 \begin{equation}\label{eos:eq:relk}
 \frac{\big|\ip{v_k}{K'v_k}^{1/2} - \lambda_k^{1/2}\big|}{\lambda_k^{1/2}}\ \le\ \frac{\eta\,|\bar S(v_k)g_E|}{\lambda_k^{1/2}}\ \le\ \frac{\eta\,\|\bar S(v_k)\|_{op}\,\|E\|_K}{\lambda_k^{1/2}} .
