@@ -23,7 +23,7 @@ So the sharpness is, up to a term proportional to the error, the top eigenvalue 
 This section makes three statements of different kinds:
 (i) what one step of gradient descent can learn at the edge, which is a statement of the theory (Section~\ref{eos:sec:edge});
 (ii) how one step changes the kernel, exactly and in every direction, and which part of the error drives the change (Section~\ref{eos:sec:kernel});
-(iii) what holds the sharpness at $2/\eta$, which is the self-stabilization of \cite{damian2023}, and why the loss slows there: the self-stabilization is transferred into the terms of the theory, with one exact identity added for where the error goes in one step (Section~\ref{eos:sec:cap}).
+(iii) what holds the sharpness at $2/\eta$, which is the self-stabilization of \cite{damian2023}, transferred into the terms of the theory, with one exact identity added for where the error goes in one step; it shows why the edge costs the slow directions no progress (Section~\ref{eos:sec:cap}).
 Section~\ref{eos:sec:num} gives the numerical setup and further checks.
 All results concern one time and one training step, and assume only that $\Net$ is twice continuously differentiable in $\theta$; statements about several training steps are observations, not results of the theory.
 
@@ -115,13 +115,13 @@ For a linear network, $\Upsilon_Y(0^+) = \sum_ky_k^2/\lambda_k$ with $K = XX^\to
 Proposition~\ref{eos:prop:kstep} bounds what each unit of the step length does to the kernel, but not its sign, so the prediction is not derived.
 
 % ---------------------------------------------------------------
-\subsection{What holds the sharpness at \texorpdfstring{$2/\eta$}{2/eta}, and why the loss slows there}\label{eos:sec:cap}
+\subsection{What holds the sharpness at \texorpdfstring{$2/\eta$}{2/eta}}\label{eos:sec:cap}
 
 What holds $\lambda_1$ at $2/\eta$ is the self-stabilization of \cite{damian2023}; the central flow of \cite{cohen2025} describes the same balance.
 This subsection transfers their mechanism into the terms of the theory; the mechanism, and the theorem that it persists over many steps, are theirs.
 What is added is one exact identity for where the error goes in one step, and the reading of their balance in terms of where the error lies.
 
-\begin{proposition}\label{eos:prop:park}
+\begin{proposition}\label{eos:prop:estep}
 Let $\Net$ be twice continuously differentiable in $\theta$ at the training inputs. One step $\theta' = \theta - \eta g_E$ leaves the error
 \begin{equation}\label{eos:eq:estep}
 E' = (I - \eta K)E + r,\qquad r = \eta^2\int_0^1(1 - \tau)\,\nabla^2_\theta\Net(\theta - \tau\eta g_E)[g_E, g_E]\,d\tau ,
@@ -139,9 +139,12 @@ Taylor's theorem with integral remainder for $\Net$ along the segment; the first
 The remainder $r$ is the part of the output change that the kernel does not predict; it contains every order beyond the first, and it reaches every eigendirection, the top one included.
 At the edge, $\eta\lambda_1 = 2$, the term $k = 1$ of Eq.~\eqref{eos:eq:lstep} vanishes: the top component of the error is reversed and not reduced, and what $r$ puts into it, or what grows in it while $\eta\lambda_1 > 2$, stays.
 The other components keep the factors $(1 - \eta\lambda_k)^2 - 1\approx-2\eta\lambda_k$ they had before the edge.
-So once error is held in the top direction, the loss falls only through the slow directions, at their old rates, while carrying an error that the step does not remove; this is the prediction $(\|E_\gamma\|^2 + \ip{v_1}{E}^2)^{1/2}$ of Section~\ref{eos:sec:edge}.
+Before the edge the factor of the top component is $-\eta\lambda_1(2 - \eta\lambda_1) < 0$, the largest in size while $\eta\lambda_1\le1$, so by the time $\lambda_1$ reaches $2/\eta$ that component has been removed and the error lies on the slow directions (Theorem~\ref{thm:floor}).
+The edge therefore stops progress only along a direction that is already fitted, and costs the slow directions, which carry the remaining error, none of their progress.
+What it adds is the error that the oscillation itself puts along the top direction; in the decomposition of \cite{cohen2025}, this is the contribution of the oscillation to the loss, on top of the loss along the central flow, which keeps decreasing.
+It is the term $\ip{v_1}{E}^2$ in the prediction $(\|E_\gamma\|^2 + \ip{v_1}{E}^2)^{1/2}$ of Section~\ref{eos:sec:edge}.
 
-How much error is held there is set by the self-stabilization of \cite{damian2023}.
+The size of the oscillation is set by the self-stabilization of \cite{damian2023}.
 Let $S$ be the sharpness, $u$ the top eigenvector of the loss Hessian, and $x$ the displacement of an iterate from the centre of the oscillation along $u$.
 Expanding the gradient about the centre, the oscillation adds $\frac12x^2\nabla^3_\theta L[u,u]$ to it, and for a simple top eigenvalue $\nabla^3_\theta L[u,u] = \nabla S$.
 So one step changes $S$ by $\eta\alpha$, with $\alpha = -\nabla L\cdot\nabla S$, through the motion of the centre, and by $-\frac\eta2x^2|\nabla S|^2\le0$ through the oscillation, up to terms of higher order in $\eta$ and $x$; the second is never positive.
@@ -153,17 +156,18 @@ Under gradient flow $\alpha$ is $\dot S$, so for the kernel sharpness Propositio
 and Eq.~\eqref{eos:eq:kstep} with $\varphi = v_1$ gives its one-step form with all orders; by the remark after Proposition~\ref{eos:prop:kstep}, $\alpha > 0$ is a hypothesis on $S$ that the theory does not supply.
 Under Assumptions~1--5 of \cite{damian2023}, their Theorem~1 shows that gradient descent follows the projected trajectory up to an oscillation along the top eigenvector, with the sharpness at $2/\eta$ up to that oscillation and higher-order terms, for $O(\varepsilon^{-1})$ steps after the projected trajectory first reaches $2/\eta$; the two changes of $S$ balance at $x^2 = 2\alpha/|\nabla S|^2$.
 
-In the terms of this paper, for the kernel sharpness: $\alpha = -2\ip{q}{E}$ by Eq.~\eqref{eos:eq:alpha}, driven mostly by the slow part of the error (Section~\ref{eos:sec:kernel}); $\nabla S = 2h$ by Proposition~\ref{eos:prop:kstep}(d); and a displacement $x$ along $u\approx g_{v_1}/\lambda_1^{1/2}$ changes the output by $\lambda_1^{1/2}x$ along $v_1$. The error held in the top direction at the balance is therefore
-\begin{equation}\label{eos:eq:park}
+In the terms of this paper, for the kernel sharpness: $\alpha = -2\ip{q}{E}$ by Eq.~\eqref{eos:eq:alpha}, driven mostly by the slow part of the error (Section~\ref{eos:sec:kernel}); $\nabla S = 2h$ by Proposition~\ref{eos:prop:kstep}(d); and a displacement $x$ along $u\approx g_{v_1}/\lambda_1^{1/2}$ changes the output by $\lambda_1^{1/2}x$ along $v_1$. The error that the oscillation puts along the top direction at the balance is therefore
+\begin{equation}\label{eos:eq:osc}
 \hat e_1^2\ \approx\ \frac{2\lambda_1\alpha}{|\nabla S|^2} = \frac{\lambda_1\alpha}{2|h|^2},
 \end{equation}
 to leading order.
-Read with Proposition~\ref{eos:prop:park}: the error that drives the sharpness up, which lies on the slow directions for a rough dataset (Theorem~\ref{thm:floor}), also sets, once the sharpness is held, how much error sits in the top direction, where the step does not reduce it.
-That the balance is reached and persists is the theorem of \cite{damian2023} under their assumptions; Eq.~\eqref{eos:eq:park} is its translation and is checked below, not derived.
+Read with Proposition~\ref{eos:prop:estep}: the error that drives the sharpness up, which lies on the slow directions for a rough dataset (Theorem~\ref{thm:floor}), also sets the size of the oscillation once the sharpness is held.
+That the balance is reached and persists is the theorem of \cite{damian2023} under their assumptions; Eq.~\eqref{eos:eq:osc} is its translation and is checked below, not derived.
 
 In the runs of Section~\ref{eos:sec:num}: the sharpness at the midpoint of consecutive iterates follows their prediction (correlation 1.000, ratio 0.98); $\alpha$ for the Hessian sharpness, $-\nabla L\cdot D^3L[u,u]$ with $u$ the top Hessian eigenvector, equals Eq.~\eqref{eos:eq:alpha} to a median ratio of 1.000 before the edge; and at the centre of the oscillation, used as a proxy for the projected point (where $|\ip{v_1}{E}|$ is a median $10^{-3}\|E\|$), $\alpha > 0$ at 98\% of 425 centres. At 3 of 170 centres examined in detail ($\sin20x$ at the larger step size) $\alpha < 0$, so Assumption~1 does not hold at every point of these runs.
 Replaying 20 steps from each of the 85 saved states with $\eta\lambda_1\ge1.9$ (three initializations), the oscillation has developed at 52; at the other 33 the top component of the error is at the level of rounding, and an oscillation would take hundreds of steps to regrow, consistent with the cycles described by \cite{damian2023}.
-Where it has developed, the top direction holds a median 60\% of $\|E\|^2$ (10th to 90th percentile 5 to 84\%; 66 to 75\% for $\sin10x$, 24\% for $\sin20x$), and the measured $\hat e_1^2$, half the change of the top component between consecutive iterates squared and averaged over the replay, is a median 0.95 times Eq.~\eqref{eos:eq:park} (10th to 90th percentile 0.11 to 3.4, within a factor 2 at 54\% of the states, Spearman correlation 0.76; a median 3.9 for the 7 states of $\sin20x$).
+Where it has developed, the oscillation accounts for a median 60\% of $\|E\|^2$ (10th to 90th percentile 5 to 84\%; 66 to 75\% for $\sin10x$, 24\% for $\sin20x$), and the measured $\hat e_1^2$, half the change of the top component between consecutive iterates squared and averaged over the replay, is a median 0.95 times Eq.~\eqref{eos:eq:osc} (10th to 90th percentile 0.11 to 3.4, within a factor 2 at 54\% of the states, Spearman correlation 0.76; a median 3.9 for the 7 states of $\sin20x$).
+The edge does not slow the progress of training, as the argument above says: for $\sin20x$, where the run at the smaller step size stays stable, the squared error at equal $\eta t$ is a median 1.00 to 1.01 times that of the stable run over the stretch where the larger step is at the edge (three initializations), and the slope of $\ln L$ per unit $\eta t$ over the 1000 steps after the larger-step run reaches the edge is $-0.14$, $-0.04$ and $-0.19$ against $-0.12$, $-0.05$ and $-0.17$ for the stable run ($-0.09$, $-0.07$, $-0.08$ against $-0.06$, $-0.05$, $-0.05$ over the next 1000). This agrees with \cite{cohen2021}, where step sizes small enough to avoid the edge train more slowly.
 
 % ---------------------------------------------------------------
 \subsection{Numerical setup and further checks}\label{eos:sec:num}
@@ -172,6 +176,6 @@ Two hidden $\tanh$ layers of width 256 with biases, on 256 inputs drawn as in Se
 \begin{itemize}
 \item $\lambda_{\max}(\nabla^2L)$ and $\lambda_1$ agree to within $0.01/\eta$ on the second half of every run. The largest $\eta\lambda_1$ is 0.51 to 1.06 for $\sin x$ and $\sin2x$, 0.70 to 1.71 for $\sin5x$, and 2.13 to 2.28 for $\sin10x$ at both step sizes; $\sin20x$ reaches the edge at the larger step size (2.10 to 2.15) but not at the smaller one (1.37 to 1.72), and $\sin40x$ reaches 1.75 to 2.06. Rougher targets sharpen further, as in Appendix~L.2 of \cite{cohen2021}, up to targets that the network has not yet begun to fit.
 \item The first-order term of Proposition~\ref{eos:prop:kstep}(d) matches the exact one-step change of $\lambda_1$ to a median relative difference of $3$ to $4\times10^{-5}$ away from the edge, and to 1--5\% at the edge.
-\item For $\sin10x$ and $\sin20x$ the kernel grows mostly on its smaller eigenvalues: its 10th eigenvalue grows by a factor 170 to 2200 and its 20th by $4\times10^3$ to $8\times10^5$, while $\lambda_1$ grows by 2 to 4 and stops at $2/\eta$; the number of eigenvalues above $10^{-12}\lambda_1$, the resolution of the computation, rises from 28--29 to 43--69. At equal $\eta t$ the two step sizes give the same growth of the 10th and 20th eigenvalues (for $\sin20x$, 186 and 180, and $8.7\times10^3$ and $8.8\times10^3$), so the growth of the slow part of the kernel follows $\eta t$; the edge caps $\lambda_1$ without redirecting the growth, and it does not speed up learning (at equal $\eta t$ the error is the same for $\sin20x$ and larger at the edge for $\sin10x$, 0.13 against 0.08).
+\item For $\sin10x$ and $\sin20x$ the kernel grows mostly on its smaller eigenvalues: its 10th eigenvalue grows by a factor 170 to 2200 and its 20th by $4\times10^3$ to $8\times10^5$, while $\lambda_1$ grows by 2 to 4 and stops at $2/\eta$; the number of eigenvalues above $10^{-12}\lambda_1$, the resolution of the computation, rises from 28--29 to 43--69. At equal $\eta t$ the two step sizes give the same growth of the 10th and 20th eigenvalues (for $\sin20x$, 186 and 180, and $8.7\times10^3$ and $8.8\times10^3$), so the growth of the slow part of the kernel follows $\eta t$; the edge caps $\lambda_1$ without redirecting the growth (for $\sin10x$ both step sizes reach the edge, so the comparison of Section~\ref{eos:sec:cap} uses $\sin20x$).
 \item The Adam runs of Section~\ref{sec:num-repeat} are at the edge of stability for Adam: $\eta_t\lambda_1$, with $\lambda_1$ the top eigenvalue of the preconditioned kernel and $\eta_t$ the scheduled step size, is 32 to 39 at steps 500 and 5000 for every target and initialization, against the threshold 38, which is consistent with the transient spikes of the loss being the oscillation of the edge of stability; the spikes were not checked against $\lambda_1$ step by step.
 \end{itemize}
