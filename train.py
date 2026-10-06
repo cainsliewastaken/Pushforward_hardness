@@ -17,7 +17,7 @@ import zlib
 
 import numpy as np
 import torch
-from torch.func import vmap
+from torch.func import jvp, vmap
 
 from msr.config import load_cfg, run_dir
 from msr.curvature import gn_lam_max
@@ -47,8 +47,9 @@ def main():
     ap.add_argument("--suffix", default="", help="appended to the run directory (variants of a protocol)")
     ap.add_argument("--from-run", default=None, help="fine-tune from this run directory (default: the onestep run)")
     ap.add_argument("--measure-curv", action="store_true", help="record each model's loss curvature at the start (meta.json)")
-    ap.add_argument("--lr-rule", default="none", choices=["none", "sqrt", "inv"],
-                    help="per-model peak lr = lr * min(1, (lam_anchor / lam_start)^alpha), alpha = 1/2 (sqrt) or 1 (inv)")
+    ap.add_argument("--lr-rule", default="none", choices=["none", "sqrt", "inv", "line"],
+                    help="sqrt/inv: per-model peak lr = lr * min(1, (lam_anchor / lam_start)^alpha), alpha = 1/2 or 1; "
+                         "line: Adam direction u, step length min(lr schedule, line_c g.u / |Psi u|_w^2) (no anchor)")
     ap.add_argument("--lr-anchor-run", default=None, help="run whose meta.json lam_start is the anchor (paired with lr)")
     ap.add_argument("--set", nargs="*", default=[], help="config overrides key=yaml_value")
     a = ap.parse_args()
@@ -97,15 +98,34 @@ def main():
         uc = uTe[:, :cfg.get("n_curv", 512)]
         lam0 = [gn_lam_max(models[j], TH[j], uc, p, w) for j in range(M)]
         print(f"[{a.proto}/{a.init} dt={dt}] curvature at start: " + " ".join(f"{x:.3g}" for x in lam0), flush=True)
-    if a.lr_rule != "none":
+    if a.lr_rule in ("sqrt", "inv"):
         anc = json.load(open(os.path.join(cfg["out_root"], "runs", a.lr_anchor_run, "meta.json")))
         assert anc["names"] == [list(nm) for nm in names] and anc.get("lam_start")
         alpha = dict(sqrt=0.5, inv=1.0)[a.lr_rule]
         scale = np.minimum(1.0, (np.array(anc["lam_start"]) / np.array(lam0)) ** alpha)   # never above the anchor lr
         print(f"[{a.proto}/{a.init} dt={dt}] lr rule {a.lr_rule}: peak lr per model "
               + " ".join(f"{cfg['lr'] * s:.3g}" for s in scale), flush=True)
-    per_model = lam0 is not None
-    if per_model:          # one Adam parameter group per model (Adam is elementwise: same math as stacked)
+    line = a.lr_rule == "line"
+    per_model = lam0 is not None and not line
+    if line:
+        # Adam's direction, step length from the local quadratic model of the run's own loss along it:
+        #   alpha = min(lr schedule, line_c * g.u / u^T G u),  u^T G u = |Psi u|_w^2 (one JVP of the weighted rollout)
+        assert unrolled, "the line rule is implemented for unrolled losses"
+        TH.requires_grad_(True)
+        theta = lambda: TH
+        mom, vel = torch.zeros_like(TH), torch.zeros_like(TH)
+        b1, b2, eps = 0.9, 0.999, 1e-8                       # torch.optim.Adam defaults
+        Wq = torch.ones(p, device=dev) if w is None else torch.tensor(w, device=dev)
+        swq = torch.sqrt(Wq / Wq.sum())
+
+        def uGu(th, c, U, u):
+            f = lambda t: (swq[:, None, None] * _rollseq(arch, t, c, U[0], p)).reshape(-1) / math.sqrt(U.shape[1])
+            return (jvp(f, (th,), (u,))[1] ** 2).sum()
+
+        curv_dir = vmap(uGu)
+        ratio = torch.zeros(M, device=dev)                   # line_c g.u / u^T G u, refreshed every line_every steps
+        alpha = torch.zeros(M, device=dev)
+    elif per_model:        # one Adam parameter group per model (Adam is elementwise: same math as stacked)
         params = [TH[j].detach().clone().requires_grad_(True) for j in range(M)]
         opt = torch.optim.Adam([{"params": [q], "lr": cfg["lr"] * scale[j]} for j, q in enumerate(params)], lr=cfg["lr"])
         theta = lambda: torch.stack(params)
@@ -141,7 +161,7 @@ def main():
         if k % cfg["log_every"] == 0 or k == cfg["steps"]:
             one, eT, own = evaluate()
             log.append([k, lr_at(cfg, min(k, cfg["steps"] - 1))] + one.tolist() + eT.tolist()
-                       + ([] if own is None else own.tolist()))
+                       + ([] if own is None else own.tolist()) + (alpha.tolist() if line else []))
             if k % (20 * cfg["log_every"]) == 0:
                 print(f"[{a.proto}/{a.init} dt={dt}] step {k} {time.time() - t0:.0f}s  heldout one-step "
                       + " ".join(f"{x:.2e}" for x in one.tolist()), flush=True)
@@ -155,6 +175,23 @@ def main():
             i = torch.randint(pwin, (M, B), generator=gen, device=dev)
             X, Y = uTr[i, idx], uTr[i + 1, idx]
             losses = f_one(theta(), C, X, Y)
+        if line:
+            TH.grad = None
+            losses.sum().backward()
+            g = TH.grad.detach()
+            gc = g * torch.clamp(cfg["clip"] / (torch.linalg.norm(g, dim=1) + 1e-300), max=1.0)[:, None]
+            n_t = k + 1
+            mom.mul_(b1).add_(gc, alpha=1 - b1)
+            vel.mul_(b2).addcmul_(gc, gc, value=1 - b2)
+            u = (mom / (1 - b1 ** n_t)) / (vel.sqrt() / math.sqrt(1 - b2 ** n_t) + eps)
+            if k % cfg.get("line_every", 1) == 0:
+                quad = curv_dir(TH.detach(), C, U, u).clamp_min(1e-300)
+                gu = (g * u).sum(1)
+                ratio = torch.where(gu > 0, cfg.get("line_c", 0.25) * gu / quad, ratio)   # keep the last one if g.u <= 0
+            alpha = torch.clamp(ratio, max=lr_at(cfg, k))
+            with torch.no_grad():
+                TH -= alpha[:, None] * u
+            continue
         for j, g in enumerate(opt.param_groups):
             g["lr"] = lr_at(cfg, k) * (scale[j] if per_model else 1.0)
         opt.zero_grad()
@@ -169,14 +206,26 @@ def main():
 
     save()
     hdr = (["step", "lr"] + [f"onestep_{c}{s}" for c, s in names] + [f"eT_{c}{s}" for c, s in names]
-           + ([f"own_{c}{s}" for c, s in names] if unrolled else []))
+           + ([f"own_{c}{s}" for c, s in names] if unrolled else [])
+           + ([f"alpha_{c}{s}" for c, s in names] if line else []))
     np.savetxt(os.path.join(out, "log.csv"), np.array(log), delimiter=",", header=",".join(hdr), comments="")
     with open(os.path.join(out, "meta.json"), "w") as fh:
         json.dump(dict(dt=dt, proto=a.proto, init=a.init, suffix=a.suffix, from_run=a.from_run, gamma=pr.get("gamma", 0.0), lr=cfg["lr"],
                        lam_start=lam0, lr_rule=a.lr_rule, lr_anchor_run=a.lr_anchor_run,
+                       line_c=cfg.get("line_c", 0.25) if line else None, line_every=cfg.get("line_every", 1) if line else None,
                        lr_models=[float(cfg["lr"] * s) for s in scale], p=p, names=names, wall_s=time.time() - t0,
                        device=dev, P=arch.P, ckpts=sorted(saved)), fh, indent=1)
     print(f"[{a.proto}/{a.init} dt={dt}] done {time.time() - t0:.0f}s", flush=True)
+
+
+def _rollseq(arch, th, c, u0, p):
+    """Predicted states u_p(t_1..t_p), shape (p, n, 3)."""
+    from msr.core import gt
+    out, u = [], u0
+    for _ in range(p):
+        u = gt(arch, th, u, c)
+        out.append(u)
+    return torch.stack(out)
 
 
 def _roll(arch, th, c, u0, p):
