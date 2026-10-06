@@ -96,11 +96,40 @@ $\Psi h = \sum_lc_lu_l + \Psi h_\perp = (\sum_lc_l)\hat Y + \sum_lc_l\delta_l + 
 Scaling the output layer reproduces the output and multiplies the kernel of all earlier layers, whose part along $v_1$ is $\lambda_1 - k_L$.
 Gradient descent grows the output layer at the rate $2\ip{\hat Y}{Y - \hat Y}$, so this term raises $\lambda_1$ whenever the output falls short of the target along itself.
 \cite{liwangli2022} observed that sharpness and the norm of the output layer move together and took it as an assumption (their Assumption~3.1); Eq.~\eqref{eos:eq:sharpL} is the corresponding identity, with the coefficient and the remainder written out.
-The theorem does not bound $T$ or $T_L$.
+The theorem does not bound $T$ or $T_L$; Section~\ref{eos:sec:cert} bounds $T_L$ through where the error lies.
 
 The component $\ip{\hat Y}{Y - \hat Y} = -\ip{\hat Y}{E}$ splits like Eq.~\eqref{eos:eq:split} into $-\ip{\hat Y}{E_\gamma}$ and $-\ip{\hat Y}{E - E_\gamma}$.
 Late in training the error of a rough dataset is almost all slow part (Section~\ref{sec:num-repeat}), and the part of the output that falls short of the target is the part of the target that the kernel builds slowly; this is the sense in which the roughness of the dataset drives sharpening.
 That the drive comes from partly fitted directions is the content of Lemma~3.1 of \cite{liwangli2022} in a model with fixed eigenvectors.
+
+\subsection{A certificate for sharpening, and the assumptions of self-stabilization}\label{eos:sec:cert}
+
+The remainder $T_L$ in Eq.~\eqref{eos:eq:sharpL} is $-2\ip{\Psi h_\perp}{E}$ with $h_\perp = h - c_L\theta_L$, and the theory bounds it through where the error lies.
+
+\begin{proposition}[Certificate]\label{eos:prop:cert}
+For every $\gamma > 0$,
+\begin{equation}\label{eos:eq:cert}
+|T_L|\ \le\ 2\,\big\|(K + \gamma I)^{-1/2}\Psi h_\perp\big\|\,\big(\|E\|_K^2 + \gamma\|E\|^2\big)^{1/2},\qquad\text{and}\qquad |T_L|\ \le\ 2\,|h_\perp|\,\|E\|_K .
+\end{equation}
+Hence, under gradient flow, $\dot\lambda_1 > 0$ whenever $2\frac{\lambda_1 - k_L}{|\theta_L|^2}\ip{\hat Y}{Y - \hat Y}$ exceeds the smallest of these bounds.
+\end{proposition}
+
+\begin{proof}
+$\ip{\Psi h_\perp}{E} = \ip{(K + \gamma I)^{-1/2}\Psi h_\perp}{(K + \gamma I)^{1/2}E}$ and $\|(K + \gamma I)^{1/2}E\|^2 = \|E\|_K^2 + \gamma\|E\|^2$; apply the Cauchy--Schwarz inequality. Also $\ip{\Psi h_\perp}{E} = h_\perp\cdot g_E$ and $|g_E| = \|E\|_K$. The last statement is Theorem~\ref{eos:thm:sharp}.
+\end{proof}
+
+The right sides are small when the error lies on directions slower than $\gamma$, since $\|E\|_K^2 = \sum_k\lambda_k\hat e_k^2$; by Theorem~\ref{thm:floor} this is where a rough dataset leaves its error.
+The certificate makes no assumption on the direction of $\Psi h_\perp$; with $\gamma\to\infty$ it reduces to the plain bound $2\|\Psi h_\perp\|\,\|E\|$.
+
+Self-stabilization \cite{damian2023} assumes progressive sharpening: its Assumption~1 is $\alpha = -\nabla L\cdot\nabla S > 0$ along the trajectory projected on the set of stable points, with $S$ the sharpness, and its Section~8.3 leaves the cause open. Under gradient flow $\alpha$ is $\dot S$, so for the kernel sharpness Theorem~\ref{eos:thm:sharp} gives, exactly,
+\begin{equation}\label{eos:eq:alpha}
+\alpha = 2\,\frac{\lambda_1 - k_L}{|\theta_L|^2}\,\ip{\hat Y}{Y - \hat Y} + T_L ,
+\end{equation}
+and Proposition~\ref{eos:prop:cert} is a sufficient condition for Assumption~1 that can be checked at one point.
+Under Assumptions~1--5 of \cite{damian2023}, their Theorem~1 shows that gradient descent follows the projected trajectory up to an oscillation along the top eigenvector, with the sharpness at $2/\eta$ up to that oscillation and higher-order terms, for $O(\varepsilon^{-1})$ steps after the projected trajectory first reaches $2/\eta$.
+With those assumptions, the cap is their theorem and the sharpening it assumes is Eq.~\eqref{eos:eq:alpha}: the growth of the output layer multiplying the kernel of the hidden layers, at the rate of the residual along the output, offset by $T_L$.
+What these results do not provide is Assumption~1 itself at every point of a trajectory; Eq.~\eqref{eos:eq:alpha} states what it means for a network, and Proposition~\ref{eos:prop:cert} certifies it where its inequality holds.
+Their $S$ is the sharpness of the Hessian and Eq.~\eqref{eos:eq:alpha} concerns the kernel sharpness; the two values of $\alpha$ are compared in Section~\ref{eos:sec:num}.
 
 \subsection{One step at the edge}\label{eos:sec:edge}
 
@@ -128,6 +157,7 @@ Two hidden $\tanh$ layers of width 256 with biases, on 256 inputs drawn as in Se
 \item The first-order term of Proposition~\ref{eos:prop:rate}(c) matches the exact one-step change of $\lambda_1$ to a median relative difference of $3$ to $4\times10^{-5}$ away from the edge, and to 1--5\% at the edge.
 \item In Eq.~\eqref{eos:eq:split} with $\gamma = 1/(1000\eta)$, at checkpoints with $\eta\lambda_1 < 1.9$, the slow part of the error carries a median of 90 to 93\% of the first-order rate from step 10000 on (88 to 89\% over all such checkpoints), and the rate is positive at 96 to 100\% of them.
 \item In Theorem~\ref{eos:thm:sharp}, as fractions of $-2\ip{q}{E}$ away from the edge: the term $2\alpha\ip{\hat Y}{Y - \hat Y}$ has median 1.21 to 1.37, $D$ median 0.00, and $T$ median $-0.21$ to $-0.36$. The output-layer term has the right sign and size; $T$ opposes it. Lemma~\ref{eos:lem:layer}: $\delta_L$ and $\varepsilon_L$ vanish to rounding; for the hidden layers $\|\delta_l\|$ is 0.2 to 2.7 times $\|\hat Y\|$, almost all from $\psi$.
+\item Proposition~\ref{eos:prop:cert}, at the 275 checkpoints with $\eta\lambda_1 < 1.9$: the certificate holds at 193 (70\%), with the ratio of the output-layer term to the bound of median 1.35 (10th and 90th percentiles 0.64 and 2.51); the best $\gamma$ is near $10^{-6}\lambda_1$, because the error lies on very slow directions. The plain bound $2\|\Psi h_\perp\|\,\|E\|$ holds at none of them (the output-layer term is 1 to 4\% of it): $\Psi h_\perp$ is large but nearly orthogonal to $E$. At the same checkpoints, $\alpha > 0$ at 99\%, and $\alpha$ computed for the Hessian sharpness, $-\nabla L\cdot D^3L[u,u]$ with $u$ the top Hessian eigenvector, equals Eq.~\eqref{eos:eq:alpha} to a median ratio of 1.000 (10th and 90th percentiles 1.000).
 \item For $\sin10x$ and $\sin20x$, in every initialization and at both step sizes, the kernel grows mostly on its smaller eigenvalues: its 10th eigenvalue grows by a factor 170 to 2200 and its 50th by $6\times10^2$ to $4\times10^8$, while $\lambda_1$ grows by 2 to 4 and stops at $2/\eta$. For $\sin40x$ the 10th eigenvalue grows by 2 to 45.
 \item At the edge ($\sin10x$, $\eta = 1/\lambda_1(0)$, single steps from step 10000): the gradient step keeps the fraction $-1.00$ of $\hat e_1$, the best step of the same length 0.01, and the term $k = 1$ carries 97\% of Eq.~\eqref{eos:eq:gap}. The sharpness at the midpoint of consecutive iterates follows the self-stabilization prediction of \cite{damian2023} (correlation 1.000, ratio 0.98).
 \item The Adam runs of Section~\ref{sec:num-repeat} are at the edge of stability for Adam: $\eta_t\lambda_1$, with $\lambda_1$ the top eigenvalue of the preconditioned kernel and $\eta_t$ the scheduled step size, is 32 to 39 at steps 500 and 5000 for every target and initialization, against the threshold 38, which is consistent with the transient spikes of the loss being the oscillation of the edge of stability; the spikes were not checked against $\lambda_1$ step by step.
