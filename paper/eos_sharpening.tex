@@ -1,0 +1,378 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm,mathtools}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage[colorlinks=true,linkcolor=blue,citecolor=blue]{hyperref}
+
+\newtheorem{theorem}{Theorem}
+\newtheorem{lemma}{Lemma}
+\newtheorem{proposition}{Proposition}
+\newtheorem{corollary}{Corollary}
+\theoremstyle{definition}
+\newtheorem{assumption}{Assumption}
+\theoremstyle{remark}
+\newtheorem*{remark}{Remark}
+
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\Net}{\mathcal{N}_\theta}
+\newcommand{\Rgh}{\mathcal{R}}
+\newcommand{\sR}{\sigma_{\Rgh}}
+\newcommand{\CR}{C_{\Rgh}}
+\newcommand{\ip}[2]{\langle #1,#2\rangle}
+
+\title{Progressive sharpening from the dynamics of the error\\[4pt]
+\large Draft section (not yet part of main.tex)}
+\author{Draft}
+\date{}
+
+\begin{document}
+\maketitle
+
+\noindent
+This note asks why the largest eigenvalue of the loss Hessian grows during training (progressive sharpening), and why it grows more for rougher targets.
+It uses the objects of main.tex: sampled functions with $\ip{a}{b} = \frac1n\sum_i a_i\cdot b_i$, the gradient features $\Psi$, the training kernel $K = \frac1n\Psi\Psi^\top$ with eigenvalues $\lambda_1\ge\lambda_2\ge\dots$ and eigenvectors $v_k$, the error $E = \hat Y - Y$ with components $\hat e_k = \ip{v_k}{E}$, and the slow part $E_\gamma = \gamma(K+\gamma I)^{-1}E$.
+Throughout, $\Pi = I$ and $c_p = 1$, the loss is $L = \frac12\|E\|^2$, its gradient is $g = \frac1n\Psi^\top E$, gradient descent is $\theta_{k+1} = \theta_k - \eta g$, and gradient flow is $\dot\theta = -g$, under which $\dot E = -KE$.
+
+Every statement below is an identity or an inequality with all terms kept.
+Where a statement is made for gradient flow, the corresponding statement for one step of gradient descent is given with its remainder written out.
+Section~\ref{sec:status} lists what is proved, what is proved only with the kernel held fixed, and what is measured.
+
+% ---------------------------------------------------------------
+\section{The loss Hessian and the kernel}\label{sec:hess}
+
+For a sampled function $\varphi$, let $S(\varphi) = \frac1n\sum_i\varphi_i\cdot\nabla^2_\theta\Net(x_i)$ be the Hessian in the parameters of $\ip{\varphi}{\Net}$, and let $g_\varphi = \frac1n\Psi^\top\varphi$, so that $\ip{\varphi}{K\varphi} = |g_\varphi|^2$.
+
+\begin{proposition}\label{prop:hess}
+At every $\theta$ at which $\Net$ is twice differentiable at the training inputs,
+\begin{equation}\label{eq:hess}
+\nabla^2 L = G + S(E),\qquad G = \tfrac1n\Psi^\top\Psi .
+\end{equation}
+$G$ and $K$ have the same nonzero eigenvalues, and
+\begin{equation}\label{eq:hessK}
+\big|\lambda_{\max}(\nabla^2L) - \lambda_1(K)\big| \le \|S(E)\|_{op} \le M_2\,\|E\|,\qquad M_2 = \Big(\tfrac1n\textstyle\sum_i\|\nabla^2_\theta\Net(x_i)\|_{op}^2\Big)^{1/2}.
+\end{equation}
+\end{proposition}
+
+\begin{proof}
+$L = \frac1{2n}\sum_i|\Net(x_i) - Y_i|^2$ is quadratic in the outputs, so differentiating twice gives Eq.~\eqref{eq:hess} with no remainder.
+$\frac1n\Psi^\top\Psi$ and $\frac1n\Psi\Psi^\top$ share their nonzero eigenvalues.
+Weyl's inequality gives the first inequality of Eq.~\eqref{eq:hessK}, and $\|S(E)\|_{op} \le \frac1n\sum_i|E_i|\,\|\nabla^2\Net(x_i)\|_{op}$ with the Cauchy--Schwarz inequality gives the second.
+\end{proof}
+
+At an interpolating point, $E = 0$, the two sharpnesses are equal.
+The rest of the note studies $\lambda_1(K)$.
+
+% ---------------------------------------------------------------
+\section{The change of $\lambda_1$ in one step}\label{sec:step}
+
+\begin{proposition}\label{prop:step}
+Let $\lambda_1(\theta) = \lambda_1(K(\theta))$, and let $\theta' = \theta - \eta g$.
+\begin{enumerate}[label=(\alph*)]
+\item If $\Psi$ is locally Lipschitz in $\theta$, then $\lambda_1$ is locally Lipschitz along the segment from $\theta$ to $\theta'$, it is differentiable at almost every point of the segment, and
+\begin{equation}\label{eq:ftc}
+\lambda_1(\theta') - \lambda_1(\theta) = -\eta\int_0^1\nabla\lambda_1(\theta - \tau\eta g)\cdot g\,d\tau .
+\end{equation}
+\item At a point where $\lambda_1$ is a simple eigenvalue and $\Psi$ is differentiable, $\nabla\lambda_1 = 2\,S(v_1)\,g_{v_1}$, with $\|v_1\| = 1$.
+\item Write $h = S(v_1)g_{v_1}$ and $q = \Psi h$, the change of the output produced by the parameter direction $h$. Then
+\begin{equation}\label{eq:first}
+-\eta\,\nabla\lambda_1\cdot g = -2\eta\,\ip{q}{E} = -2\eta\sum_k \hat q_k\,\hat e_k,\qquad \hat q_k = \ip{v_k}{q},
+\end{equation}
+and Eq.~\eqref{eq:ftc} reads $\lambda_1(\theta') - \lambda_1(\theta) = -2\eta\ip{q}{E} + R$ with
+\begin{equation}\label{eq:rem}
+R = -\eta\int_0^1\big(\nabla\lambda_1(\theta - \tau\eta g) - \nabla\lambda_1(\theta)\big)\cdot g\,d\tau .
+\end{equation}
+If $\lambda_1$ is twice continuously differentiable on the segment, $|R| \le \frac12\eta^2|g|^2\max_{\tau}\|\nabla^2\lambda_1(\theta - \tau\eta g)\|_{op}$.
+\end{enumerate}
+\end{proposition}
+
+\begin{proof}
+(a) By Weyl's inequality, $|\lambda_1(K) - \lambda_1(K')| \le \|K - K'\|_{op}$, and $K$ is locally Lipschitz when $\Psi$ is.
+A Lipschitz function of one variable is absolutely continuous, so it is differentiable almost everywhere and is the integral of its derivative (Rademacher's theorem and the fundamental theorem of calculus for absolutely continuous functions).
+(b) $\lambda_1 = \max_{\|v\|=1}\ip{v}{Kv} = |g_{v_1}|^2$. For a simple eigenvalue the maximizer is differentiable, and its variation does not change the value to first order, so $\nabla\lambda_1 = \nabla_\theta|g_{v}|^2\big|_{v = v_1} = 2\,(\nabla_\theta g_v)^\top g_v = 2\,S(v_1)g_{v_1}$, since $g_v = \nabla_\theta\ip{v}{\Net}$.
+(c) $\nabla\lambda_1\cdot g = 2h\cdot\frac1n\Psi^\top E = 2\ip{\Psi h}{E}$; expand in the eigenbasis of $K$. The remainder is Eq.~\eqref{eq:ftc} minus its value at $\tau = 0$; the bound is Taylor's theorem with integral remainder.
+\end{proof}
+
+Eq.~\eqref{eq:first} assigns to each eigendirection of $K$ its exact share of the first-order change of $\lambda_1$, without dividing by $\lambda_k$.
+The direction of the change is set by $q$, which is built from the second derivatives of the network; the kernel alone does not determine it.
+A model that is linear in its parameters has $S\equiv0$, so $q = 0$: its kernel never changes, whatever the target.
+Any explanation of sharpening therefore needs a property of the second derivatives of the network.
+Section~\ref{sec:homog} gives an exact decomposition, for any activation, that isolates the part of $q$ along the output.
+
+% ---------------------------------------------------------------
+\section{Learning speed and the loss Hessian}\label{sec:speed}
+
+Let $\rho = \ip{E}{KE}/\|E\|^2$. By part (c) of the proposition ``Rates at one training time'' of main.tex, gradient flow decreases $\|E\|$ at the rate $\rho\|E\|$.
+Let $\mathrm{Var}_E(\lambda) = \sum_k\lambda_k^2 w_k - \rho^2$ with weights $w_k = \hat e_k^2/\|E\|^2$, the spread of the eigenvalues on which the error currently lies.
+
+\begin{proposition}\label{prop:speed}
+Under gradient flow, at a point where $\Net$ is twice differentiable and $E\neq0$, $g\neq0$,
+\begin{align}
+\frac{d\ln\rho}{dt} &= -\frac{2\,\mathrm{Var}_E(\lambda)}{\rho} + \frac{\ip{E}{\dot KE}}{\ip{E}{KE}}, \qquad \ip{E}{\dot KE} = -2\,g^\top S(E)\,g, \label{eq:rho}\\
+\frac{g^\top\nabla^2L\,g}{|g|^2} &= \rho - \frac12\frac{d\ln\rho}{dt} = \underbrace{\rho + \frac{\mathrm{Var}_E(\lambda)}{\rho}}_{G\ \text{part}} + \underbrace{\frac{g^\top S(E)g}{|g|^2}}_{S(E)\ \text{part}} . \label{eq:hg}
+\end{align}
+\end{proposition}
+
+\begin{proof}
+$\ip{E}{KE} = |g|^2$ and $\|E\|^2 = 2L$. Along gradient flow, $\dot L = -|g|^2$ and $\dot g = \nabla^2L\,\dot\theta = -\nabla^2L\,g$, so $\frac{d}{dt}\ln\rho = -2g^\top\nabla^2Lg/|g|^2 + 2|g|^2/\|E\|^2$, which is the first equality of Eq.~\eqref{eq:hg}.
+With Eq.~\eqref{eq:hess}, $g^\top Gg = \|\Psi g\|^2 = \|KE\|^2$ and $\|KE\|^2/\ip{E}{KE} = \rho + \mathrm{Var}_E(\lambda)/\rho$, which gives the second equality of Eq.~\eqref{eq:hg}.
+Eq.~\eqref{eq:rho} follows by subtracting, and $\ip{E}{\dot KE} = 2g\cdot\frac1n\dot\Psi^\top E = 2g\cdot S(E)\dot\theta$.
+\end{proof}
+
+With the kernel fixed, the learning speed $\rho$ can only fall, at a rate set by the spread of the eigenvalues that carry the error; by the theorem ``Rough errors are slow: the floor'' of main.tex, a rough target leaves its error on the small eigenvalues.
+The only term that can raise $\rho$ is the change of the kernel along the error, and Eq.~\eqref{eq:hg} identifies it with the part $S(E)$ of the loss Hessian beyond $G$.
+For one step of gradient descent, the averaged-feature identity of main.tex (Section ``The best roughness function'') gives the exact change of the error, $E' = E - \eta\,\frac1n\bar\Psi\Psi^\top E$, with $\bar\Psi$ the features averaged along the step.
+
+% ---------------------------------------------------------------
+\section{Layer scaling in any network}\label{sec:homog}
+
+Consider a fully connected network with layers $l = 1,\dots,L$, pre-activations $z_l = W_la_{l-1} + b_l$, activations $a_l = \sigma(z_l)$ for $l < L$, input $a_0 = x$, and a linear output layer, $\Net = z_L$.
+The activation $\sigma$ is any continuously differentiable function (twice, where $S$ appears).
+Group the parameters by layer, $\theta_l = (W_l, b_l)$, write $\Psi_l$ for the columns of $\Psi$ that belong to layer $l$, $K_l = \frac1n\Psi_l\Psi_l^\top$, so that $K = \sum_lK_l$, $k_l = \ip{v_1}{K_lv_1}$, and $g_l = \frac1n\Psi_l^\top E$.
+The output change produced by scaling layer $l$, and its deviation from the output, are the sampled functions
+\begin{equation}\label{eq:ul}
+u_l = \Psi_l\theta_l,\qquad \delta_l = u_l - \hat Y,
+\end{equation}
+and the deviation of the activation from homogeneity is $\psi(z) = z\,\sigma'(z) - \sigma(z)$.
+For ReLU, leaky ReLU and linear activations $\psi\equiv0$; for $\tanh$, $\psi(z) = z\,\mathrm{sech}^2z - \tanh z = -\frac23z^3 + O(z^5)$.
+
+\begin{lemma}[Layer scaling]\label{lem:euler}
+At every point where $\Net$ is differentiable at the training inputs:
+\begin{enumerate}[label=(\alph*)]
+\item $u_l(x) = \sum_j\frac{\partial\Net}{\partial z_{l,j}}(x)\,z_{l,j}(x)$. For the output layer, $u_L = \hat Y$ and $\delta_L = 0$.
+\item For $l < L$,
+\begin{equation}\label{eq:delta}
+\delta_l = \sum_{m=l}^{L-1}\Big(\sum_j\frac{\partial\Net}{\partial a_{m,j}}\,\psi(z_{m,j}) - \sum_k\frac{\partial\Net}{\partial z_{m+1,k}}\,b_{m+1,k}\Big),
+\end{equation}
+the deviation of the activations from homogeneity in layers $l$ to $L-1$, minus the contribution of the biases of layers $l+1$ to $L$.
+\item If $\lambda_1$ is simple and $\Net$ is twice differentiable, $\theta_l\cdot h_l = \lambda_1 - k_l + \varepsilon_l$ with $\varepsilon_l = g_{v_1}\cdot\nabla_\theta\ip{v_1}{\delta_l}$, where $h = S(v_1)g_{v_1}$ as in Proposition~\ref{prop:step}. For the output layer, $\varepsilon_L = 0$.
+\item One step of gradient descent changes the size of layer $l$ by
+\begin{equation}\label{eq:norms}
+|\theta_l'|^2 - |\theta_l|^2 = 2\eta\,\ip{\hat Y + \delta_l}{Y - \hat Y} + \eta^2|g_l|^2 .
+\end{equation}
+Under gradient flow, $\frac{d}{dt}|\theta_l|^2 = 2\ip{\hat Y + \delta_l}{Y - \hat Y}$; for the output layer, $\frac{d}{dt}|\theta_L|^2 = 2\ip{\hat Y}{Y - \hat Y}$.
+\item Replacing $\theta_L$ by $c\,\theta_L$ multiplies $K_m$ by $c^2$ for every $m < L$ and leaves $K_L$ unchanged.
+\end{enumerate}
+\end{lemma}
+
+\begin{proof}
+(a) $\partial\Net/\partial W_{l,jk} = \frac{\partial\Net}{\partial z_{l,j}}a_{l-1,k}$ and $\partial\Net/\partial b_{l,j} = \frac{\partial\Net}{\partial z_{l,j}}$, so $\Psi_l\theta_l = \sum_j\frac{\partial\Net}{\partial z_{l,j}}\big(\sum_kW_{l,jk}a_{l-1,k} + b_{l,j}\big)$. For $l = L$, $\partial\Net/\partial z_L = 1$.
+(b) With $\frac{\partial\Net}{\partial a_{l,j}} = \sum_k\frac{\partial\Net}{\partial z_{l+1,k}}W_{l+1,kj}$, part (a) for layer $l+1$ gives $u_{l+1} = \sum_j\frac{\partial\Net}{\partial a_{l,j}}\sigma(z_{l,j}) + \sum_k\frac{\partial\Net}{\partial z_{l+1,k}}b_{l+1,k}$, and part (a) for layer $l$ gives $u_l = \sum_j\frac{\partial\Net}{\partial a_{l,j}}\sigma'(z_{l,j})z_{l,j}$. Subtracting gives $u_l - u_{l+1}$ as the summand of Eq.~\eqref{eq:delta}; summing from $l$ to $L-1$ and using $u_L = \hat Y$ gives Eq.~\eqref{eq:delta}.
+(c) Let $P_l$ keep the coordinates of layer $l$. The function $\theta\mapsto g_{v_1}(\theta)\cdot P_l\theta = \ip{v_1}{u_l}$ has gradient $S(v_1)P_l\theta + P_lg_{v_1}$, so $S(v_1)\theta_l = \nabla_\theta\ip{v_1}{u_l} - P_lg_{v_1}$, with $\theta_l$ embedded in the full parameter vector. Since $S(v_1)$ is symmetric, $\theta_l\cdot h_l = g_{v_1}\cdot S(v_1)\theta_l = g_{v_1}\cdot\nabla_\theta\ip{v_1}{\hat Y + \delta_l} - |P_lg_{v_1}|^2$, and $g_{v_1}\cdot\nabla_\theta\ip{v_1}{\hat Y} = |g_{v_1}|^2 = \lambda_1$, $|P_lg_{v_1}|^2 = k_l$.
+(d) $|\theta_l - \eta g_l|^2 = |\theta_l|^2 - 2\eta\,\theta_l\cdot g_l + \eta^2|g_l|^2$ and $\theta_l\cdot g_l = \ip{u_l}{E}$.
+(e) For $m < L$, $\partial\Net/\partial\theta_m = W_L\,\partial a_{L-1}/\partial\theta_m$ is linear in $W_L$ and does not involve $b_L$; $\partial\Net/\partial\theta_L = (a_{L-1}, 1)$ does not depend on $\theta_L$.
+\end{proof}
+
+When $\psi\equiv0$ and there are no biases after the first layer, $\delta_l = 0$ and $\varepsilon_l = 0$ for every layer; then part (a) is Euler's identity for a function homogeneous of degree one in each layer, and part (d) is the balancedness of homogeneous networks of \cite{du2018}.
+The function $\psi$ is the ``homogeneity defect'' of \cite{rawal2026}, who use it, for weights without biases, to write the change of the difference of layer norms for any smooth activation; part (b) adds the biases and expresses the defect at the level of the output.
+For the output layer, part (d) is Eq.~(2) of \cite{liwangli2022}.
+For $\tanh$, $\delta_l$ comes from the cubic deviation $\psi$, which is small for small pre-activations and large where units saturate.
+The output layer is exact for every activation: its scaling reproduces the output, and it scales the kernel of every other layer.
+
+\begin{theorem}[Sharpening from the residual along the output]\label{thm:sharp}
+At a point where $\lambda_1$ is simple and $\Net$ is twice differentiable, decompose $h = \sum_lc_l\theta_l + h_\perp$ with $c_l = \theta_l\cdot h_l/|\theta_l|^2$, the projection on the layer directions $\theta_l$ (orthogonal, since the layers are disjoint) plus a remainder. Then, exactly,
+\begin{equation}\label{eq:sharp}
+-2\ip{q}{E} = 2\alpha\,\ip{\hat Y}{Y - \hat Y} + D + T,\qquad \alpha = \sum_l\frac{\lambda_1 - k_l}{|\theta_l|^2}\ \ge 0,
+\end{equation}
+\begin{equation}\label{eq:DT}
+D = 2\Big(\sum_l\frac{\varepsilon_l}{|\theta_l|^2}\Big)\ip{\hat Y}{Y - \hat Y} - 2\sum_lc_l\ip{\delta_l}{E},\qquad T = -2\ip{\Psi h_\perp}{E} .
+\end{equation}
+Keeping only the output layer in the projection gives, for every activation and with no defect term,
+\begin{equation}\label{eq:sharpL}
+-2\ip{q}{E} = 2\,\frac{\lambda_1 - k_L}{|\theta_L|^2}\,\ip{\hat Y}{Y - \hat Y} + T_L,\qquad
+\frac{d\lambda_1}{dt} = \big(\lambda_1 - k_L\big)\,\frac{d\ln|\theta_L|^2}{dt} + T_L \ \ \text{(gradient flow)},
+\end{equation}
+with $T_L = -2\ip{\Psi(h - c_L\theta_L)}{E}$.
+For one step of gradient descent, $\lambda_1(\theta') - \lambda_1(\theta) = \eta\,(-2\ip{q}{E}) + R$ with $R$ from Eq.~\eqref{eq:rem}.
+\end{theorem}
+
+\begin{proof}
+$\Psi h = \sum_lc_lu_l + \Psi h_\perp = \big(\sum_lc_l\big)\hat Y + \sum_lc_l\delta_l + \Psi h_\perp$ by Eq.~\eqref{eq:ul}, and $\sum_lc_l = \alpha + \sum_l\varepsilon_l/|\theta_l|^2$ by Lemma~\ref{lem:euler}(c). Eq.~\eqref{eq:first} gives Eqs.~\eqref{eq:sharp} and~\eqref{eq:DT}. Each $k_l\le\sum_mk_m = \lambda_1$, so $\alpha\ge0$. For the output layer, $\delta_L = 0$ and $\varepsilon_L = 0$, so the same computation with the single direction $\theta_L$ gives the first identity of Eq.~\eqref{eq:sharpL}, and Lemma~\ref{lem:euler}(d) gives the second.
+\end{proof}
+
+In words: scaling the output layer reproduces the output, and it multiplies the kernel of all earlier layers, whose part along $v_1$ is $\lambda_1 - k_L = \sum_{m<L}\ip{v_1}{K_mv_1}$.
+Gradient descent grows the output layer at the rate $2\ip{\hat Y}{Y - \hat Y}$, the component of the residual along the output, so this term raises $\lambda_1$ whenever the output falls short of the target along itself.
+The hidden layers enter through $\lambda_1 - k_L$, through their own scaling terms and the defect $D$ in Eq.~\eqref{eq:sharp}, and through $T$, which collects the parameter moves that rescale no layer.
+The theorem does not bound $T$; Section~\ref{sec:status} reports its measured size.
+\cite{liwangli2022} observed that sharpness and the output-layer norm move together and took this as an assumption (their Assumption~3.1), with a proof for two-layer linear networks; Eq.~\eqref{eq:sharpL} states the relation as an identity for any network with a linear output layer, with the coefficient $\lambda_1 - k_L$ and the remainder $T_L$ written out. The general rate $-2\ip{q}{E}$ is the top-eigenvalue contraction of the kernel evolution equation of the neural tangent hierarchy \cite{huangyau2020}, and its sign is the progressive-sharpening coefficient of \cite{damian2023}.
+
+\begin{proposition}[Size of the output and sharpness]\label{prop:rough}
+For every activation and every layer $l$,
+\begin{equation}\label{eq:rough}
+\lambda_1(K)\ \ge\ \lambda_1(K_l)\ \ge\ \frac{\|u_l\|^2}{|\theta_l|^2},\qquad\text{in particular}\qquad \lambda_1(K)\ \ge\ \frac{\|\hat Y\|^2}{|\theta_L|^2}.
+\end{equation}
+\end{proposition}
+
+\begin{proof}
+$K - K_l$ is positive semidefinite, so $\lambda_1(K)\ge\lambda_1(K_l)$, and $\|u_l\|^2 = \|\Psi_l\theta_l\|^2 = \theta_l^\top\frac1n\Psi_l^\top\Psi_l\theta_l \le \lambda_1(K_l)|\theta_l|^2$.
+\end{proof}
+
+A roughness function gives nothing more here: since $\Rgh(u)\le\CR\|u\|$ for every roughness function, the bound $\Rgh(\hat Y)^2/(\CR^2|\theta_L|^2)$ of an earlier draft is never larger than Eq.~\eqref{eq:rough}, so the proposition does not distinguish rough outputs from smooth ones.
+Bounds of the same kind appear for linear chains in \cite{yoo2025} and, through the input--output Jacobian, in \cite{maying2021,macdonald2023}.
+
+% ---------------------------------------------------------------
+\section{Where the residual along the output lies}\label{sec:where}
+
+In the eigenbasis of $K$, $\ip{\hat Y}{Y - \hat Y} = -\sum_k\hat y_k\,\hat e_k$ with $\hat y_k = \ip{v_k}{\hat Y}$.
+Write $y_k = \ip{v_k}{Y}$.
+
+\begin{proposition}[Fixed kernel]\label{prop:fixed}
+Hold $K$ fixed and start from $\hat Y = 0$.
+\begin{enumerate}[label=(\alph*)]
+\item Under gradient flow, $\hat y_k(t) = s_k(t)\,y_k$ with $s_k = 1 - e^{-\lambda_kt}$, and
+$\ip{\hat Y}{Y - \hat Y} = \sum_k s_k(1 - s_k)\,y_k^2 \ge 0$.
+Direction $k$ contributes most when $\lambda_kt = \ln2$, and $\int_0^\infty\ip{\hat Y}{Y - \hat Y}\,dt = \frac12\sum_{\lambda_k>0}y_k^2/\lambda_k$.
+\item After $N$ steps of gradient descent, $s_k = 1 - (1-\eta\lambda_k)^N$. The contribution of direction $k$ is nonnegative if $\eta\lambda_k\le1$, and alternates in sign with $N$ if $1 < \eta\lambda_k < 2$.
+\item For the output $\hat Y = Y - Y_\gamma$, the smallest error reachable from zero by a step of length $s_\gamma$ (main.tex, Proposition ``The floor is a one-step bound''), $\ip{\hat Y}{Y - \hat Y} = \gamma\,\Upsilon_Y(\gamma) = \gamma s_\gamma^2$.
+\end{enumerate}
+\end{proposition}
+
+\begin{proof}
+(a) and (b): with $K$ fixed, $\dot E = -KE$ or $E_{N} = (I - \eta K)^NE_0$ with $E_0 = -Y$; then $\hat y_k\hat e_k = -s_k(1-s_k)y_k^2$. The integral is $\int_0^\infty(e^{-\lambda t} - e^{-2\lambda t})dt = 1/(2\lambda)$.
+(c) $\hat y_k = \frac{\lambda_k}{\lambda_k+\gamma}y_k$ and $y_k - \hat y_k = \frac{\gamma}{\lambda_k+\gamma}y_k$, so the sum is $\gamma\sum_k\lambda_ky_k^2/(\lambda_k+\gamma)^2 = \gamma\Upsilon_Y(\gamma)$.
+\end{proof}
+
+Part (a) is Lemma~3.1 of \cite{liwangli2022}, which also allows the eigenvalues to change with time when the eigenvectors are fixed.
+With Theorem~\ref{thm:sharp}, this gives the mechanism the note proposes: a direction that is already fitted ($s_k\approx1$) or not yet started ($s_k\approx0$) does not drive sharpening; a direction that is partly fitted does.
+Fast directions are fitted early, so late in training the drive comes from the slow directions, and a rough target, which by the floor theorem of main.tex puts its weight there, keeps the drive positive for a time of order $1/\lambda_k$ per direction and for a total that grows with $\sum_k y_k^2/\lambda_k$.
+Part (b) is where the edge of stability enters: once $\eta\lambda_1 > 1$, the top direction's contribution changes sign from step to step.
+Part (a) holds only with the kernel fixed; whether the residual along the output stays positive while the kernel moves is not proved here.
+
+% ---------------------------------------------------------------
+\section{At the edge}\label{sec:edge}
+
+This section concerns steps with $\eta\lambda_1\approx2$.
+It separates what gradient descent cannot do there, which is a statement with the features held fixed during the step, from what keeps $\lambda_1$ from growing further, which comes from the change of the features during the step.
+
+\paragraph{Gradient descent and the best step of the same length.}
+
+\begin{proposition}\label{prop:best}
+Hold the features fixed during the step. The gradient-descent step has rescaled length $s = \eta\|E\|_K$ and leaves the error $(I - \eta K)E$, which keeps the fraction $1 - \eta\lambda_k$ of the component of $E$ along $v_k$. The best step of the same length leaves $E_\gamma = \gamma(K + \gamma I)^{-1}E$ with $\Upsilon(\gamma) = s^2$ (main.tex, Theorem ``Supremum over roughness functions''(c)), which keeps the fraction $\gamma/(\lambda_k + \gamma)\in(0,1]$. Hence $\|(I - \eta K)E\|\ge F(s) = \|E_\gamma\|$, and
+\begin{equation}\label{eq:gap}
+\|(I - \eta K)E\|^2 - F(s)^2 = \sum_k\Big((1 - \eta\lambda_k)^2 - \frac{\gamma^2}{(\lambda_k + \gamma)^2}\Big)\hat e_k^2 .
+\end{equation}
+\end{proposition}
+
+\begin{proof}
+To first order with the features fixed, the step changes the error by $-\eta\Psi g_E = -\eta KE$, and $|\eta g_E| = \eta\|E\|_K$. The best step is part (c) of the cited theorem, and the gradient step is one step of length $s$, so its error is at least $F(s)$. Eq.~\eqref{eq:gap} is the difference of the two sums of squares in the eigenbasis.
+\end{proof}
+
+This is a restatement of classical facts in the notation of main.tex.
+The best step of a given length for a least-squares problem is the trust-region, or Levenberg--Marquardt, step \cite{levenberg1944,marquardt1963,more1978}, whose linearized residual is $\gamma(K + \gamma I)^{-1}E$ \cite{hanke1997}; $E_\gamma = (I + K/\gamma)^{-1}E$ is the linearized implicit (proximal) step of gradient flow with step $1/\gamma$; and the best step lies in the Krylov space $\operatorname{span}\{E, KE, K^2E,\dots\}$, which conjugate-gradient trust-region methods search \cite{steihaug1983,martens2010}, while gradient descent uses only $KE$ with a fixed coefficient.
+At $\eta\lambda_1 = 2$ the gradient step keeps the fraction $-1$ of the component along $v_1$: it reverses it without reducing it, while a step of the same length can remove most of it.
+That the top component is multiplied by $1 - \eta\lambda_1\approx-1$ is the definition of the edge of stability \cite{cohen2021}, and reading it as the instability of an explicit scheme is in \cite{sun2022}.
+What Eq.~\eqref{eq:gap} adds is a measurement of the per-step loss against the best step of the same length, split by eigendirection.
+Two cautions from the literature: projecting the top Hessian directions out of the update does as well as the full update \cite{songahnyun2025}, consistent with the top component making no progress; and step sizes that are greedy for one step do worse over many steps at the edge than a constant step \cite{roulet2024}, while \cite{cohen2025} argue that the oscillation along $v_1$ acts as a penalty on sharpness. Eq.~\eqref{eq:gap} is a statement about one step with the features fixed, not about the efficiency of gradient descent over training.
+
+\paragraph{What holds $\lambda_1$ at $2/\eta$: self-stabilization, measured at the centre.}
+Write the iterates as $\theta_j$ and the centre of the oscillation as the midpoint $c_j = (\theta_j + \theta_{j+1})/2$; each iterate lies a distance $\delta_j = \frac12\eta\sqrt{\lambda_1}\,|x_j|$ from $c_j$ along the top direction, with $x_j = \ip{v_1}{E_j}$.
+With $S = \lambda_1$, $\alpha = -\nabla S\cdot\nabla L$ and $\beta = |\nabla S|^2$ evaluated at the centre, the self-stabilization analysis of \cite{damian2023} predicts that the sharpness at the centre changes per step by about $\eta(\alpha - \frac12\beta\delta^2)$, so that it turns over when $\delta^2$ reaches the central-flow value $\sigma^2 = 2\alpha/\beta$ \cite{cohen2025}.
+
+\paragraph{Measured.}
+From the saved parameters of the $\sin10x$ run at $\eta = 1/\lambda_1(0)$ at step 10000, 200 steps of gradient descent were replayed, with $\eta\lambda_1$ between 1.992 and 2.013.
+\begin{itemize}
+\item One step against the best step of the same length (Proposition~\ref{prop:best}): the gradient step keeps the fraction $-1.00$ of $x_j$; the best step keeps 0.01; the term $k = 1$ of Eq.~\eqref{eq:gap} is 97\% (median) of the gap. The fixed-feature prediction of the error after each step is accurate to $8\times10^{-4}$ of the error (at most $2.5\times10^{-3}$), which is 38\% of the change of the error per step.
+\item The sharpness at the centre follows the self-stabilization prediction: over two steps its change has mean $+5.21\times10^{-3}$ against a predicted $+5.49\times10^{-3}$, with correlation 1.000, median ratio 0.98, and a residual whose root mean square is 5\% of that of the change.
+\item The squared half-amplitude $\delta^2$ grows from $1.1\times10^{-5}$ and crosses the central-flow value $\sigma^2\approx2.3\times10^{-5}$ near step 10150; at that point the sharpness at the centre turns over, with $\eta\lambda_1$ at the centre reaching 2.008 and then falling.
+\end{itemize}
+An earlier version of this draft split the one-step change of $\lambda_1$ at the iterates into a part along the oscillation and a Taylor remainder, and attributed the cap to the second derivative of $\lambda_1$ along the top direction. That split is not a mechanism: for a smooth $\lambda_1$, the first-order term evaluated at the iterates contains the same second-derivative term with the opposite sign, and in the exactly solvable model of \cite{lewkowycz2020} the remainder has the opposite (destabilizing) sign. The attribution is withdrawn. The cap in these runs is the self-stabilization of \cite{damian2023}.
+
+% ---------------------------------------------------------------
+\section{Prior work and what is new}\label{sec:prior}
+
+The following was checked against the literature up to October 2026.
+
+\paragraph{Known.}
+\begin{itemize}
+\item Rougher targets sharpen more and reach the edge of stability, smooth ones barely sharpen: \cite{cohen2021} (Appendix L.2, one-dimensional $\tanh$ regression of Chebyshev polynomials of increasing degree), \cite{ghosh2025} (images with more high-frequency content), \cite{yoo2025} (a ``dataset difficulty'' that weights label components on small singular directions), \cite{liwangli2022} (labels on bottom eigenvectors of the data Gram matrix).
+\item The output-layer norm grows at the rate $2\ip{\hat Y}{Y - \hat Y}$ and sharpness tracks it: \cite{liwangli2022}, as an assumption checked in experiments, with a proof for two-layer linear networks; exact versions in toy models \cite{lewkowycz2020,kalra2025,liu2025,jiang2025}.
+\item The fixed-kernel formula $\ip{\hat Y}{Y - \hat Y} = \sum_ks_k(1 - s_k)y_k^2$ (Proposition~\ref{prop:fixed}(a)): \cite{liwangli2022}, Lemma~3.1.
+\item The homogeneity defect $\psi(z) = z\sigma'(z) - \sigma(z)$ in the dynamics of layer norms: \cite{rawal2026} (weights, no biases).
+\item The general sharpening rate as a contraction of the kernel evolution: \cite{huangyau2020,agarwala2023,damian2023}.
+\item The cap: self-stabilization \cite{damian2023} and central flows \cite{cohen2025}; period-two orbits stabilized by higher-order terms \cite{chenbruna2023,zhu2023,ma2022,litman2026,gan2026}.
+\item The part of the error off the top eigendirections decreases monotonically through loss spikes: \cite{zhu2024catapult}.
+\item The best step of a given length is the trust-region (Levenberg--Marquardt) step, and its linearized residual is exactly $E_\gamma = \gamma(K + \gamma I)^{-1}E$ with $K = TT^*$, $T$ the derivative of the forward map: \cite{hanke1997}, Eqs.~(1.2) and~(2.5), where the parameter is chosen so that $\|E_\gamma\| = \rho\|E\|$ (the same family of steps, indexed by residual level instead of step length). The edge of stability as the instability of an explicit scheme \cite{sun2022}; the top-subspace part of the update makes no progress \cite{songahnyun2025}.
+\item Damped Gauss--Newton (Fisher) preconditioning bounds the effective sharpness $\lambda_{\max}((F + \gamma I)^{-1}H)$ by $1 + (\varepsilon + \delta)/\mu_{\min}(F + \gamma I)$, with $\varepsilon = \|H - G\|$ and $\delta = \|G - F\|$, so damped second-order methods stay below their stability threshold \cite{ahad2026}. Checked from the authors' code and README; the paper itself was not accessible.
+\item Stability bounds on the roughness of the learned function scale as $1/\eta$ at stable minima \cite{mulayoff2021,qiao2024}.
+\end{itemize}
+
+\paragraph{Not found in the literature, so apparently new.}
+\begin{itemize}
+\item The exact identity Eq.~\eqref{eq:sharpL} for any network with a linear output layer, with the coefficient $\lambda_1 - k_L$ (the kernel of the hidden layers along $v_1$) and the remainder $T_L$; it turns the assumption of \cite{liwangli2022} into an identity.
+\item Lemma~\ref{lem:euler}(b),(c): the defect $\delta_l$ with biases at the level of the output, and $\theta_l\cdot h_l = \lambda_1 - k_l + \varepsilon_l$.
+\item The measured decomposition: away from the edge, eigendirections with $\lambda_k < 10^{-3}\lambda_1$ carry 93--100\% of the first-order sharpening, and $q$ lies close to $\hat Y$.
+\item The anisotropic growth of the kernel: its small eigenvalues grow by $10^4$ to $10^7$ while $\lambda_1$ grows by 2 to 4 and stops at $2/\eta$. \cite{kopitkov2020} report all eigenvalues growing; \cite{baratin2021} report the opposite anisotropy in classification.
+\item The comparison of each gradient step at the edge with the best step of the same length, split by eigendirection, and the link to the duality of main.tex (the best step as the supremum of roughness-function bounds, computed by the Krylov series). The large share on $v_1$ follows from $\eta\lambda_1\approx2$, so this is a quantification, not a new phenomenon.
+\end{itemize}
+
+\paragraph{Withdrawn.}
+The attribution of the cap to the second derivative of $\lambda_1$ along the top direction (Section~\ref{sec:edge}); and a roughness-function form of Proposition~\ref{prop:rough}, which is never stronger than the norm form.
+
+% ---------------------------------------------------------------
+\section{What is proved, what is measured}\label{sec:status}
+
+\paragraph{Proved, with all terms kept, for any continuously differentiable activation.}
+Proposition~\ref{prop:hess} (loss Hessian and kernel); Proposition~\ref{prop:step} (one step of gradient descent, with remainder); Proposition~\ref{prop:speed} (gradient flow); Proposition~\ref{prop:best} (one step against the best step of the same length, features fixed); Lemma~\ref{lem:euler}, Theorem~\ref{thm:sharp} and Proposition~\ref{prop:rough} (layer scaling, including the exact output-layer form Eq.~\eqref{eq:sharpL}).
+
+\paragraph{Proved with the kernel fixed.} Proposition~\ref{prop:fixed}.
+
+\paragraph{Open.}
+(i) A bound on $T$ in Eq.~\eqref{eq:sharp}; the measurements below show that it is not small.
+(ii) Positivity of $\ip{\hat Y}{Y - \hat Y}$ on the slow directions while the kernel moves.
+(iii) Whether the self-stabilization balance holds over longer replays and in the other runs that reach the edge.
+
+\paragraph{Measured.}
+Two hidden $\tanh$ layers of width 256 with biases, on 256 inputs, targets $\sin\omega x$ for $\omega\in\{1,2,5,10,20,40\}$, full-batch gradient descent for 20000 steps at $\eta = 0.5/\lambda_1(0)$ and $\eta = 1/\lambda_1(0)$, with $\lambda_1(0) = 43.7$; the decompositions are evaluated every 2000 steps (132 checkpoints).
+\begin{itemize}
+\item $\lambda_{\max}(\nabla^2L)$ and $\lambda_1(K)$ agree to within 1\% on the second half of every run.
+\item $\eta\lambda_1$ reaches 2 for $\sin10x$ at both step sizes and for $\sin20x$ and $\sin40x$ at the larger one; it stays at 0.51 to 1.05 for $\sin x$ and $\sin2x$.
+\item The first-order term of Proposition~\ref{prop:step} matches the exact one-step change of $\lambda_1$ to four digits away from the edge and to 1--5\% at the edge; at initialization, where the output layer is zero, it vanishes and the whole first-step change is the remainder $R$.
+\item Away from the edge, eigendirections with $\lambda_k < 10^{-3}\lambda_1$ carry 93--100\% of the first-order change, which is positive at almost every checkpoint; the change per step at step 10000 rises from $9\times10^{-6}$ for $\sin x$ to $1.3\times10^{-3}$ for $\sin40x$ (smaller step size).
+\item Lemma~\ref{lem:euler}: $\delta_L = 0$ and $\varepsilon_L = 0$ to rounding. For the hidden layers, $\|\delta_l\|$ is 0.2 to 2.7 times $\|\hat Y\|$, almost all of it from $\psi$ (the bias part is at most $0.36\|\hat Y\|$, median $0.02\|\hat Y\|$), and $\theta_l\cdot h_l$ is about $0.1\lambda_1$ for the first layer and $-0.3\lambda_1$ to $0.5\lambda_1$ for the second, against $\lambda_1 - k_l$ for a homogeneous network. The part of the kernel of the hidden layers along $v_1$, $\lambda_1 - k_L$, has median $0.37\lambda_1$.
+\item Theorem~\ref{thm:sharp}, away from the edge ($\eta\lambda_1 < 1.9$, 89 checkpoints), as fractions of $-2\ip{q}{E}$: the term $2\alpha\ip{\hat Y}{Y - \hat Y}$ has median 1.37 (1.2 to 2.8 except where the total is near zero), $D$ has median 0.00 (at most 0.05 in size except in one case), and $T$ has median $-0.36$ (down to $-1.75$). The output-layer term has the right sign and order of magnitude, and $T$ opposes it. At the edge, $T$ carries all of the change.
+\item The function $q$ lies close to the output: the cosine between $q$ and $\hat Y$ is 0.95 to 1.00 for $\omega\le5$ and 0.6 to 0.8 for $\sin40x$, and its cosine with $-E$ on the slow directions is about 0.02 for $\sin40x$.
+\item The kernel grows mostly on its small eigenvalues: for the targets that sharpen, the 50th eigenvalue grows by $10^4$ to $10^7$, the median eigenvalue by 30 to 50, and $\lambda_1$ by 2 to 4 before it stops at $2/\eta$.
+\item At the edge: see Section~\ref{sec:edge}.
+\end{itemize}
+
+\begin{thebibliography}{99}
+\bibitem{agarwala2023} A.~Agarwala, F.~Pedregosa, and J.~Pennington. Second-order regression models exhibit progressive sharpening to the edge of stability. ICML, 2023. arXiv:2210.04860.
+\bibitem{baratin2021} A.~Baratin, T.~George, C.~Laurent, R.~D.~Hjelm, G.~Lajoie, P.~Vincent, and S.~Lacoste-Julien. Implicit regularization via neural feature alignment. AISTATS, 2021. arXiv:2008.00938.
+\bibitem{chenbruna2023} L.~Chen and J.~Bruna. Beyond the edge of stability via two-step gradient updates. ICML, 2023. arXiv:2206.04172.
+\bibitem{cohen2021} J.~Cohen, S.~Kaur, Y.~Li, J.~Z.~Kolter, and A.~Talwalkar. Gradient descent on neural networks typically occurs at the edge of stability. ICLR, 2021. arXiv:2103.00065.
+\bibitem{cohen2025} J.~Cohen, A.~Damian, A.~Talwalkar, J.~Z.~Kolter, and J.~D.~Lee. Understanding optimization in deep learning with central flows. ICLR, 2025. arXiv:2410.24206.
+\bibitem{damian2023} A.~Damian, E.~Nichani, and J.~D.~Lee. Self-stabilization: the implicit bias of gradient descent at the edge of stability. ICLR, 2023. arXiv:2209.15594.
+\bibitem{du2018} S.~S.~Du, W.~Hu, and J.~D.~Lee. Algorithmic regularization in learning deep homogeneous models: layers are automatically balanced. NeurIPS, 2018. arXiv:1806.00900.
+\bibitem{gan2026} Gan. A bifurcation theory framework for gradient descent on the edge of stability. arXiv:2606.15551, 2026.
+\bibitem{ghosh2025} A.~Ghosh, S.~M.~Kwon, R.~Wang, S.~Ravishankar, and Q.~Qu. Learning dynamics of deep linear networks beyond the edge of stability. arXiv:2502.20531, 2025.
+\bibitem{huangyau2020} J.~Huang and H.-T.~Yau. Dynamics of deep neural networks and neural tangent hierarchy. ICML, 2020. arXiv:1909.08156.
+\bibitem{jiang2025} Jiang, J.~Cohen, and Li. Understanding the evolution of the neural tangent kernel at the edge of stability. arXiv:2507.12837, 2025.
+\bibitem{kalra2025} D.~S.~Kalra, T.~He, and M.~Barkeshli. Universal sharpness dynamics in neural network training: fixed point analysis, edge of stability, and route to chaos. ICLR, 2025. arXiv:2311.02076.
+\bibitem{kopitkov2020} D.~Kopitkov and V.~Indelman. Neural spectrum alignment: empirical study. ICANN, 2020. arXiv:1910.08720.
+\bibitem{lewkowycz2020} A.~Lewkowycz, Y.~Bahri, E.~Dyer, J.~Sohl-Dickstein, and G.~Gur-Ari. The large learning rate phase of deep learning: the catapult mechanism. arXiv:2003.02218, 2020.
+\bibitem{litman2026} Litman. The origin of edge of stability. arXiv:2604.20446, 2026.
+\bibitem{liu2025} Liu, Zhang, Du, and Zhao. A minimalist example of edge-of-stability and progressive sharpening. NeurIPS, 2025. arXiv:2503.02809.
+\bibitem{liwangli2022} Z.~Li, Z.~Wang, and J.~Li. Analyzing sharpness along GD trajectory: progressive sharpening and edge of stability. NeurIPS, 2022. arXiv:2207.12678.
+\bibitem{ma2022} C.~Ma, D.~Kunin, L.~Wu, and L.~Ying. Beyond the quadratic approximation: the multiscale structure of neural network loss landscapes. arXiv:2204.11326, 2022.
+\bibitem{macdonald2023} L.~MacDonald, J.~Valmadre, and S.~Lucey. On progressive sharpening, flat minima and generalisation. arXiv:2305.14683, 2023.
+\bibitem{maying2021} C.~Ma and L.~Ying. On linear stability of SGD and input-smoothness of neural networks. NeurIPS, 2021. arXiv:2105.13462.
+\bibitem{mulayoff2021} R.~Mulayoff, T.~Michaeli, and D.~Soudry. The implicit bias of minima stability: a view from function space. NeurIPS, 2021.
+\bibitem{qiao2024} D.~Qiao, K.~Zhang, E.~Singh, D.~Soudry, and Y.-X.~Wang. Stable minima cannot overfit in univariate ReLU networks: generalization by large step sizes. NeurIPS, 2024. arXiv:2406.06838.
+\bibitem{rawal2026} D.~Rawal and M.~DeWeese. A theory of saddle escape in deep nonlinear networks. arXiv:2605.01288, 2026.
+\bibitem{roulet2024} V.~Roulet, A.~Agarwala, J.-B.~Grill, G.~Swirszcz, M.~Blondel, and F.~Pedregosa. Stepping on the edge: curvature aware learning rate tuners. NeurIPS, 2024. arXiv:2407.06183.
+\bibitem{songahnyun2025} M.~Song, K.~Ahn, and C.~Yun. Does SGD really happen in tiny subspaces? ICLR, 2025. arXiv:2405.16002.
+\bibitem{sun2022} L.~Sun, Y.~Lao, G.~Sundaramoorthi, and A.~Yezzi. A PDE-based explanation of extreme numerical sensitivities and edge of stability in training neural networks. arXiv:2206.02001, 2022.
+\bibitem{yoo2025} Yoo, Song, and Yun. Understanding sharpness dynamics in NN training with a minimalist example: the effects of dataset difficulty, depth, stochasticity, and more. ICML, 2025. arXiv:2506.06940.
+\bibitem{zhu2023} X.~Zhu, Z.~Wang, X.~Wang, M.~Zhou, and R.~Ge. Understanding edge-of-stability training dynamics with a minimalist example. ICLR, 2023. arXiv:2210.03294.
+\bibitem{zhu2024catapult} L.~Zhu, C.~Liu, A.~Radhakrishnan, and M.~Belkin. Catapults in SGD: spikes in the training loss and their impact on generalization through feature learning. ICML, 2024. arXiv:2306.04815.
+\bibitem{hanke1997} M.~Hanke. A regularizing Levenberg--Marquardt scheme, with applications to inverse groundwater filtration problems. Inverse Problems, 13(1):79--95, 1997. (Preprint: Universit\"at Kaiserslautern, Preprint Nr.~283, 1996.)
+\bibitem{ahad2026} A.~Ahad and N.~Lakshmi. A spectral bound on effective sharpness for Fisher-preconditioned gradient descent. Transactions on Machine Learning Research, 2026. Code: github.com/990aa/sbesfpgd.
+\bibitem{levenberg1944} K.~Levenberg. A method for the solution of certain non-linear problems in least squares. Quarterly of Applied Mathematics, 2:164--168, 1944.
+\bibitem{marquardt1963} D.~W.~Marquardt. An algorithm for least-squares estimation of nonlinear parameters. SIAM Journal on Applied Mathematics, 11(2):431--441, 1963.
+\bibitem{more1978} J.~J.~Mor\'e. The Levenberg--Marquardt algorithm: implementation and theory. In Numerical Analysis, Lecture Notes in Mathematics 630, Springer, 1978.
+\bibitem{steihaug1983} T.~Steihaug. The conjugate gradient method and trust regions in large scale optimization. SIAM Journal on Numerical Analysis, 20(3):626--637, 1983.
+\bibitem{martens2010} J.~Martens. Deep learning via Hessian-free optimization. ICML, 2010.
+% VERIFY: author first names, venues and years marked incomplete above (gan2026, jiang2025, litman2026, liu2025, yoo2025) and all 2025-2026 entries, which were found by web search on 2026-10-05.
+\end{thebibliography}
+
+\end{document}
