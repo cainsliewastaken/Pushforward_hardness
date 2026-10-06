@@ -50,6 +50,20 @@ This is the behaviour Proposition~\ref{prop:factor} suggests: the backward propa
 The variation of the one-step error map along the rollout error, $\max|\mathbf n^\top(\bm\zeta(\uu_p) - \bm\zeta(\uu_T))|/(\dt\,|\ee|)$ with $\bm\zeta = \Gt - \G$, is $5$--$11$ for Euler models at every $\dt$ and $6$, $14$, $29$, $64$ for direct models at $\dt = 0.08,\dots,0.01$.
 Rollout errors at $\tau = 1.28$ are smaller for Euler with disjoint seed ranges in all five protocols at $\dt = 0.01$, four at $0.02$ and three at $0.04$, and indistinguishable at $0.08$.
 
+\paragraph{Rate bound (Theorem~\ref{thm:rate}; check (i)).}
+For 36 Euler models (one-step and rollout-trained, all $\dt$, 3 seeds), with $\ell$, $h$ and $s_i$ computed along the rollouts of 128 held-out starts, the measured $\lambda_{\max}(\Kq)$ never exceeds $\big(\dt\sum_{i<q}e^{\ell(q-i-1)\dt}s_i\big)^2$, which never exceeds $e^{2|\ell|\dt}\varphi(\ell,\tau_q)^2\max_i s_i^2$; at $q = 1$ the first is an equality, as it must be.
+The ratio of the middle bound to the measurement is $1$--$4$ at $\tau_q = 0.08$, $20$--$80$ at $0.16$, $6\times10^2$--$10^7$ at $0.32$, $10^5$--$10^{17}$ at $0.64$ and $3\times10^{12}$--$10^{39}$ at $1.28$.
+The bound is driven by $\ell = 16$--$42$, the largest one-step expansion of $\nabla\Hop$ over the visited states (the Lorenz flow expands strongly in places), while $\lambda_{\max}(\Kq)$ grows only about like $e^{9\tau}$; the logarithmic-norm bound is informative for $\tau\lesssim0.16$, and the Lyapunov picture of the long-horizon remark is the relevant one beyond.
+
+\paragraph{One training step (Theorem~\ref{thm:onestep}; check (v)).}
+For one-step and $\tau=0.32$-trained models (both classes, $\dt = 0.04, 0.08$, seed 0, width 256) and windows $\tau = 0.32, 0.64, 1.28$ with $w_q = 1/p$, $K^{\mathrm{roll}}_w$ was formed on 128 held-out starts (dimension up to 12288) and $F^{\mathrm{roll}}(s)$ computed from the slow-part formula along the ridge path.
+At the step lengths $s = \mathrm{lr}\sqrt{P}$ of Adam's first step for $\mathrm{lr} = 10^{-6}, 10^{-5}$, the realized error after the first-order optimal step equals $F^{\mathrm{roll}}(s)$ to about three digits; at $\mathrm{lr} = 10^{-4}$ it does not (e.g.\ $0.18$ against $0.06$ of the starting error at $\tau = 1.28$), which is the averaged-feature correction of the theorem becoming large.
+$F^{\mathrm{roll}}(s)/\|\ee\|_w$ at $\mathrm{lr} = 10^{-6}$ is $0.83$--$0.89$ at $\tau = 0.32$, $0.25$--$0.58$ at $0.64$ and $0.10$--$0.31$ at $1.28$: on the batch, a step of fixed length removes more of the error the longer the window.
+Gradient-descent steps and Adam's first step of the same length instead increase the error, by $1.4$--$14$ times at $\mathrm{lr} = 10^{-6}$ and $13$--$700$ times at $10^{-4}$, more for longer windows and for direct models.
+The gradient $\Psi^{\mathrm{roll}\top}W\ee$ is dominated by the top eigendirection of $K^{\mathrm{roll}}_w$ ($\operatorname{tr}/\lambda_{\max} = 1.1$--$1.3$ at $\tau = 1.28$), whereas the optimal step $\Psi^{\mathrm{roll}\top}(K^{\mathrm{roll}}_w + \gamma I)^{-1}W\ee$ is small along it.
+In the terms of this note, the failures of long-window training observed with Adam are a failure of the step rule, not an absence of good steps; the theorem points to Gauss--Newton/Levenberg--Marquardt steps.
+Caveat: the optimal step was computed and evaluated on the same 128 starts (133k parameters); its effect on other starts was not measured.
+
 \paragraph{Not covered.}
-Check (i) ($\lambda_{\max}(\Kq)$ against $e^{2|\ell|\dt}\varphi(\ell,\tau_q)^2\max_i s_i^2$; $\ell$ and $s_i$ were not computed), check (v) ($F^{\mathrm{roll}}(s)$ and its Krylov values), and the eigenvector alignment in (iv).
-Three seeds per setting; one width (256, not converged in width: doubling it halves the one-step loss at $\dt = 0.08$); one optimizer family.
+The Krylov values in check (v) (not needed when the kernel is formed explicitly, as here), and the eigenvector alignment in (iv).
+Three seeds per setting; one optimizer family for training. A width test at $\dt = 0.08$ (widths 64--512, window chain $0.16\to0.32\to0.64\to1.28$ with learning rates tuned at width 256) found the best window to be $0.64$ at widths 64--128 and $0.32$ at 256--512, but the $0.64$ stage failed to descend in 2 of 3 seeds at the two larger widths at the common learning rate, so the width dependence of the best window is confounded by optimization and remains open.
