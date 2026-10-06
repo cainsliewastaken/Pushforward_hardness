@@ -8,24 +8,62 @@
 
 Full-batch gradient descent with step size $\eta$ on the loss $\frac12\|\Net - U/c_p\|^2$ is stable along a direction only while $\eta$ times the curvature along it stays below 2.
 On neural networks the largest eigenvalue of the loss Hessian, the sharpness, rises during training (progressive sharpening) until it reaches $2/\eta$, and then stays there while the loss keeps decreasing (the edge of stability) \cite{cohen2021}.
-For the squared loss the sharpness is, up to a term proportional to the error, the largest eigenvalue $\lambda_1$ of the training kernel $K$ of Section~\ref{sec:kernel}.
-This section asks what the theory says about the rate at which $\lambda_1$ changes at one time during training, and about one training step at the edge.
-Throughout, $\Pi = I$ and $c_p = 1$, so that $\hat Y = \Net$ at the training inputs, $E = \hat Y - Y$, and the gradient of the loss is $g_E = \frac1n\Psi^\top E$; for Adam, $\Pi$ is its preconditioner and $\lambda_1$ is the preconditioned sharpness, whose threshold is $38/\eta$ for $\beta_1 = 0.9$ \cite{cohen2022adaptive}.
+Throughout, $\Pi = I$ and $c_p = 1$, so that $\hat Y = \Net$ at the training inputs, $E = \hat Y - Y$, and the gradient of the loss is $g_E = \frac1n\Psi^\top E$; for Adam, $\Pi$ is its preconditioner and the threshold is $38/\eta$ for $\beta_1 = 0.9$ \cite{cohen2022adaptive}.
+For a sampled function $\varphi$, let $S(\varphi) = \frac1n\sum_i\varphi_i\cdot\nabla^2_\theta\Net(x_i)$, the Hessian in the parameters of $\ip{\varphi}{\Net}$, and let $v_1$ be a top eigenvector of $K$ with $\|v_1\| = 1$.
 
-Section~\ref{sec:kernel} treats the kernel at one time as given.
-This section needs one statement more, the rate at which the top eigenvalue of the kernel changes at one time.
-Like the rest of the theory it concerns one time during training and one training step; nothing is integrated over training.
+\begin{proposition}\label{eos:prop:hess}
+If $\Net$ is twice differentiable in $\theta$ at the training inputs, the Hessian of the loss is $G + S(E)$ with $G = \frac1n\Psi^\top\Psi$, which has the same nonzero eigenvalues as $K$; hence $|\lambda_{\max}(\nabla^2_\theta L) - \lambda_1| \le \|S(E)\|_{op} \le M_2\|E\|$, with $M_2 = (\frac1n\sum_i\|\nabla^2_\theta\Net(x_i)\|_{op}^2)^{1/2}$.
+\end{proposition}
 
-\subsection{The loss Hessian, the kernel and the rate of change of \texorpdfstring{$\lambda_1$}{lambda1}}\label{eos:sec:rate}
+\begin{proof}
+The loss is quadratic in the outputs, so differentiating it twice gives $G + S(E)$ with no remainder; $\frac1n\Psi^\top\Psi$ and $\frac1n\Psi\Psi^\top$ share their nonzero eigenvalues; the bounds are Weyl's inequality and the Cauchy--Schwarz inequality.
+\end{proof}
 
-For a sampled function $\varphi$, let $S(\varphi) = \frac1n\sum_i\varphi_i\cdot\nabla^2_\theta\Net(x_i)$ be the Hessian in the parameters of $\ip{\varphi}{\Net}$, so that $g_\varphi = \nabla_\theta\ip{\varphi}{\Net}$.
-Let $v_1$ be a top eigenvector of $K$ with $\|v_1\| = 1$.
+So the sharpness is, up to a term proportional to the error, the top eigenvalue $\lambda_1$ of the training kernel, and the edge of stability can be read in the terms of the theory.
+The theory concerns the error given the kernel at one time, and one training step; it does not describe how the kernel changes.
+Accordingly this section makes three statements of different kinds:
+(i) what one step of gradient descent can learn at the edge, which is a statement of the theory (Section~\ref{eos:sec:edge});
+(ii) how much the sharpness rises, which the theory predicts through the cost in parameter motion of a rough dataset, with one exact identity added for how that motion acts on the kernel (Section~\ref{eos:sec:cost});
+(iii) what holds the sharpness at $2/\eta$, which is the self-stabilization of \cite{damian2023} and is not derived here (Section~\ref{eos:sec:cap}).
+Section~\ref{eos:sec:cert} gives a supporting result on the sign of the rate of change of $\lambda_1$, and Section~\ref{eos:sec:num} the numerical setup and further checks.
+Statements about several training steps are observations, not results of the theory.
+
+% ---------------------------------------------------------------
+\subsection{What gradient descent learns at the edge}\label{eos:sec:edge}
+
+\begin{proposition}\label{eos:prop:best}
+Hold the features fixed during the step (reading (iii) of Section~\ref{sec:status}). The gradient step has rescaled length $s = \eta\|E\|_K$ and leaves the error $(I - \eta K)E$, which keeps the fraction $1 - \eta\lambda_k$ of $\hat e_k$. The best step of the same length leaves $E_\gamma$ with $\Upsilon(\gamma) = s^2$ (Theorem~\ref{thm:stepsup}(c)), which keeps the fraction $\gamma/(\lambda_k + \gamma)\in(0,1]$. Hence $\|(I - \eta K)E\|\ge F(s)$ and
+\begin{equation}\label{eos:eq:gap}
+\|(I - \eta K)E\|^2 - F(s)^2 = \sum_k\Big((1 - \eta\lambda_k)^2 - \frac{\gamma^2}{(\lambda_k + \gamma)^2}\Big)\hat e_k^2 .
+\end{equation}
+\end{proposition}
+
+\begin{proof}
+The gradient step is one step of length $s$; Theorem~\ref{thm:stepsup}(c) gives the best one; subtract the two sums of squares.
+\end{proof}
+
+At the edge, $\eta\lambda_1 = 2$, so the gradient step keeps the fraction $1 - 2\lambda_k/\lambda_1$ of the component along $v_k$: what one step learns is set by the normalized kernel $K/\lambda_1$, and a rough dataset, whose error lies on directions with $\lambda_k\ll\lambda_1$ (Theorem~\ref{thm:floor}), is learned at the rate $2\lambda_k/\lambda_1$ per step along them.
+On every direction with $\lambda_k\ll\lambda_1$ the gradient step and the best step of the same length remove the error at comparable rates; they differ on the top direction, where the gradient step keeps the fraction $-1$, reversing the component without reducing it, while the best step removes most of it.
+That the top component is multiplied by $1 - \eta\lambda_1\approx-1$ is the definition of the edge of stability \cite{cohen2021}; Proposition~\ref{eos:prop:best} places it within the theory, as the part of the error that the step of gradient descent cannot remove and a step of the same length could.
+The best step of a given length is the trust-region, or Levenberg--Marquardt, step, whose linearized residual is $\gamma(K + \gamma I)^{-1}E$ \cite{hanke1997}.
+The proposition concerns one step: step sizes that are greedy for one step do worse over many steps at the edge \cite{roulet2024}, and the oscillation along $v_1$ acts as a penalty on sharpness \cite{cohen2025}.
+
+In the runs of Section~\ref{eos:sec:num}, at the edge, the gradient step keeps the fraction $-1.00$ of $\hat e_1$, the best step of the same length 0.01, and the term $k = 1$ carries 97\% of Eq.~\eqref{eos:eq:gap}.
+Over many steps, as an observation beyond the one-step theory: the error $\Delta$ steps later is predicted by the slow part of the current error, $\|E_\gamma\|$ with $\gamma = 1/(\eta\Delta)$, together with the top component that gradient descent does not remove, $(\|E_\gamma\|^2 + \ip{v_1}{E}^2)^{1/2}$.
+For $\sin10x$ at the edge the median of $\log_{10}$ of the ratio of this prediction to the error $\Delta$ steps later is $0.00$, $-0.01$ and $+0.05$ for $\Delta = 100$, 1000 and 10000, against $-0.27$, $-0.28$ and $-0.12$ for the slow part alone and $+0.43$ at $\Delta = 10000$ for no change of the error; the spread (10th to 90th percentile about $\pm0.2$ to $0.3$) reflects the size of the top component, which varies along the oscillation.
+Before the edge, where the top component is negligible, the slow part alone predicts the error 10000 steps later to a median $\log_{10}$ ratio of $+0.03$.
+
+% ---------------------------------------------------------------
+\subsection{Sharpening as the cost of roughness}\label{eos:sec:cost}
+
+Theorem~\ref{thm:dataset} says that a rough dataset costs parameter motion: the output can acquire roughness only at a bounded rate per unit of parameter motion.
+In the coordinates of the kernel the cost is $\Upsilon_Y(\gamma)$ of Eq.~\eqref{eq:ugamma}, the squared length of the shortest step that builds $Y - Y_\gamma$ (Proposition~\ref{prop:floorstep}).
+How that motion acts on the kernel is outside the theory; the following identities supply it for one part of the motion, that of the output layer.
 
 \begin{proposition}\label{eos:prop:rate}
-Let $\Net$ be twice differentiable in $\theta$ at the training inputs.
+Let $\Net$ be twice differentiable in $\theta$ at the training inputs and $\lambda_1$ simple.
 \begin{enumerate}[label=(\alph*)]
-\item The Hessian of the loss is $G + S(E)$ with $G = \frac1n\Psi^\top\Psi$, which has the same nonzero eigenvalues as $K$; hence $|\lambda_{\max}(\nabla^2_\theta L) - \lambda_1| \le \|S(E)\|_{op} \le M_2\|E\|$, with $M_2 = (\frac1n\sum_i\|\nabla^2_\theta\Net(x_i)\|_{op}^2)^{1/2}$.
-\item If $\lambda_1$ is simple, $\nabla_\theta\lambda_1 = 2h$ with $h = S(v_1)g_{v_1}$, and for every update rule $\dot\lambda_1 = 2h\cdot\dot\theta$. Under gradient flow,
+\item $\nabla_\theta\lambda_1 = 2h$ with $h = S(v_1)g_{v_1}$, and for every update rule $\dot\lambda_1 = 2h\cdot\dot\theta$. Under gradient flow,
 \begin{equation}\label{eos:eq:rate}
 \dot\lambda_1 = -2\ip{q}{E} = -2\sum_k\ip{v_k}{q}\,\hat e_k,\qquad q = \Psi h .
 \end{equation}
@@ -34,21 +72,15 @@ Let $\Net$ be twice differentiable in $\theta$ at the training inputs.
 \end{proposition}
 
 \begin{proof}
-(a) The loss is quadratic in the outputs, so differentiating it twice gives $G + S(E)$ with no remainder; $\frac1n\Psi^\top\Psi$ and $\frac1n\Psi\Psi^\top$ share their nonzero eigenvalues; the bounds are Weyl's inequality and the Cauchy--Schwarz inequality.
-(b) $\lambda_1 = \ip{v_1}{Kv_1} = |g_{v_1}|^2$, and for a simple eigenvalue the variation of $v_1$ does not change $\lambda_1$ to first order, so $\nabla_\theta\lambda_1 = 2(\nabla_\theta g_{v_1})^\top g_{v_1} = 2S(v_1)g_{v_1}$. Under gradient flow $\dot\theta = -g_E$ and $2h\cdot g_E = 2\ip{\Psi h}{E}$.
-(c) By Weyl's inequality $\lambda_1$ is Lipschitz along the segment, so it is the integral of its derivative.
+(a) $\lambda_1 = \ip{v_1}{Kv_1} = |g_{v_1}|^2$, and for a simple eigenvalue the variation of $v_1$ does not change $\lambda_1$ to first order, so $\nabla_\theta\lambda_1 = 2(\nabla_\theta g_{v_1})^\top g_{v_1} = 2S(v_1)g_{v_1}$. Under gradient flow $\dot\theta = -g_E$ and $2h\cdot g_E = 2\ip{\Psi h}{E}$.
+(b) By Weyl's inequality $\lambda_1$ is Lipschitz along the segment, so it is the integral of its derivative.
 \end{proof}
 
-Eq.~\eqref{eos:eq:rate} is the top-eigenvalue part of the evolution equation of the kernel in the neural tangent hierarchy \cite{huangyau2020}, and its sign is the progressive-sharpening coefficient of \cite{damian2023}.
-It has the form of the rates of Proposition~\ref{prop:rates}: $\lambda_1$ changes at the rate of the component of the error along one sampled function, $q$.
-That function is built from the second derivatives of the network, so the kernel alone does not fix it; a model that is linear in its parameters has $S\equiv0$ and a kernel that never changes, whatever the target.
-What the rest of the theory adds is where the error lies when $\dot\lambda_1$ is evaluated: since the rate is linear in $E$, it splits exactly into the part from the slow part $E_\gamma$ of the error and the part from $E - E_\gamma$,
+Eq.~\eqref{eos:eq:rate} is the top-eigenvalue part of the evolution of the kernel in the neural tangent hierarchy \cite{huangyau2020}; it has the form of the rates of Proposition~\ref{prop:rates}, and it is linear in $E$, so it splits exactly as
 \begin{equation}\label{eos:eq:split}
-\dot\lambda_1 = -2\ip{q}{E_\gamma} - 2\ip{q}{E - E_\gamma},
+\dot\lambda_1 = -2\ip{q}{E_\gamma} - 2\ip{q}{E - E_\gamma}.
 \end{equation}
-and by Theorem~\ref{thm:floor} a rough dataset leaves its error on the slow part.
-
-\subsection{Layer scaling}\label{eos:sec:layer}
+The function $q$ is built from the second derivatives of the network; a model that is linear in its parameters has $q = 0$ and a kernel that never changes, whatever the target.
 
 Consider a fully connected network with layers $l = 1,\dots,L$, pre-activations $z_l = W_la_{l-1} + b_l$, activations $a_l = \sigma(z_l)$ for $l < L$, input $a_0 = x$ and a linear output layer, $\Net = z_L$, with any continuously differentiable activation $\sigma$.
 Group the parameters by layer, $\theta_l = (W_l, b_l)$; write $\Psi_l$ for the columns of $\Psi$ that belong to layer $l$, $K_l = \frac1n\Psi_l\Psi_l^\top$, so that $K = \sum_lK_l$, $k_l = \ip{v_1}{K_lv_1}$, and $g_l = \frac1n\Psi_l^\top E$.
@@ -93,16 +125,33 @@ Under gradient flow, Eq.~\eqref{eos:eq:sharpL} reads $\dot\lambda_1 = (\lambda_1
 $\Psi h = \sum_lc_lu_l + \Psi h_\perp = (\sum_lc_l)\hat Y + \sum_lc_l\delta_l + \Psi h_\perp$ and $\sum_lc_l = \alpha + \sum_l\varepsilon_l/|\theta_l|^2$ by Lemma~\ref{eos:lem:layer}(c). Each $k_l\le\sum_mk_m = \lambda_1$, so $\alpha\ge0$. For the output layer $\delta_L = 0$ and $\varepsilon_L = 0$; the gradient-flow form follows from Lemma~\ref{eos:lem:layer}(d).
 \end{proof}
 
-Scaling the output layer reproduces the output and multiplies the kernel of all earlier layers, whose part along $v_1$ is $\lambda_1 - k_L$.
-Gradient descent grows the output layer at the rate $2\ip{\hat Y}{Y - \hat Y}$, so this term raises $\lambda_1$ whenever the output falls short of the target along itself.
-\cite{liwangli2022} observed that sharpness and the norm of the output layer move together and took it as an assumption (their Assumption~3.1); Eq.~\eqref{eos:eq:sharpL} is the corresponding identity, with the coefficient and the remainder written out.
-The theorem does not bound $T$ or $T_L$; Section~\ref{eos:sec:cert} bounds $T_L$ through where the error lies.
-
-The component $\ip{\hat Y}{Y - \hat Y} = -\ip{\hat Y}{E}$ splits like Eq.~\eqref{eos:eq:split} into $-\ip{\hat Y}{E_\gamma}$ and $-\ip{\hat Y}{E - E_\gamma}$.
-Late in training the error of a rough dataset is almost all slow part (Section~\ref{sec:num-repeat}), and the part of the output that falls short of the target is the part of the target that the kernel builds slowly; this is the sense in which the roughness of the dataset drives sharpening.
+Scaling the output layer reproduces the output and multiplies the kernel of all earlier layers, whose part along $v_1$ is $\lambda_1 - k_L$; gradient descent grows the output layer at the rate $2\ip{\hat Y}{Y - \hat Y}$, the component of the residual along the output.
+\cite{liwangli2022} observed that sharpness and the norm of the output layer move together and took it as an assumption (their Assumption~3.1); Eq.~\eqref{eos:eq:sharpL} is the corresponding identity.
+Together with Theorem~\ref{thm:dataset}, it gives the picture of this subsection: a rough dataset requires a long parameter step, the part of that step in the output layer is growth of the output weights while the output falls short of the target, and that growth multiplies the kernel of the hidden layers, so that $\lambda_1$ rises.
+The theorem does not bound $T$ or $T_L$; Section~\ref{eos:sec:cert} does where the error lies on slow directions.
 That the drive comes from partly fitted directions is the content of Lemma~3.1 of \cite{liwangli2022} in a model with fixed eigenvectors.
 
-\subsection{A certificate for sharpening, and the assumptions of self-stabilization}\label{eos:sec:cert}
+The picture makes a prediction that can be checked before training: the amount of sharpening should follow the cost $\Upsilon_Y(\gamma)$ of the target under the kernel at initialization, at the rate $\gamma = 1/(\eta T)$ set by the number of steps $T$.
+In the runs of Section~\ref{eos:sec:num} its Spearman rank correlation with the largest $\lambda_1/\lambda_1(0)$ is 0.96 at the smaller step size and 0.92 at the larger (18 networks each, six distinct targets), against 0.63 and 0.75 for the frequency $\omega$ and for the norm of the slow part $\|Y_\gamma\|$.
+At the smaller step size it orders the six targets exactly as their sharpening, including $\sin40x$, which is rougher than $\sin10x$ and $\sin20x$ but sharpens less because little of it is fitted in $T$ steps.
+For a linear network, $\Upsilon_Y(0^+) = \sum_ky_k^2/\lambda_k$ with $K = XX^\top$ is the ``dataset difficulty'' that \cite{yoo2025} found to predict sharpness for deep linear chains; $\Upsilon_Y(\gamma)$ under the kernel of the network is its counterpart for any network.
+In the same runs, at checkpoints with $\eta\lambda_1 < 1.9$, the slow part $E_\gamma$ ($\gamma = 1/(1000\eta)$) carries a median of 90 to 93\% of the first-order rate in Eq.~\eqref{eos:eq:split} from step 10000 on, and the output-layer term of Eq.~\eqref{eos:eq:sharp} is a median 1.21 to 1.37 times the rate, with $D$ about 0 and $T$ a median $-0.21$ to $-0.36$ times it.
+
+% ---------------------------------------------------------------
+\subsection{What holds the sharpness at \texorpdfstring{$2/\eta$}{2/eta}}\label{eos:sec:cap}
+
+What holds $\lambda_1$ at $2/\eta$ is the self-stabilization of \cite{damian2023}: the oscillation along the top direction, through the third derivative of the loss, moves the centre of the oscillation down the gradient of the sharpness; the central flow of \cite{cohen2025} describes the same balance.
+Self-stabilization assumes progressive sharpening: its Assumption~1 is $\alpha = -\nabla L\cdot\nabla S > 0$ along the trajectory projected on the set of stable points, with $S$ the sharpness, and its Section~8.3 leaves the cause open.
+Under gradient flow $\alpha$ is $\dot S$, so for the kernel sharpness Theorem~\ref{eos:thm:sharp} gives, exactly,
+\begin{equation}\label{eos:eq:alpha}
+\alpha = 2\,\frac{\lambda_1 - k_L}{|\theta_L|^2}\,\ip{\hat Y}{Y - \hat Y} + T_L ,
+\end{equation}
+which states what the assumption means for a network.
+Under Assumptions~1--5 of \cite{damian2023}, their Theorem~1 shows that gradient descent follows the projected trajectory up to an oscillation along the top eigenvector, with the sharpness at $2/\eta$ up to that oscillation and higher-order terms, for $O(\varepsilon^{-1})$ steps after the projected trajectory first reaches $2/\eta$.
+In the runs of Section~\ref{eos:sec:num}: the sharpness at the midpoint of consecutive iterates follows their prediction (correlation 1.000, ratio 0.98); $\alpha$ for the Hessian sharpness, $-\nabla L\cdot D^3L[u,u]$ with $u$ the top Hessian eigenvector, equals Eq.~\eqref{eos:eq:alpha} to a median ratio of 1.000 before the edge; and at the centre of the oscillation, used as a proxy for the projected point (where $|\ip{v_1}{E}|$ is a median $10^{-3}\|E\|$), $\alpha > 0$ at 98\% of 425 centres. At 3 of 170 centres examined in detail ($\sin20x$ at the larger step size) $\alpha < 0$, so Assumption~1 does not hold at every point of these runs.
+
+% ---------------------------------------------------------------
+\subsection{Supporting result: a certificate for the sign of \texorpdfstring{$\dot\lambda_1$}{the rate}}\label{eos:sec:cert}
 
 The remainder $T_L$ in Eq.~\eqref{eos:eq:sharpL} is $-2\ip{\Psi h_\perp}{E}$ with $h_\perp = h - c_L\theta_L$, and the theory bounds it through where the error lies.
 
@@ -118,50 +167,18 @@ Hence, under gradient flow, $\dot\lambda_1 > 0$ whenever $2\frac{\lambda_1 - k_L
 $\ip{\Psi h_\perp}{E} = \ip{(K + \gamma I)^{-1/2}\Psi h_\perp}{(K + \gamma I)^{1/2}E}$ and $\|(K + \gamma I)^{1/2}E\|^2 = \|E\|_K^2 + \gamma\|E\|^2$; apply the Cauchy--Schwarz inequality. Also $\ip{\Psi h_\perp}{E} = h_\perp\cdot g_E$ and $|g_E| = \|E\|_K$. The last statement is Theorem~\ref{eos:thm:sharp}.
 \end{proof}
 
-The right sides are small when the error lies on directions slower than $\gamma$, since $\|E\|_K^2 = \sum_k\lambda_k\hat e_k^2$; by Theorem~\ref{thm:floor} this is where a rough dataset leaves its error.
-The certificate makes no assumption on the direction of $\Psi h_\perp$; with $\gamma\to\infty$ it reduces to the plain bound $2\|\Psi h_\perp\|\,\|E\|$.
+The bounds are small when the error lies on directions slower than $\gamma$, since $\|E\|_K^2 = \sum_k\lambda_k\hat e_k^2$; by Theorem~\ref{thm:floor} this is where a rough dataset leaves its error.
+In the runs of Section~\ref{eos:sec:num}, at the 275 checkpoints with $\eta\lambda_1 < 1.9$, the certificate holds at 193 (70\%), with the ratio of the output-layer term to the bound of median 1.35 and the best $\gamma$ near $10^{-6}\lambda_1$; the plain bound $2\|\Psi h_\perp\|\,\|E\|$ ($\gamma\to\infty$) holds at none, because $\Psi h_\perp$ is large but nearly orthogonal to $E$.
+At the edge it holds at 5\% of centres, but not because $\alpha$ is small: there $T_L$ usually has the sign of the drive (a median 0.94 times the output-layer term, positive at 85\% of centres), coming mostly from the rotation of the output weights and the second hidden layer, on the same eigendirections of $K$ (the 6th to the 20th) as the drive; the certificate bounds $|T_L|$ and cannot use its sign.
 
-Self-stabilization \cite{damian2023} assumes progressive sharpening: its Assumption~1 is $\alpha = -\nabla L\cdot\nabla S > 0$ along the trajectory projected on the set of stable points, with $S$ the sharpness, and its Section~8.3 leaves the cause open. Under gradient flow $\alpha$ is $\dot S$, so for the kernel sharpness Theorem~\ref{eos:thm:sharp} gives, exactly,
-\begin{equation}\label{eos:eq:alpha}
-\alpha = 2\,\frac{\lambda_1 - k_L}{|\theta_L|^2}\,\ip{\hat Y}{Y - \hat Y} + T_L ,
-\end{equation}
-and Proposition~\ref{eos:prop:cert} is a sufficient condition for Assumption~1 that can be checked at one point.
-Under Assumptions~1--5 of \cite{damian2023}, their Theorem~1 shows that gradient descent follows the projected trajectory up to an oscillation along the top eigenvector, with the sharpness at $2/\eta$ up to that oscillation and higher-order terms, for $O(\varepsilon^{-1})$ steps after the projected trajectory first reaches $2/\eta$.
-With those assumptions, the cap is their theorem and the sharpening it assumes is Eq.~\eqref{eos:eq:alpha}: the growth of the output layer multiplying the kernel of the hidden layers, at the rate of the residual along the output, offset by $T_L$.
-What these results do not provide is Assumption~1 itself at every point of a trajectory; Eq.~\eqref{eos:eq:alpha} states what it means for a network, and Proposition~\ref{eos:prop:cert} certifies it where its inequality holds, which in the runs of Section~\ref{eos:sec:num} is most points before the edge and few at it.
-Their $S$ is the sharpness of the Hessian and Eq.~\eqref{eos:eq:alpha} concerns the kernel sharpness; the two values of $\alpha$ are compared in Section~\ref{eos:sec:num}.
+% ---------------------------------------------------------------
+\subsection{Numerical setup and further checks}\label{eos:sec:num}
 
-\subsection{One step at the edge}\label{eos:sec:edge}
-
-\begin{proposition}\label{eos:prop:best}
-Hold the features fixed during the step (reading (iii) of Section~\ref{sec:status}). The gradient step has rescaled length $s = \eta\|E\|_K$ and leaves the error $(I - \eta K)E$, which keeps the fraction $1 - \eta\lambda_k$ of $\hat e_k$. The best step of the same length leaves $E_\gamma$ with $\Upsilon(\gamma) = s^2$ (Theorem~\ref{thm:stepsup}(c)), which keeps the fraction $\gamma/(\lambda_k + \gamma)\in(0,1]$. Hence $\|(I - \eta K)E\|\ge F(s)$ and
-\begin{equation}\label{eos:eq:gap}
-\|(I - \eta K)E\|^2 - F(s)^2 = \sum_k\Big((1 - \eta\lambda_k)^2 - \frac{\gamma^2}{(\lambda_k + \gamma)^2}\Big)\hat e_k^2 .
-\end{equation}
-\end{proposition}
-
-\begin{proof}
-The gradient step is one step of length $s$; Theorem~\ref{thm:stepsup}(c) gives the best one; subtract the two sums of squares.
-\end{proof}
-
-The best step of a given length is the trust-region, or Levenberg--Marquardt, step, whose linearized residual is $\gamma(K + \gamma I)^{-1}E$ \cite{hanke1997}; it is the linearized implicit step, and its optimal functional lies in the Krylov space of Theorem~\ref{thm:stepkrylov}, while the gradient step uses only $KE$ with a fixed coefficient.
-At $\eta\lambda_1 = 2$ the gradient step keeps the fraction $-1$ of $\hat e_1$, which is the definition of the edge of stability \cite{cohen2021}; Eq.~\eqref{eos:eq:gap} measures how much of the error a step of the same length could have removed and on which eigendirections.
-It is a statement about one step: step sizes that are greedy for one step do worse over many steps at the edge \cite{roulet2024}, and the oscillation along $v_1$ acts as a penalty on sharpness \cite{cohen2025}.
-What holds $\lambda_1$ at $2/\eta$ is the self-stabilization of \cite{damian2023}: the oscillation along the top direction, through the third derivative of the loss, moves the centre of the oscillation down the gradient of the sharpness \cite{damian2023,cohen2025}.
-
-\subsection{Numerical check}\label{eos:sec:num}
-
-Two hidden $\tanh$ layers of width 256 with biases, on 256 inputs drawn as in Section~\ref{sec:num-repeat}, targets $\sin\omega x$ for $\omega\in\{1,2,5,10,20,40\}$, full-batch gradient descent for 20000 steps at $\eta = 0.5/\lambda_1(0)$ and $1/\lambda_1(0)$, $\lambda_1(0)\approx43.5$, three initializations; the decompositions are evaluated every 2000 steps. Ranges are over the three initializations.
+Two hidden $\tanh$ layers of width 256 with biases, on 256 inputs drawn as in Section~\ref{sec:num-repeat}, targets $\sin\omega x$ for $\omega\in\{1,2,5,10,20,40\}$, full-batch gradient descent for 20000 steps at $\eta = 0.5/\lambda_1(0)$ and $1/\lambda_1(0)$, $\lambda_1(0)\approx43.5$, three initializations; the decompositions are evaluated every 2000 steps, and the edge is examined by replaying single steps from the saved parameters. Ranges are over the three initializations.
 \begin{itemize}
-\item $\lambda_{\max}(\nabla^2L)$ and $\lambda_1$ agree to within $0.01/\eta$ on the second half of every run. The largest $\eta\lambda_1$ is 0.51 to 1.06 for $\sin x$ and $\sin2x$, 0.70 to 1.71 for $\sin5x$, and 2.13 to 2.28 for $\sin10x$ at both step sizes; $\sin20x$ reaches the edge at the larger step size (2.10 to 2.15) but not at the smaller one (1.37 to 1.72), and $\sin40x$, which is barely fitted in 20000 steps, reaches 1.75 to 2.06. Rougher targets sharpen further, as in Appendix~L.2 of \cite{cohen2021}, up to targets that the network has not yet begun to fit.
-\item The first-order term of Proposition~\ref{eos:prop:rate}(c) matches the exact one-step change of $\lambda_1$ to a median relative difference of $3$ to $4\times10^{-5}$ away from the edge, and to 1--5\% at the edge.
-\item In Eq.~\eqref{eos:eq:split} with $\gamma = 1/(1000\eta)$, at checkpoints with $\eta\lambda_1 < 1.9$, the slow part of the error carries a median of 90 to 93\% of the first-order rate from step 10000 on (88 to 89\% over all such checkpoints), and the rate is positive at 96 to 100\% of them.
-\item In Theorem~\ref{eos:thm:sharp}, as fractions of $-2\ip{q}{E}$ away from the edge: the term $2\alpha\ip{\hat Y}{Y - \hat Y}$ has median 1.21 to 1.37, $D$ median 0.00, and $T$ median $-0.21$ to $-0.36$. The output-layer term has the right sign and size; $T$ opposes it. Lemma~\ref{eos:lem:layer}: $\delta_L$ and $\varepsilon_L$ vanish to rounding; for the hidden layers $\|\delta_l\|$ is 0.2 to 2.7 times $\|\hat Y\|$, almost all from $\psi$.
-\item Proposition~\ref{eos:prop:cert}, at the 275 checkpoints with $\eta\lambda_1 < 1.9$: the certificate holds at 193 (70\%), with the ratio of the output-layer term to the bound of median 1.35 (10th and 90th percentiles 0.64 and 2.51); the best $\gamma$ is near $10^{-6}\lambda_1$, because the error lies on very slow directions. The plain bound $2\|\Psi h_\perp\|\,\|E\|$ holds at none of them (the output-layer term is 1 to 4\% of it): $\Psi h_\perp$ is large but nearly orthogonal to $E$. At the same checkpoints, $\alpha > 0$ at 99\%, and $\alpha$ computed for the Hessian sharpness, $-\nabla L\cdot D^3L[u,u]$ with $u$ the top Hessian eigenvector, equals Eq.~\eqref{eos:eq:alpha} to a median ratio of 1.000 (10th and 90th percentiles 1.000).
-\item At the edge, where \cite{damian2023} need $\alpha > 0$, Proposition~\ref{eos:prop:cert} was evaluated at the centre of the oscillation, the midpoint of two consecutive iterates, used as a proxy for the projected point: 425 centres from 20 replayed steps at each of the 85 checkpoints with $\eta\lambda_1\ge1.9$ ($\sin10x$ at both step sizes and $\sin20x$ at the larger one in all three initializations, $\sin40x$ in two). There the error has almost no component along $v_1$ ($|\ip{v_1}{E}|$ is a median $10^{-3}\|E\|$), $\alpha > 0$ at 98\% of centres, and the output-layer term is positive at all of them, but the certificate holds at only 5\%. This is not because $\alpha$ is small: the remainder usually has the sign of the drive ($T_L$ is a median 0.94 times the output-layer term and positive at 85\% of 170 centres examined in detail), it comes mostly from the rotation of the output weights and the second hidden layer, and it lies on the same eigendirections of $K$ (the 6th to the 20th) as the drive; Proposition~\ref{eos:prop:cert} bounds $|T_L|$ and cannot use its sign. At 3 of these 170 centres ($\sin20x$ at the larger step size) $T_L$ is negative and larger than the drive, so $\alpha < 0$: Assumption~1 of \cite{damian2023} does not hold at every point of these runs, and no statement that $\alpha > 0$ at every point of the edge can hold for them.
-\item For $\sin10x$ and $\sin20x$, in every initialization and at both step sizes, the kernel grows mostly on its smaller eigenvalues: its 10th eigenvalue grows by a factor 170 to 2200 and its 20th by $4\times10^3$ to $8\times10^5$, while $\lambda_1$ grows by 2 to 4 and stops at $2/\eta$; the number of eigenvalues above $10^{-12}\lambda_1$, the resolution of the computation, rises from 28--29 to 43--69. For $\sin40x$ the 10th eigenvalue grows by 2 to 45.
-\item Comparing the two step sizes at equal $\eta t$ (the larger at step $s$, the smaller at step $2s$, $s = 2000,\dots,10000$): the 10th and 20th eigenvalues grow by the same factors (for $\sin20x$, 186 and 180, and $8.7\times10^3$ and $8.8\times10^3$; for $\sin10x$, 149 and 154), while $\lambda_1$ is capped at the edge (a factor 2.0 against 4.0 for $\sin10x$). The growth of the slow part of the kernel follows $\eta t$, not the step size; the edge caps the top eigenvalue without changing it. It does not speed up learning: the error at equal $\eta t$ is the same for $\sin20x$ (0.53) and larger at the edge for $\sin10x$ (0.13 against 0.08).
-\item The amount of sharpening is predicted by the target's step length under the kernel at initialization, $\Upsilon_Y(\gamma)$ of Eq.~\eqref{eq:ugamma} with $K$ at initialization and $\gamma = 1/(\eta T)$, $T = 20000$ steps: its Spearman rank correlation with the largest $\lambda_1/\lambda_1(0)$ is 0.96 at the smaller step size and 0.92 at the larger (18 networks each, six distinct targets), against 0.63 and 0.75 for the frequency $\omega$ and for the norm of the slow part $\|Y_\gamma\|$. At the smaller step size it orders the six targets exactly as their sharpening, including $\sin40x$, which is rougher than $\sin10x$ and $\sin20x$ but sharpens less because little of it is fitted in $T$ steps. For a linear network, $\Upsilon_Y(0^+) = \sum_ky_k^2/\lambda_k$ with $K = XX^\top$ is the ``dataset difficulty'' that \cite{yoo2025} found to predict sharpness for deep linear chains.
-\item At the edge ($\sin10x$, $\eta = 1/\lambda_1(0)$, single steps from step 10000): the gradient step keeps the fraction $-1.00$ of $\hat e_1$, the best step of the same length 0.01, and the term $k = 1$ carries 97\% of Eq.~\eqref{eos:eq:gap}. The sharpness at the midpoint of consecutive iterates follows the self-stabilization prediction of \cite{damian2023} (correlation 1.000, ratio 0.98).
+\item $\lambda_{\max}(\nabla^2L)$ and $\lambda_1$ agree to within $0.01/\eta$ on the second half of every run. The largest $\eta\lambda_1$ is 0.51 to 1.06 for $\sin x$ and $\sin2x$, 0.70 to 1.71 for $\sin5x$, and 2.13 to 2.28 for $\sin10x$ at both step sizes; $\sin20x$ reaches the edge at the larger step size (2.10 to 2.15) but not at the smaller one (1.37 to 1.72), and $\sin40x$ reaches 1.75 to 2.06. Rougher targets sharpen further, as in Appendix~L.2 of \cite{cohen2021}, up to targets that the network has not yet begun to fit.
+\item The first-order term of Proposition~\ref{eos:prop:rate}(b) matches the exact one-step change of $\lambda_1$ to a median relative difference of $3$ to $4\times10^{-5}$ away from the edge, and to 1--5\% at the edge.
+\item Lemma~\ref{eos:lem:layer}: $\delta_L$ and $\varepsilon_L$ vanish to rounding; for the hidden layers $\|\delta_l\|$ is 0.2 to 2.7 times $\|\hat Y\|$, almost all from $\psi$.
+\item For $\sin10x$ and $\sin20x$ the kernel grows mostly on its smaller eigenvalues: its 10th eigenvalue grows by a factor 170 to 2200 and its 20th by $4\times10^3$ to $8\times10^5$, while $\lambda_1$ grows by 2 to 4 and stops at $2/\eta$; the number of eigenvalues above $10^{-12}\lambda_1$, the resolution of the computation, rises from 28--29 to 43--69. At equal $\eta t$ the two step sizes give the same growth of the 10th and 20th eigenvalues (for $\sin20x$, 186 and 180, and $8.7\times10^3$ and $8.8\times10^3$), so the growth of the slow part of the kernel follows $\eta t$; the edge caps $\lambda_1$ without redirecting the growth, and it does not speed up learning (at equal $\eta t$ the error is the same for $\sin20x$ and larger at the edge for $\sin10x$, 0.13 against 0.08).
 \item The Adam runs of Section~\ref{sec:num-repeat} are at the edge of stability for Adam: $\eta_t\lambda_1$, with $\lambda_1$ the top eigenvalue of the preconditioned kernel and $\eta_t$ the scheduled step size, is 32 to 39 at steps 500 and 5000 for every target and initialization, against the threshold 38, which is consistent with the transient spikes of the loss being the oscillation of the edge of stability; the spikes were not checked against $\lambda_1$ step by step.
 \end{itemize}
