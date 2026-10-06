@@ -10,6 +10,7 @@ from train import _roll
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--roots", nargs="+", required=True, help="width:out_root pairs, e.g. 256:$R 128:$R/pilot/w128")
+ap.add_argument("--match", nargs="*", default=None, help="only runs whose name contains one of these")
 ap.add_argument("--part", type=int, default=0); ap.add_argument("--nparts", type=int, default=1)
 a = ap.parse_args()
 dev = "cuda" if torch.cuda.is_available() else "cpu"
@@ -18,6 +19,7 @@ for spec in a.roots:
     cfg = load_cfg("config.yaml", [f"hidden=[{W},{W},{W}]", f"out_root={root}"])
     Ts = cfg["long_horizons"]
     runs = sorted(r for r in os.listdir(os.path.join(root, "runs")) if os.path.exists(os.path.join(root, "runs", r, "ckpts.pt")))
+    if a.match: runs = [r for r in runs if any(x in r for x in a.match)]
     runs = runs[a.part::a.nparts]
     res, datas = {}, {}
     for run in runs:
@@ -39,4 +41,4 @@ for spec in a.roots:
                     st["p90"].append(float(torch.quantile(x, 0.9))); st["p99"].append(float(torch.quantile(x, 0.99)))
             res[(run, cls, seed)] = {k: np.array(v) for k, v in st.items()}
         print(f"W{W} {run}", flush=True)
-    torch.save(res, os.path.join(root, f"robust_eval_part{a.part}.pt"))
+    torch.save(res, os.path.join(root, f"robust_eval{'_' + a.match[0] if a.match else ''}_part{a.part}.pt"))

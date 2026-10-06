@@ -201,6 +201,21 @@ def loss_unrolled(arch, th, c, uT, p, w=None, cap=None):
     return L / (p if w is None else sum(w))
 
 
+def loss_first_order(arch, th, c, uT, p, w=None):
+    """First-order part of L_p: sum_q w_q (1/2)|e1(t_q)|^2 / sum_q w_q, with e1 = L eps, the one-step errors at the true
+    states propagated by the Jacobians of the learned map at the true states. The Jacobians are held fixed (no gradient
+    through them), so the gradient is exactly -Phi^T L^T W L eps, the first-order part of the multistep gradient: it
+    reweights the one-step errors but contains no change of the learned Jacobian (no error correction)."""
+    thd = th.detach()
+    jac = vmap(jacfwd(lambda x: gt(arch, thd, x, c)))
+    e1, L = torch.zeros_like(uT[0]), 0.0
+    for q in range(1, p + 1):
+        J = jac(uT[q - 1]).detach()
+        e1 = torch.einsum("nab,nb->na", J, e1) + (uT[q] - gt(arch, th, uT[q - 1], c))
+        L = L + (1.0 if w is None else w[q - 1]) * 0.5 * sq(e1)
+    return L / (p if w is None else sum(w))
+
+
 def loss_weights(gamma, dt, p):
     """Per-step weights exp(-gamma t_q), t_q = q dt: damping per unit physical time (alpha = exp(-gamma dt) per step)."""
     return None if not gamma else [math.exp(-gamma * q * dt) for q in range(1, p + 1)]

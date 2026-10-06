@@ -21,7 +21,7 @@ from torch.func import jvp, vmap
 
 from msr.config import load_cfg, run_dir
 from msr.curvature import gn_lam_max
-from msr.core import Arch, Model, loss_onestep, loss_unrolled, loss_weights, make_data, nsteps, stack_consts, sq, train_steps
+from msr.core import Arch, Model, loss_first_order, loss_onestep, loss_unrolled, loss_weights, make_data, nsteps, stack_consts, sq, train_steps
 
 
 def ckpt_steps(cfg):
@@ -50,6 +50,8 @@ def main():
     ap.add_argument("--lr-rule", default="none", choices=["none", "sqrt", "inv", "line"],
                     help="sqrt/inv: per-model peak lr = lr * min(1, (lam_anchor / lam_start)^alpha), alpha = 1/2 or 1; "
                          "line: Adam direction u, step length min(lr schedule, line_c g.u / |Psi u|_w^2) (no anchor)")
+    ap.add_argument("--first-order", action="store_true",
+                    help="train on the first-order part of the window loss (Jacobians at the true states held fixed)")
     ap.add_argument("--cap", type=float, default=None,
                     help="per-start cap (state units): a start stops contributing once its rollout error first exceeds it")
     ap.add_argument("--lr-anchor-run", default=None, help="run whose meta.json lam_start is the anchor (paired with lr)")
@@ -63,7 +65,6 @@ def main():
     dt, pr = a.dt, cfg["protocols"][a.proto]
     p = train_steps(pr, dt)
     unrolled = p is not None
-    assert unrolled or a.init == "scratch"
     out = run_dir(cfg, dt, a.proto, a.init) + a.suffix
     os.makedirs(out, exist_ok=True)
 
@@ -92,7 +93,8 @@ def main():
 
     f_one = vmap(lambda th, c, X, Y: loss_onestep(arch, th, c, X, Y))
     w = loss_weights(pr.get("gamma", 0.0), dt, p) if unrolled else None
-    f_unr = vmap(lambda th, c, U: loss_unrolled(arch, th, c, U, p, w, a.cap))
+    f_unr = vmap((lambda th, c, U: loss_first_order(arch, th, c, U, p, w)) if a.first_order else
+                 (lambda th, c, U: loss_unrolled(arch, th, c, U, p, w, a.cap)))
 
     # optional: curvature of this run's own loss at its start, and per-model learning rates scaled by it
     lam0, scale = None, np.ones(M)
@@ -216,7 +218,7 @@ def main():
            + ([f"alpha_{c}{s}" for c, s in names] if line else []))
     np.savetxt(os.path.join(out, "log.csv"), np.array(log), delimiter=",", header=",".join(hdr), comments="")
     with open(os.path.join(out, "meta.json"), "w") as fh:
-        json.dump(dict(dt=dt, proto=a.proto, init=a.init, suffix=a.suffix, from_run=a.from_run, gamma=pr.get("gamma", 0.0), cap=a.cap, lr=cfg["lr"],
+        json.dump(dict(dt=dt, proto=a.proto, init=a.init, suffix=a.suffix, from_run=a.from_run, gamma=pr.get("gamma", 0.0), cap=a.cap, first_order=a.first_order, lr=cfg["lr"],
                        lam_start=lam0, lr_rule=a.lr_rule, lr_anchor_run=a.lr_anchor_run,
                        line_c=cfg.get("line_c", 0.25) if line else None, line_every=cfg.get("line_every", 1) if line else None,
                        lr_models=[float(cfg["lr"] * s) for s in scale], p=p, names=names, wall_s=time.time() - t0,
