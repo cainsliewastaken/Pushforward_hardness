@@ -50,6 +50,8 @@ def main():
     ap.add_argument("--lr-rule", default="none", choices=["none", "sqrt", "inv", "line"],
                     help="sqrt/inv: per-model peak lr = lr * min(1, (lam_anchor / lam_start)^alpha), alpha = 1/2 or 1; "
                          "line: Adam direction u, step length min(lr schedule, line_c g.u / |Psi u|_w^2) (no anchor)")
+    ap.add_argument("--cap", type=float, default=None,
+                    help="per-start cap (state units): a start stops contributing once its rollout error first exceeds it")
     ap.add_argument("--lr-anchor-run", default=None, help="run whose meta.json lam_start is the anchor (paired with lr)")
     ap.add_argument("--set", nargs="*", default=[], help="config overrides key=yaml_value")
     a = ap.parse_args()
@@ -90,7 +92,7 @@ def main():
 
     f_one = vmap(lambda th, c, X, Y: loss_onestep(arch, th, c, X, Y))
     w = loss_weights(pr.get("gamma", 0.0), dt, p) if unrolled else None
-    f_unr = vmap(lambda th, c, U: loss_unrolled(arch, th, c, U, p, w))
+    f_unr = vmap(lambda th, c, U: loss_unrolled(arch, th, c, U, p, w, a.cap))
 
     # optional: curvature of this run's own loss at its start, and per-model learning rates scaled by it
     lam0, scale = None, np.ones(M)
@@ -119,8 +121,12 @@ def main():
         swq = torch.sqrt(Wq / Wq.sum())
 
         def uGu(th, c, U, u):
-            f = lambda t: (swq[:, None, None] * _rollseq(arch, t, c, U[0], p)).reshape(-1) / math.sqrt(U.shape[1])
-            return (jvp(f, (th,), (u,))[1] ** 2).sum()
+            seq, tan = jvp(lambda t: _rollseq(arch, t, c, U[0], p), (th,), (u,))
+            tan = swq[:, None, None] * tan / math.sqrt(U.shape[1])
+            if a.cap is not None:          # same per-start mask as the capped loss
+                ok = ((U[1:p + 1] - seq) ** 2).sum(-1) <= a.cap ** 2
+                tan = tan * torch.cumprod(ok.to(tan.dtype), 0)[..., None]
+            return (tan ** 2).sum()
 
         curv_dir = vmap(uGu)
         ratio = torch.zeros(M, device=dev)                   # line_c g.u / u^T G u, refreshed every line_every steps
@@ -210,7 +216,7 @@ def main():
            + ([f"alpha_{c}{s}" for c, s in names] if line else []))
     np.savetxt(os.path.join(out, "log.csv"), np.array(log), delimiter=",", header=",".join(hdr), comments="")
     with open(os.path.join(out, "meta.json"), "w") as fh:
-        json.dump(dict(dt=dt, proto=a.proto, init=a.init, suffix=a.suffix, from_run=a.from_run, gamma=pr.get("gamma", 0.0), lr=cfg["lr"],
+        json.dump(dict(dt=dt, proto=a.proto, init=a.init, suffix=a.suffix, from_run=a.from_run, gamma=pr.get("gamma", 0.0), cap=a.cap, lr=cfg["lr"],
                        lam_start=lam0, lr_rule=a.lr_rule, lr_anchor_run=a.lr_anchor_run,
                        line_c=cfg.get("line_c", 0.25) if line else None, line_every=cfg.get("line_every", 1) if line else None,
                        lr_models=[float(cfg["lr"] * s) for s in scale], p=p, names=names, wall_s=time.time() - t0,

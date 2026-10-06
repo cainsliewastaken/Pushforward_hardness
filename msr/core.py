@@ -184,13 +184,20 @@ def loss_onestep(arch, th, c, X, Y):
     return 0.5 * sq(Y - gt(arch, th, X, c))
 
 
-def loss_unrolled(arch, th, c, uT, p, w=None):
+def loss_unrolled(arch, th, c, uT, p, w=None, cap=None):
     """L_p = sum_q w_q (1/2)|e(t_q)|^2 / sum_q w_q from the starts uT[0], q = 1..p. Default w_q = 1, i.e.
-    (1/p) sum_q; damped training uses w_q = exp(-gamma t_q) (see loss_weights)."""
-    u, L = uT[0], 0.0
+    (1/p) sum_q; damped training uses w_q = exp(-gamma t_q) (see loss_weights).
+    cap (state units): a start contributes only up to the last step before its error first exceeds cap
+    (the mask is not differentiated; the average over starts keeps the full start count)."""
+    u, L, alive = uT[0], 0.0, None
     for q in range(1, p + 1):
         u = gt(arch, th, u, c)
-        L = L + (1.0 if w is None else w[q - 1]) * 0.5 * sq(uT[q] - u)
+        d = uT[q] - u
+        if cap is not None:
+            ok = (d.detach() ** 2).sum(-1) <= cap * cap
+            alive = ok if alive is None else alive & ok
+            d = torch.where(alive[..., None], d, torch.zeros_like(d))
+        L = L + (1.0 if w is None else w[q - 1]) * 0.5 * sq(d)
     return L / (p if w is None else sum(w))
 
 
