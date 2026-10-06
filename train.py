@@ -20,6 +20,7 @@ import torch
 from torch.func import vmap
 
 from msr.config import load_cfg, run_dir
+from msr.curvature import gn_lam_max
 from msr.core import Arch, Model, loss_onestep, loss_unrolled, loss_weights, make_data, nsteps, stack_consts, sq, train_steps
 
 
@@ -45,6 +46,10 @@ def main():
     ap.add_argument("--init", default="scratch", choices=["scratch", "ft"])
     ap.add_argument("--suffix", default="", help="appended to the run directory (variants of a protocol)")
     ap.add_argument("--from-run", default=None, help="fine-tune from this run directory (default: the onestep run)")
+    ap.add_argument("--measure-curv", action="store_true", help="record each model's loss curvature at the start (meta.json)")
+    ap.add_argument("--lr-rule", default="none", choices=["none", "sqrt", "inv"],
+                    help="per-model peak lr = lr * min(1, (lam_anchor / lam_start)^alpha), alpha = 1/2 (sqrt) or 1 (inv)")
+    ap.add_argument("--lr-anchor-run", default=None, help="run whose meta.json lam_start is the anchor (paired with lr)")
     ap.add_argument("--set", nargs="*", default=[], help="config overrides key=yaml_value")
     a = ap.parse_args()
     cfg = load_cfg(a.cfg, a.set)
@@ -75,8 +80,6 @@ def main():
         for k, v in src["stats"].items():         # same normalization as the model being fine-tuned
             assert torch.allclose(v.cpu(), data["stats"][k].cpu(), rtol=1e-12, atol=0), k
         TH = src["theta"][max(src["theta"])].clone()
-    TH.requires_grad_(True)
-    opt = torch.optim.Adam([TH], lr=cfg["lr"])
     M, B = len(names), cfg["batch"]
     uTr, uTe = data["uT_train"], data["uT_test"]
     ntr = uTr.shape[1]
@@ -88,18 +91,44 @@ def main():
     w = loss_weights(pr.get("gamma", 0.0), dt, p) if unrolled else None
     f_unr = vmap(lambda th, c, U: loss_unrolled(arch, th, c, U, p, w))
 
+    # optional: curvature of this run's own loss at its start, and per-model learning rates scaled by it
+    lam0, scale = None, np.ones(M)
+    if unrolled and (a.measure_curv or a.lr_rule != "none"):
+        uc = uTe[:, :cfg.get("n_curv", 512)]
+        lam0 = [gn_lam_max(models[j], TH[j], uc, p, w) for j in range(M)]
+        print(f"[{a.proto}/{a.init} dt={dt}] curvature at start: " + " ".join(f"{x:.3g}" for x in lam0), flush=True)
+    if a.lr_rule != "none":
+        anc = json.load(open(os.path.join(cfg["out_root"], "runs", a.lr_anchor_run, "meta.json")))
+        assert anc["names"] == [list(nm) for nm in names] and anc.get("lam_start")
+        alpha = dict(sqrt=0.5, inv=1.0)[a.lr_rule]
+        scale = np.minimum(1.0, (np.array(anc["lam_start"]) / np.array(lam0)) ** alpha)   # never above the anchor lr
+        print(f"[{a.proto}/{a.init} dt={dt}] lr rule {a.lr_rule}: peak lr per model "
+              + " ".join(f"{cfg['lr'] * s:.3g}" for s in scale), flush=True)
+    per_model = lam0 is not None
+    if per_model:          # one Adam parameter group per model (Adam is elementwise: same math as stacked)
+        params = [TH[j].detach().clone().requires_grad_(True) for j in range(M)]
+        opt = torch.optim.Adam([{"params": [q], "lr": cfg["lr"] * scale[j]} for j, q in enumerate(params)], lr=cfg["lr"])
+        theta = lambda: torch.stack(params)
+    else:
+        TH.requires_grad_(True)
+        opt = torch.optim.Adam([TH], lr=cfg["lr"])
+        theta = lambda: TH
+
     @torch.no_grad()
     def evaluate():
         """Held-out one-step loss over the training window and rollout error |e(T)| at the
-        longest training horizon, per model (first n_grad held-out starts)."""
+        longest training horizon, per model (first n_grad held-out starts); for unrolled runs
+        also the run's own loss on those starts."""
+        TH_ = theta()
         U = uTe[:, :cfg["n_grad"]]
         X, Y = U[:pwin].reshape(-1, 3), U[1:pwin + 1].reshape(-1, 3)
-        one = vmap(lambda th, c: loss_onestep(arch, th, c, X, Y))(TH, C)
-        e = vmap(lambda th, c: _roll(arch, th, c, U[0], pev))(TH, C)
-        return one, torch.sqrt(sq(U[pev][None] - e))
+        one = vmap(lambda th, c: loss_onestep(arch, th, c, X, Y))(TH_, C)
+        e = vmap(lambda th, c: _roll(arch, th, c, U[0], pev))(TH_, C)
+        own = vmap(lambda th, c: loss_unrolled(arch, th, c, U[:p + 1], p, w))(TH_, C) if unrolled else None
+        return one, torch.sqrt(sq(U[pev][None] - e)), own
 
     cks = set(ckpt_steps(cfg))
-    saved, log = {0: TH.detach().clone()}, []
+    saved, log = {0: theta().detach().clone()}, []
 
     def save():
         torch.save(dict(names=names, theta=saved, stats={k: v.cpu() for k, v in data["stats"].items()},
@@ -107,11 +136,12 @@ def main():
 
     for k in range(cfg["steps"] + 1):
         if k in cks:
-            saved[k] = TH.detach().clone()
+            saved[k] = theta().detach().clone()
             save()
         if k % cfg["log_every"] == 0 or k == cfg["steps"]:
-            one, eT = evaluate()
-            log.append([k, lr_at(cfg, min(k, cfg["steps"] - 1))] + one.tolist() + eT.tolist())
+            one, eT, own = evaluate()
+            log.append([k, lr_at(cfg, min(k, cfg["steps"] - 1))] + one.tolist() + eT.tolist()
+                       + ([] if own is None else own.tolist()))
             if k % (20 * cfg["log_every"]) == 0:
                 print(f"[{a.proto}/{a.init} dt={dt}] step {k} {time.time() - t0:.0f}s  heldout one-step "
                       + " ".join(f"{x:.2e}" for x in one.tolist()), flush=True)
@@ -120,24 +150,31 @@ def main():
         idx = torch.randint(ntr, (M, B), generator=gen, device=dev)
         if unrolled:
             U = uTr[:p + 1, idx].permute(1, 0, 2, 3)            # (M, p+1, B, 3)
-            losses = f_unr(TH, C, U)
+            losses = f_unr(theta(), C, U)
         else:
             i = torch.randint(pwin, (M, B), generator=gen, device=dev)
             X, Y = uTr[i, idx], uTr[i + 1, idx]
-            losses = f_one(TH, C, X, Y)
-        for g in opt.param_groups:
-            g["lr"] = lr_at(cfg, k)
+            losses = f_one(theta(), C, X, Y)
+        for j, g in enumerate(opt.param_groups):
+            g["lr"] = lr_at(cfg, k) * (scale[j] if per_model else 1.0)
         opt.zero_grad()
         losses.sum().backward()
-        gn = torch.linalg.norm(TH.grad, dim=1)
-        TH.grad *= torch.clamp(cfg["clip"] / (gn + 1e-300), max=1.0)[:, None]
+        if per_model:
+            for q in params:
+                q.grad *= min(1.0, cfg["clip"] / (float(torch.linalg.norm(q.grad)) + 1e-300))
+        else:
+            gn = torch.linalg.norm(TH.grad, dim=1)
+            TH.grad *= torch.clamp(cfg["clip"] / (gn + 1e-300), max=1.0)[:, None]
         opt.step()
 
     save()
-    hdr = ["step", "lr"] + [f"onestep_{c}{s}" for c, s in names] + [f"eT_{c}{s}" for c, s in names]
+    hdr = (["step", "lr"] + [f"onestep_{c}{s}" for c, s in names] + [f"eT_{c}{s}" for c, s in names]
+           + ([f"own_{c}{s}" for c, s in names] if unrolled else []))
     np.savetxt(os.path.join(out, "log.csv"), np.array(log), delimiter=",", header=",".join(hdr), comments="")
     with open(os.path.join(out, "meta.json"), "w") as fh:
-        json.dump(dict(dt=dt, proto=a.proto, init=a.init, suffix=a.suffix, from_run=a.from_run, gamma=pr.get("gamma", 0.0), lr=cfg["lr"], p=p, names=names, wall_s=time.time() - t0,
+        json.dump(dict(dt=dt, proto=a.proto, init=a.init, suffix=a.suffix, from_run=a.from_run, gamma=pr.get("gamma", 0.0), lr=cfg["lr"],
+                       lam_start=lam0, lr_rule=a.lr_rule, lr_anchor_run=a.lr_anchor_run,
+                       lr_models=[float(cfg["lr"] * s) for s in scale], p=p, names=names, wall_s=time.time() - t0,
                        device=dev, P=arch.P, ckpts=sorted(saved)), fh, indent=1)
     print(f"[{a.proto}/{a.init} dt={dt}] done {time.time() - t0:.0f}s", flush=True)
 
