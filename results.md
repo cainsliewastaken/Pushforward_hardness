@@ -150,7 +150,7 @@ Not explained by the theory: the best window (0.3-0.6 Lyapunov times at a fixed 
 
 ---
 
-## Follow-up 11 (planned, not run): the unremovable fraction at two step lengths
+## Follow-up 11 (planned here; run as part of follow-up 12, results there): the unremovable fraction at two step lengths
 
 **Why.** The best-window note (`multistep_best_window.tex`, Theorem "exact reformulation" and the proposition "the unremovable fraction") gives, exactly,
 
