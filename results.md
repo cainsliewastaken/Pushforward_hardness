@@ -168,6 +168,88 @@ with lambda_i(p) the Gauss-Newton eigenvalues of the window loss, pi(p) the S_p-
 
 **Cost.** GPU job of the size of check (v) (kernel formed explicitly for 5-6 windows x 4 step lengths x 2 classes); ask before submitting. Not run as of 2026-10-06.
 
+## Follow-up 12: nudged training and the checks of the best-window note (2026-10-06)
+
+Job 59463157 (interactive, 1 node, 4 GPUs, 24 min). Code: `--nudge r0` in `train.py` (`msr.core.rollout_nudged`,
+`loss_nudged`: before each step the deviation from the true state is relaxed to `psi(x) = r0 x / sqrt(r0^2 + |x|^2)`),
+`rate_checks.py`, `followup12.sh`. Tables: `tables_followup12.md` (curvature, follow-up 11, training) and
+`tables_followup12_logs.md` (rates, surrogate, screen; rebuilt from the job logs because the four check jobs overwrote
+one another's `rate_checks.pt`; fixed in the script). Euler, dt 0.08, width 256, 3 seeds, held-out starts.
+
+**Nudged training at a fixed learning rate (the method).** 4000 steps from the 0.64-window s4k fixed models.
+- Window 1.28 at lr 1e-4: the free run diverges (own held-out loss x7-21, |e(0.32)| 0.073-0.081 against 0.0024-0.0027
+  before, |e(1.28)| rms 0.21-0.31). Every nudged run trains at that learning rate: own loss end/start 0.72-0.93 at
+  r0 = 0.01 and 0.03, 0.76-1.1 at 0.1, 0.95-1.9 at 0.3, 0.52-2.2 at 1 (transient spikes x19-27 at r0 <= 0.03, x45-62 at
+  0.1, x110-310 at 0.3-1). Errors at T = 1.28 by the median over starts: 0.0044-0.0046 (r0 = 0.01), 0.0045-0.0049 (0.03),
+  0.0051-0.0065 (0.1), 0.0057-0.0092 (0.3), 0.0050-0.0067 (1), against one-step 0.0066-0.0105, the 0.32 window
+  0.0047-0.0062, the fixed-lr 1.28 run 0.0053-0.0112 and the curvature-scaled (inv) 1.28 run 0.0041-0.0051. By the rms:
+  nudged 0.066-0.13 (r0 <= 0.03) against inv 0.043-0.063 and the 0.32 window 0.115-0.121. At T = 0.32 the nudged runs are
+  slightly worse than the 0.32 window (0.0025-0.0031 against 0.0021-0.0024). So: nudging makes the 1.28 window trainable
+  at the learning rate at which free training fails, with no curvature-dependent learning-rate rule, and matches the
+  curvature-scaled rule on the median but not on the rms, which the starts outside the radius set and the nudged loss
+  does not train (Section 10 of the note).
+- The best radius for the error at T = 1.28 is 0.01-0.03, which is the free deviation at T of the starts that carry the
+  median (median 0.005, 90th percentile 0.02): the prescription of Section 9 (radius at the free deviation scale at T).
+  Larger radii are worse on every measure and spike more.
+- Window 2.56 at lr 1e-4: the free run fails (|e(0.32)| 0.11-0.13). Nudged at r0 = 0.03 it also fails, differently: the own
+  loss stays flat (0.95-1.4) but the free error gets worse at every horizon (|e(0.32)| 0.057-0.059, median at 1.28
+  0.019); at r0 = 0.3 it holds its starting errors without improving (|e(0.32)| 0.006-0.014, median at 1.28
+  0.0058-0.0096). With 32 steps nearly every relaxed input carries the full deviation r0, so the labels of the relaxed
+  dataset are the one-step target plus a correction of size r0 (Proposition "the nudged loss is a one-step loss on
+  relaxed inputs"); at r0 = 0.03, thirty times the one-step error, the network trades one-step accuracy for the
+  correction, and the free rollout pays. The window should not extend far beyond the horizon at which the free deviation
+  reaches the radius; at r0 = 0.03 that is about 1.28.
+
+**Curvature of the window loss, free against nudged** (`rate_checks.py --parts curv`, 256 starts, Lanczos). At window
+1.28: free 6.6e7-8.4e7, nudged r0 = 0.03: 5.0e5-2.9e6, r0 = 0.3: 2.7e6-4.6e7 (one-step models; the 0.32-window and inv
+models the same within a factor 2). At 2.56: free 4.3e8-5.6e8, r0 = 0.03: 1.3e6-2.2e7, r0 = 0.3: 1.3e7-7.4e7. Nudging
+lowers the curvature by 20-130x at r0 = 0.03 and 2-30x at 0.3; the growth from 1.28 to 2.56 is x6-7 free and x2.6-7.5
+nudged, so the level drops much more than the growth rate: the damped per-step gains are not below one on this system,
+and the linear-in-window bound of Section 8 does not apply. The curvature at the start of the nudged training runs
+(meta.json lam_start) is 1.9e5-4.5e5 at r0 = 0.01 and 7e5-1.7e6 at 0.03, against 3.8e7-4.6e7 free, which is why lr 1e-4
+trains.
+
+**Rates per unit motion on the free error of the starts inside the radius** (Theorem 10; T = 1.28, inside = free
+deviation over [0, T] at most r0/2, 512 starts). The realized rates: the nudged rule beats the one-step rule in 3/3
+seeds at r0 >= 0.03 and the free rule in 3/3 seeds at r0 >= 0.3 (2/3 at 0.1) on the one-step and 0.32-window models;
+at r0 = 0.01 the nudged rate is often negative (a nudge that small produces a step that increases the inside error:
+Section 9's harm). The certificate of Theorem 10 never fires: |delta|/(c|a|) is 1-300, so the lower bound on the nudged
+rate is undefined. Two reasons, both in the theory's own terms: the inside departure |a~ - a|/|a| is 0.09-0.9, because
+the third-order nudging corrections are propagated and amplified over 16 steps (the factors ell'^(q-i) of Lemma 8(4)),
+and the outside starts' damped gradient is not small. The free gradient is dominated by the outside starts,
+|g_out|/(c|a|) = 10-36000, and cos(a, g_out) is mostly positive (0.1-0.95): at the level of rates the saturated starts do
+not oppose the inside objective; what they do is set the step length, which is the fixed-learning-rate overshoot of
+Remark "fixed learning rate". Conclusion: the comparison of rates is a measurement, and the a priori certificate is too
+loose by orders of magnitude on this system.
+
+**Nudged loss against the free objective** (Proposition 12). The gap |V_T - V~_T| is below its bound in every case
+(bound/gap 2-10 for the trained models, 1e3 for the diverged free_lr1e-4 models). But the gap is the whole of V_T: the
+nudged loss is 10-100x smaller than the free T-step error at r0 <= 0.1, because the free error is the rms over starts and
+the starts outside the radius carry it. The surrogate is faithful on the inside starts, as the proposition says, and
+not on the rms.
+
+**Online rule** (Theorem 6; N = 2.56, the window-N step of length lr sqrt(P), 5 step lengths; exact decrease by one
+rollout per candidate window). The exact best window shrinks with the step length: free rollouts, p* = 21-32 steps at
+lr 1e-8, 16-25 at 1e-6, 9-11 at 1e-4 (one-step models); nudged rollouts likewise (r0 = 0.3: 29-32, 10, 3-4). The
+first-order ranking puts p* at 21-32 at every step length, and the greedy stop on the sign of a_(p+1) - abar_p is
+erratic (2 on the free rollouts, where the second horizon's alignment is below the first's). At every step length
+above 1e-8 the window-N step increases the loss (by up to 100x the starting loss) while the best window decreases it:
+the choice of window at a fixed step size is decisive, and it is decided by the higher orders of the step series, not
+by the first term. So the cheap screen of Section 7 does not locate the optimum; the exact evaluation does, at one
+forward rollout per candidate. The forward-mode identity for a_q holds to 1e-15.
+
+**Follow-up 11** (unremovable fraction F(s)/|e| of the window error against the window, one-step Euler model seed 0,
+explicit kernel, N up to 12288). At every step length the minimum over windows is at 1.28: fractions 0.85 / 0.40 /
+0.16 / 0.28 / 0.20 at windows 0.32 / 0.64 / 1.28 / 1.92 / 2.56 for lr 1e-6, 0.56 / 0.14 / 0.063 / 0.098 / 0.080 for
+1e-4, 0.15 / 0.033 / 0.016 / 0.017 / 0.029 for 1e-3. The minimum does not move with the step length in this range; the
+ratio F(1.92)/F(1.28) falls from 1.8 to 1.0 as the step grows, in the predicted direction, and the curve is not
+unimodal (2.56 below 1.92 at every step length). The prediction that the minimum moves to longer windows is not
+confirmed; the mechanism is not refuted. Not run: the spectral weights above gamma_p(s).
+
+**Measurement notes.** The four check jobs shared one output file and overwrote one another (fixed: one file per job);
+the printed numbers in the logs are complete. The Lipschitz proxy in the surrogate bound uses the Jacobian norms at the
+two trajectories' states, not the maximum over the segment.
+
 # Tables (generated by aggregate.py)
 
 Over the 3 seeds: mean [min, max]. Final checkpoint, held-out starts.

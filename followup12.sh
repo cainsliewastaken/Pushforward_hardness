@@ -20,8 +20,8 @@ trn() {   # gpu name proto suffix lr [extra args]
 }
 BASE="dt0.08_onestep dt0.08_unroll032_ft_s4k dt0.08_unroll128_ft_s4k_inv"
 
-( job 0 rates_base rate_checks.py --runs $BASE --parts rates surrogate screen $EXTRA_RC ) &
-( job 1 curv_base rate_checks.py --runs $BASE --parts curv --seeds 0 1 2 $EXTRA_RC
+( job 0 rates_base rate_checks.py --runs $BASE --parts rates surrogate screen --out $R/rate_checks_base.pt $EXTRA_RC ) &
+( job 1 curv_base rate_checks.py --runs $BASE --parts curv --seeds 0 1 2 --out $R/rate_checks_curv_base.pt $EXTRA_RC
   job 1 check_v_fu11 theory_checks.py --part v --runs dt0.08_onestep --classes euler --seeds 0 --windows 0.32 0.64 1.28 1.92 2.56 --lrs 1e-6 1e-5 1e-4 1e-3 $EXTRA_TC ) &
 ( trn 2 free128_lr1e-4 unroll128 _s4k_free_lr1e-4 1.0e-4
   trn 2 nudge128_r0.01 unroll128 _s4k_nudge0.01_lr1e-4 1.0e-4 --nudge 0.01
@@ -38,7 +38,7 @@ echo "training and base checks done $(date +%T)" >> $L/exits.txt
 NEW=$(cd $R/runs && ls -d dt0.08_unroll128_ft_s4k_free_lr1e-4 dt0.08_unroll128_ft_s4k_nudge* dt0.08_unroll256_ft_s4k_* 2>/dev/null | tr "\n" " ")
 ( job 2 robust_new eval_robust.py --roots 256:$R --match _s4k_free_lr1e-4 _s4k_nudge --part 0 --nparts 2 ) &
 ( job 3 robust_new2 eval_robust.py --roots 256:$R --match _s4k_free_lr1e-4 _s4k_nudge --part 1 --nparts 2 ) &
-( job 0 rates_new rate_checks.py --runs $NEW --parts rates surrogate $EXTRA_RC ) &
-( job 1 curv_new rate_checks.py --runs $NEW --parts curv --windows 1.28 2.56 --curv-r0 0.1 $EXTRA_RC ) &
+( job 0 rates_new rate_checks.py --runs $NEW --parts rates surrogate --out $R/rate_checks_new.pt $EXTRA_RC ) &
+( job 1 curv_new rate_checks.py --runs $NEW --parts curv --windows 1.28 2.56 --curv-r0 0.1 --out $R/rate_checks_curv_new.pt $EXTRA_RC ) &
 wait
 echo "all done $(date +%T)" >> $L/exits.txt
