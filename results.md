@@ -250,6 +250,64 @@ confirmed; the mechanism is not refuted. Not run: the spectral weights above gam
 the printed numbers in the logs are complete. The Lipschitz proxy in the surrogate bound uses the Jacobian norms at the
 two trajectories' states, not the maximum over the segment.
 
+## Follow-up 13: nudging combined with the line step-size rule (2026-10-06)
+
+Question: does an adaptive step length improve nudged training, and does nudging let the step rule take longer steps? Run: job 59470084 (interactive, m5326, 1 node, 4 GPUs, 42 min). Code: `--nudge r0` combined with `--lr-rule line` in `train.py` (the rule's curvature pass uses the nudged rollout), `followup13.sh`; tables in `results/tables_followup13.md` (Euler class; the direct class is trained in the same runs and its columns are in each run's log.csv, not tabulated).
+
+The line rule (follow-up 7): direction u from Adam, step length alpha = min(lr schedule, line_c g.u / |Psi u|_w^2) with line_c = 0.25, i.e. a quarter of the minimiser of the local quadratic model of the run's own loss along u, refreshed every step by one JVP. lr schedule 1e-4 with warmup; it never binds (cap hits 0 % in every run).
+
+Three chains of 4000 steps each from the 0.32-window s4k model, windows 0.64 -> 1.28 -> 2.56, 3 seeds:
+- `line025`: free rollout, line rule (the follow-up 7 rule at width 256).
+- `nline025A`: nudged, radii 0.01 / 0.03 / 0.1 at the three windows (the radius follows the free deviation of the median start at the window's horizon, follow-up 12).
+- `nline025B`: nudged, radii 0.03 / 0.1 / 0.3.
+Plus one fixed-lr control: window 2.56, r0 = 0.1, lr 1e-4, from the 1.28 nudged (r0 = 0.03) model of follow-up 12.
+
+**Step length: the prediction was wrong, in the direction and the reason.** Predicted: nudging lowers the curvature 20-130x, so the rule takes steps 20-130x longer. Measured median alpha (seed range):
+
+| window | free line | nudged A | nudged B |
+|---|---|---|---|
+| 0.64 | 3.7e-8 - 5.7e-8 | 1.2e-8 - 1.5e-8 (r0 0.01) | 2e-8 - 3.2e-8 (r0 0.03) |
+| 1.28 | 7e-8 - 8.6e-8 | 4.7e-9 - 8.5e-9 (r0 0.03) | 1.2e-8 - 1.5e-8 (r0 0.1) |
+| 2.56 | 3.2e-8 - 4.8e-8 | 3e-9 - 4.4e-9 (r0 0.1) | 4.2e-9 - 6.7e-9 (r0 0.3) |
+
+The nudged steps are 2-20x shorter, and shorter the smaller the radius. Reason: alpha is the distance to the quadratic minimum along u, c g.u / u^T G u, and g.u is proportional to the gradient, which is proportional to the residual. Nudging replaces the free rollout residual (the accumulated error, 0.05-0.1 at 1.28) by residuals of nudged size (the correction labels, 1e-3 - 1e-2), so g.u drops by more than u^T G u does (own-loss curvature at the start of each chain stage: free 9.8e4 / 4.1e7 / 2.3e9-5e9 at the three windows; nudged A 3.9e4 / 1.3e6 / 2.4e7-4e7; nudged B 6.6e4 / 2.2e6-8.9e6 / 6.1e7-1e8). The lower curvature therefore does not show up as a longer step under this rule; it shows up as a smaller step with the same relative progress on a smaller loss. A rule that fixes the trust region in parameter space rather than along the quadratic model would take longer steps; this one was not run.
+
+**Stability: nudging + line rule is monotone, the free line rule is not.** Own held-out loss, logged every 100 steps (40 intervals per stage):
+
+| chain | window | own end/start | largest increase between logs |
+|---|---|---|---|
+| free line | 0.64 | 0.63 - 0.78 | +21 % to +98 % |
+| free line | 1.28 | 0.26 - 1.53 | +93 % to +235 % |
+| free line | 2.56 | 0.93 - 13.6 | +474 % to +1854 % |
+| nudged A | 0.64 / 1.28 / 2.56 | 0.77-0.89 / 0.86-0.89 / 0.86-0.98 | at most +3 % at every window |
+| nudged B | 0.64 / 1.28 / 2.56 | 0.63-0.80 / 0.82-0.85 / 0.78-0.94 | at most +9 % at every window |
+
+The free line rule at 2.56 ends two of three seeds at 5x and 14x their starting loss (the quadratic model along u with c = 0.25 is not a safe model of the free 2.56 loss). The nudged chains never increase their own loss by more than 9 % between logs. The "spike" column of the training table (largest ratio of a logged own loss to the start) is 1.0 for every nudged chain stage and 1.1-16 for the free chain.
+
+**Errors of the final models (4096 held-out starts, seed range, Euler class):**
+
+| run | window | rms 1.28 | med 1.28 | p99 1.28 | rms 2.56 | med 2.56 |
+|---|---|---|---|---|---|---|
+| start (0.32 s4k) | -- | 0.115-0.121 | 0.00465-0.00621 | 0.117-0.235 | 0.521-0.574 | 0.0147-0.0198 |
+| free line | 2.56 | 0.0564-0.0792 | 0.00444-0.00678 | 0.0997-0.164 | 0.522-0.596 | 0.0124-0.0189 |
+| nudged A | 2.56 | 0.0549-0.0674 | 0.00386-0.00514 | 0.11-0.192 | 0.422-0.699 | 0.0111-0.0148 |
+| nudged B | 2.56 | 0.0563-0.0658 | 0.00381-0.00557 | 0.104-0.185 | 0.519-0.576 | 0.0111-0.0158 |
+| inv rule (follow-up 6, 1.28) | 1.28 | 0.0432-0.0633 | 0.00407-0.0051 | 0.12-0.169 | 0.505-0.586 | 0.0125-0.0158 |
+| nudged fixed lr 1e-4, r0 0.03 (follow-up 12) | 1.28 | 0.0627-0.13 | 0.00446-0.00492 | 0.122-0.174 | 0.505-0.602 | 0.0148-0.0157 |
+| nudged fixed lr 1e-4, r0 0.1, from 1.28 nudged | 2.56 | 1.12-1.53 | 0.0436-0.0475 | 3.01-3.17 | 2-2.26 | 0.128-0.161 |
+| nudged fixed lr 1e-4, r0 0.03 (follow-up 12) | 2.56 | 0.352-0.432 | 0.0188-0.0194 | 1.18-1.23 | 1.49-1.63 | 0.0612-0.0624 |
+
+- The nudged line chains give the lowest median errors at both horizons of any run in this project (med 2.56 0.011-0.016 against 0.0125-0.016 for the inv rule and 0.012-0.019 for the free line rule), with the same rms at 1.28 as the free line rule and a slightly worse rms than the inv rule at 1.28 (the rms is set by the starts outside the radius, as in follow-up 12).
+- Window 2.56 is no longer harmful when nudged: with the line rule the 2.56 stage improves or holds every error (A: med 2.56 0.0125-0.0163 -> 0.0111-0.0148). At a fixed lr 1e-4 the same window degrades badly with r0 = 0.03 (follow-up 12) and diverges with r0 = 0.1 from the 1.28 nudged model (one-step error 1e-6 -> 4e-4, rms 1.28 1.1-1.5). The follow-up 12 reading "long windows with a small radius are harmful" was a step-size effect: the fixed step is 10^4 x the line rule's step on the nudged loss.
+- The free line rule at 2.56 improves the median at 2.56 over its 1.28 stage only on some seeds (0.0124-0.0189 against 0.0145-0.0186) and widens the spread; its own-loss blow-ups do not show as error blow-ups because the held-out error is measured on the final checkpoint only.
+
+**Curvature and rates of the final 2.56 models (T = 1.28 and 2.56, Euler, 3 seeds, `rate_checks_fu13_*.pt`):**
+- Free curvature (lambda_max of the Gauss-Newton matrix of the free window loss) is the same for all three final models: 7.3e7-7.7e7 at 1.28, 4.4e8-4.9e8 at 2.56. Nudged training does not make the free loss flatter.
+- Nudged curvature (r0 = 0.1): free-line model 3.7e6-3e7 at 1.28 and 3.8e7-2e8 at 2.56; nudged A 2.2e6-1.5e7 and 1.7e7-8e7; nudged B 2.4e6-8.9e6 and 1.7e7-4.4e7. The nudged-trained models are 2-4x flatter under the nudged loss, mostly at 2.56.
+- Rates per unit motion (Theorem 10 quantities, T = 1.28): the certificate fires in 2 of 30 cases (r0 = 1, seed 1 of A and of B, against one-step only; delta/(c|a|) 0.56 and 0.63). Realised rates: nudged > one-step in 11 of 15 cases at r0 >= 0.1, nudged > free in 8 of 15; signs are mixed at r0 <= 0.03 where the inside fraction is 0.2-0.8. Same picture as follow-up 12: the certificate is a measurement, not a proof, on these models.
+
+**Conclusion for the method.** Nudging + line rule is the most reliable recipe in this project: monotone own loss at every window up to 2.56, no divergence, best median errors, and it removes the fixed-lr failure of nudged training at long windows. Its advantage is not a longer step but a step rule that is trustworthy on the nudged loss and not on the free loss; the rms error at the first horizon stays limited by the starts outside the radius. Not run: a trust-region rule with a fixed parameter-space radius (would test whether the lower nudged curvature can be cashed in as longer steps).
+
 # Tables (generated by aggregate.py)
 
 Over the 3 seeds: mean [min, max]. Final checkpoint, held-out starts.
