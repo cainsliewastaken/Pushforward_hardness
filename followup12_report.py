@@ -122,13 +122,14 @@ def main():
     rob = {}
     for f in glob.glob(os.path.join(R, "robust_eval_*part*.pt")) + glob.glob(os.path.join(R, "robust_eval_part*.pt")):
         rob.update(torch.load(f, weights_only=False))
-    runs_tr = sorted(os.path.basename(d) for d in glob.glob(os.path.join(R, "runs", "dt0.08_unroll*_s4k_*lr1e-*")))
+    runs_tr = sorted({os.path.basename(d) for pat in ("dt0.08_unroll*_s4k_*lr1e-*", "dt0.08_unroll*_s4k_*line*", "dt0.08_unroll*_s4k_*nudge*")
+                      for d in glob.glob(os.path.join(R, "runs", pat))})
     ref = ["dt0.08_unroll032_ft_s4k", "dt0.08_unroll064_ft_s4k_fixed", "dt0.08_unroll128_ft_s4k_fixed", "dt0.08_unroll128_ft_s4k_inv"]
     P("## Nudged training at a fixed learning rate (4000 steps from the 0.64-window s4k fixed models, Euler, 3 seeds)\n")
     P("own: the run's own held-out loss, end/start and largest increase; lam0: curvature of the run's own loss at its start; "
       "errors |e_k(T)| on 4096 held-out starts, rms and median, seed ranges.\n")
-    P("| run | lam0 | own end/start | own spike | rms 0.32 | med 0.32 | rms 1.28 | med 1.28 | p99 1.28 | rms 2.56 | med 2.56 |")
-    P("|---|---|---|---|---|---|---|---|---|---|---|")
+    P("| run | lam0 | own end/start | own spike | median alpha | rms 0.32 | med 0.32 | rms 1.28 | med 1.28 | p99 1.28 | rms 2.56 | med 2.56 |")
+    P("|---|---|---|---|---|---|---|---|---|---|---|---|")
     for run in ref + runs_tr:
         d = os.path.join(R, "runs", run)
         if not os.path.exists(os.path.join(d, "meta.json")):
@@ -137,7 +138,7 @@ def main():
         names = [tuple(x) for x in meta["names"]]
         ej = [j for j, (c, s) in enumerate(names) if c == "euler"]
         lam0 = [meta["lam_start"][j] for j in ej] if meta.get("lam_start") else []
-        own_es, own_sp = [], []
+        own_es, own_sp, alphas = [], [], []
         if os.path.exists(os.path.join(d, "log.csv")):
             log = np.genfromtxt(os.path.join(d, "log.csv"), delimiter=",", names=True)
             for c, s in names:
@@ -146,6 +147,9 @@ def main():
                     v = log[col]
                     own_es.append(float(v[-1] / v[0]))
                     own_sp.append(float(v.max() / v[0]))
+                acol = f"alpha_{c}{s}"
+                if c == "euler" and acol in log.dtype.names:
+                    alphas.append(float(np.median(log[acol][1:])))
         stats = {}
         for T in (0.32, 1.28, 2.56):
             for q in ("rms", "med", "p99"):
@@ -157,7 +161,7 @@ def main():
                         if T in Ts:
                             vals.append(float(rob[k][q][Ts.index(T)]))
                 stats[(T, q)] = rng(vals)
-        P(f"| {run} | {rng(lam0)} | {rng(own_es, 2)} | {rng(own_sp, 2)} | {stats[(0.32, 'rms')]} | {stats[(0.32, 'med')]} | "
+        P(f"| {run} | {rng(lam0)} | {rng(own_es, 2)} | {rng(own_sp, 2)} | {rng(alphas, 2)} | {stats[(0.32, 'rms')]} | {stats[(0.32, 'med')]} | "
           f"{stats[(1.28, 'rms')]} | {stats[(1.28, 'med')]} | {stats[(1.28, 'p99')]} | {stats[(2.56, 'rms')]} | {stats[(2.56, 'med')]} |")
     P("")
     text = "\n".join(lines)

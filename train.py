@@ -21,7 +21,7 @@ from torch.func import jvp, vmap
 
 from msr.config import load_cfg, run_dir
 from msr.curvature import gn_lam_max
-from msr.core import Arch, Model, loss_first_order, loss_nudged, loss_onestep, loss_unrolled, loss_weights, make_data, nsteps, stack_consts, sq, train_steps
+from msr.core import Arch, Model, loss_first_order, loss_nudged, loss_onestep, loss_unrolled, rollout_nudged, loss_weights, make_data, nsteps, stack_consts, sq, train_steps
 
 
 def ckpt_steps(cfg):
@@ -97,7 +97,7 @@ def main():
     f_one = vmap(lambda th, c, X, Y: loss_onestep(arch, th, c, X, Y))
     w = loss_weights(pr.get("gamma", 0.0), dt, p) if unrolled else None
     if a.nudge is not None:
-        assert not a.first_order and a.cap is None and a.lr_rule != "line", "nudging is implemented for the plain window loss"
+        assert not a.first_order and a.cap is None, "nudging is implemented for the plain window loss"
     f_unr = vmap((lambda th, c, U: loss_nudged(arch, th, c, U, p, w, a.nudge)) if a.nudge is not None else
                  (lambda th, c, U: loss_first_order(arch, th, c, U, p, w)) if a.first_order else
                  (lambda th, c, U: loss_unrolled(arch, th, c, U, p, w, a.cap)))
@@ -129,7 +129,8 @@ def main():
         swq = torch.sqrt(Wq / Wq.sum())
 
         def uGu(th, c, U, u):
-            seq, tan = jvp(lambda t: _rollseq(arch, t, c, U[0], p), (th,), (u,))
+            roll = (lambda t: rollout_nudged(arch, t, c, U, p, a.nudge)[1:]) if a.nudge is not None else (lambda t: _rollseq(arch, t, c, U[0], p))
+            seq, tan = jvp(roll, (th,), (u,))
             tan = swq[:, None, None] * tan / math.sqrt(U.shape[1])
             if a.cap is not None:          # same per-start mask as the capped loss
                 ok = ((U[1:p + 1] - seq) ** 2).sum(-1) <= a.cap ** 2
