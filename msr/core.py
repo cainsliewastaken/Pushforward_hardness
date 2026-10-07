@@ -228,3 +228,32 @@ def gl_nodes(k, dev):
 
 def norm(a):
     return float(torch.sqrt(sq(a)))
+
+
+# ---------------------------------------------------------------- nudged rollout (multistep_best_window.tex, Section 8)
+def psi_nudge(x, r0):
+    """Relaxation of a deviation toward zero within radius r0: psi(x) = r0 x / sqrt(r0^2 + |x|^2).
+    Identity to third order, |psi(x)| < r0, real-analytic."""
+    return r0 * x / torch.sqrt(r0 * r0 + (x * x).sum(-1, keepdim=True))
+
+
+def rollout_nudged(arch, th, c, uT, p, r0):
+    """(p+1, n, 3): row 0 = uT[0]; row q = Gt(uT[q-1] - psi(uT[q-1] - u_{q-1})), the model's own prediction from the
+    state whose deviation from the true state uT[q-1] was relaxed to within r0 (the pre-nudge error is uT[q] - row q).
+    r0 None: the free rollout, identical to Model.rollout."""
+    out, u = [uT[0]], uT[0]
+    for q in range(1, p + 1):
+        if r0 is not None:
+            u = uT[q - 1] - psi_nudge(uT[q - 1] - u, r0)
+        u = gt(arch, th, u, c)
+        out.append(u)
+    return torch.stack(out)
+
+
+def loss_nudged(arch, th, c, uT, p, w=None, r0=None):
+    """Nudged window loss sum_q w_q (1/2)|uT[q] - row q|^2 / sum_q w_q of the nudged rollout (loss_unrolled when r0 is None)."""
+    seq = rollout_nudged(arch, th, c, uT, p, r0)
+    L = 0.0
+    for q in range(1, p + 1):
+        L = L + (1.0 if w is None else w[q - 1]) * 0.5 * sq(uT[q] - seq[q])
+    return L / (p if w is None else sum(w))

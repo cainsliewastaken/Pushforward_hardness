@@ -8,14 +8,15 @@ import math
 import torch
 from torch.func import jvp, vjp
 
+from .core import rollout_nudged
 from .measure import _top_eig
 
 
-def gn_lam_max(m, th, uT, p, w=None, tol=1e-4):
+def gn_lam_max(m, th, uT, p, w=None, tol=1e-4, r0=None):
     n = uT.shape[1]
     W = torch.ones(p, device=uT.device) if w is None else torch.tensor(w, device=uT.device)
     sw = torch.sqrt(W / W.sum())
     th = th.detach()
-    f = lambda t: (sw[:, None, None] * m.rollout(t, uT[0], p)[1:]).reshape(-1) / math.sqrt(n)
+    f = lambda t: (sw[:, None, None] * rollout_nudged(m.arch, t, m.c, uT, p, r0)[1:]).reshape(-1) / math.sqrt(n)
     _, vjp_fn = vjp(f, th)
     return _top_eig(lambda x: vjp_fn(jvp(f, (th,), (x,))[1])[0], m.P, uT.device, tol=tol)

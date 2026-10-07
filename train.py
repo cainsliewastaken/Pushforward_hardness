@@ -21,7 +21,7 @@ from torch.func import jvp, vmap
 
 from msr.config import load_cfg, run_dir
 from msr.curvature import gn_lam_max
-from msr.core import Arch, Model, loss_first_order, loss_onestep, loss_unrolled, loss_weights, make_data, nsteps, stack_consts, sq, train_steps
+from msr.core import Arch, Model, loss_first_order, loss_nudged, loss_onestep, loss_unrolled, loss_weights, make_data, nsteps, stack_consts, sq, train_steps
 
 
 def ckpt_steps(cfg):
@@ -54,6 +54,9 @@ def main():
                     help="train on the first-order part of the window loss (Jacobians at the true states held fixed)")
     ap.add_argument("--cap", type=float, default=None,
                     help="per-start cap (state units): a start stops contributing once its rollout error first exceeds it")
+    ap.add_argument("--nudge", type=float, default=None,
+                    help="nudged rollout: before each step the deviation from the true state is relaxed to within this radius "
+                         "(state units), psi(x) = r0 x / sqrt(r0^2 + |x|^2); the loss is the error from the relaxed state")
     ap.add_argument("--lr-anchor-run", default=None, help="run whose meta.json lam_start is the anchor (paired with lr)")
     ap.add_argument("--set", nargs="*", default=[], help="config overrides key=yaml_value")
     a = ap.parse_args()
@@ -93,14 +96,17 @@ def main():
 
     f_one = vmap(lambda th, c, X, Y: loss_onestep(arch, th, c, X, Y))
     w = loss_weights(pr.get("gamma", 0.0), dt, p) if unrolled else None
-    f_unr = vmap((lambda th, c, U: loss_first_order(arch, th, c, U, p, w)) if a.first_order else
+    if a.nudge is not None:
+        assert not a.first_order and a.cap is None and a.lr_rule != "line", "nudging is implemented for the plain window loss"
+    f_unr = vmap((lambda th, c, U: loss_nudged(arch, th, c, U, p, w, a.nudge)) if a.nudge is not None else
+                 (lambda th, c, U: loss_first_order(arch, th, c, U, p, w)) if a.first_order else
                  (lambda th, c, U: loss_unrolled(arch, th, c, U, p, w, a.cap)))
 
     # optional: curvature of this run's own loss at its start, and per-model learning rates scaled by it
     lam0, scale = None, np.ones(M)
     if unrolled and (a.measure_curv or a.lr_rule != "none"):
         uc = uTe[:, :cfg.get("n_curv", 512)]
-        lam0 = [gn_lam_max(models[j], TH[j], uc, p, w) for j in range(M)]
+        lam0 = [gn_lam_max(models[j], TH[j], uc, p, w, r0=a.nudge) for j in range(M)]
         print(f"[{a.proto}/{a.init} dt={dt}] curvature at start: " + " ".join(f"{x:.3g}" for x in lam0), flush=True)
     if a.lr_rule in ("sqrt", "inv"):
         anc = json.load(open(os.path.join(cfg["out_root"], "runs", a.lr_anchor_run, "meta.json")))
@@ -152,7 +158,8 @@ def main():
         X, Y = U[:pwin].reshape(-1, 3), U[1:pwin + 1].reshape(-1, 3)
         one = vmap(lambda th, c: loss_onestep(arch, th, c, X, Y))(TH_, C)
         e = vmap(lambda th, c: _roll(arch, th, c, U[0], pev))(TH_, C)
-        own = vmap(lambda th, c: loss_unrolled(arch, th, c, U[:p + 1], p, w))(TH_, C) if unrolled else None
+        own = (vmap(lambda th, c: loss_nudged(arch, th, c, U[:p + 1], p, w, a.nudge))(TH_, C) if unrolled and a.nudge is not None
+               else vmap(lambda th, c: loss_unrolled(arch, th, c, U[:p + 1], p, w))(TH_, C) if unrolled else None)
         return one, torch.sqrt(sq(U[pev][None] - e)), own
 
     cks = set(ckpt_steps(cfg))
@@ -218,7 +225,7 @@ def main():
            + ([f"alpha_{c}{s}" for c, s in names] if line else []))
     np.savetxt(os.path.join(out, "log.csv"), np.array(log), delimiter=",", header=",".join(hdr), comments="")
     with open(os.path.join(out, "meta.json"), "w") as fh:
-        json.dump(dict(dt=dt, proto=a.proto, init=a.init, suffix=a.suffix, from_run=a.from_run, gamma=pr.get("gamma", 0.0), cap=a.cap, first_order=a.first_order, lr=cfg["lr"],
+        json.dump(dict(dt=dt, proto=a.proto, init=a.init, suffix=a.suffix, from_run=a.from_run, gamma=pr.get("gamma", 0.0), cap=a.cap, first_order=a.first_order, nudge=a.nudge, lr=cfg["lr"],
                        lam_start=lam0, lr_rule=a.lr_rule, lr_anchor_run=a.lr_anchor_run,
                        line_c=cfg.get("line_c", 0.25) if line else None, line_every=cfg.get("line_every", 1) if line else None,
                        lr_models=[float(cfg["lr"] * s) for s in scale], p=p, names=names, wall_s=time.time() - t0,
