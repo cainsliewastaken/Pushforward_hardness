@@ -1,0 +1,59 @@
+# multistep_roughness sweep configuration. Rerun with other widths / horizons by editing this file
+# (or with --set key=value on any script).
+sigma: 10.0
+rho: 28.0
+beta: 2.6666666666666665
+substeps: 10            # RK4 substeps per emulator step (truth map G)
+transient: 20.0         # time units of spin-up per start
+data_seed_train: 1000
+data_seed_test: 2000
+n_train: 131072         # training starts; every minibatch is drawn from these
+n_test: 4096            # held-out starts: M1, M2, M4, M5
+n_grad: 1024            # first n_grad held-out starts: M3 (velocities), M6, training-time evaluation
+n_kernel: 128           # first n_kernel held-out starts: M7 (rollout kernel), FD identity checks (brief: n <= 128)
+
+dts: [0.01, 0.02, 0.04, 0.08]
+seeds: [0, 1, 2]
+classes: [euler, direct]
+protocols:
+  onestep: {}                   # one-step loss on true pairs
+  unroll032: {T_train: 0.32}    # L_p, p = T_train / dt
+  unroll064: {T_train: 0.64}
+  # fixed step count instead of fixed physical window (follow-up test; not part of sweep.py,
+  # run by followup.sh only where the step count is missing from the T_train protocols above)
+  unrollp16: {p_train: 16, in_sweep: false}
+  unrollp32: {p_train: 32, in_sweep: false}
+  # long window: plain (curriculum stage 2) and damped, w_q = exp(-gamma t_q) (follow-up; not in sweep.py)
+  unroll016: {T_train: 0.16, in_sweep: false}    # width test: first stage of the window chain
+  unroll128: {T_train: 1.28, in_sweep: false}
+  unroll256: {T_train: 2.56, in_sweep: false}    # step-size rule comparison (follow-up 7)
+  unroll192: {T_train: 1.92, in_sweep: false}    # capped-loss test (follow-up 8)
+  unroll128g9: {T_train: 1.28, gamma: 9.0, in_sweep: false}
+stats_window: 0.64      # normalization statistics window (fixed so every run shares the same constants)
+eval_T: 0.64            # training-time held-out rollout error is logged at this horizon
+long_horizons: [0.32, 0.64, 1.28, 2.56, 5.12]   # eval_long.py: rollout error only
+inits: [scratch, ft]    # unrolled protocols: from the seed's initialization, or fine-tuned from the onestep model
+onestep_window: 0.64    # one-step pairs (u_T(t_i), u_T(t_i+1)) are drawn with t_i in [0, onestep_window)
+
+hidden: [256, 256, 256] # same network at every dt
+act: silu
+lr: 1.0e-3
+lr_end: 1.0e-6
+warmup: 1000
+steps: 100000
+steps_ft: 20000         # fine-tuned unrolled runs (start from the converged onestep model)
+lr_ft: 1.0e-4           # peak lr for fine-tuning (same warmup + cosine shape)
+line_c: 0.25            # --lr-rule line: step = min(lr schedule, line_c * g.u / |Psi u|_w^2); c = 1 (batch-exact minimum) overshoots on held-out starts
+line_every: 1           # --lr-rule line: refresh the step length every this many steps
+clip: 1.0               # per-model gradient-norm clipping
+batch: 1024             # starts per minibatch
+n_ckpt_log: 10          # log-spaced checkpoints in [10, steps), plus the final step (and step 0)
+log_every: 250
+
+horizons: [0.08, 0.16, 0.32, 0.64, 1.28]
+gl_points: 10           # Gauss-Legendre points for Bbar (5 leaves ~1e-7 quadrature error when |e| is attractor-sized)
+fd_step: 1.0e-5         # central finite-difference step (identity checks)
+chunk: 1024             # per-sample-gradient chunk (M6 row norms)
+chunk_cot: 32           # cotangents per batched backward pass (M3, trace of K)
+threads: 1              # torch CPU threads per process
+out_root: ${SCRATCH}/multistep_roughness
