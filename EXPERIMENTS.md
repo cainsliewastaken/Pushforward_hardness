@@ -1,109 +1,136 @@
 # Experiment plan
 
-Paper: `paper/learned_steppers.tex`. Predictions P1--P8 are in its Section 10.
-Goal: test the predictions, and find at least one problem where a Taylor method of order 2
-(or exponential Taylor order 2) has lower injected error and rollout error than the Euler step
-and the direct step.
+Paper: `old_tex/hardness_framework_v3.tex` in the Overleaf project (no .tex files in this repo). Tests T1--T6 are in its Section 8; the tracked
+quantities Q1--Q5 are in Section 3.4; the protocol P1--P5 is in Section 2.2.
+Goal: for vision transformers of increasing size, find the time step and network size at which a
+Taylor method of order p with finite-difference lower slots has lower one-step error than order
+p-1. Fit scaling laws for each method's unlearned fraction and tracked quantities, predict the
+crossover step `h*_p(P)` and crossover size `P*_p(h)`, and check the prediction on held-out
+larger networks.
 
-## 1. Systems
+## 1. Systems and data
 
-| ID | System | Role | Notes |
+| ID | System | Data | Notes |
 |----|--------|------|-------|
-| L63 | Lorenz-63 | cheap sanity check | compute L_k, M_k exactly; fit capacity exponent alpha with MLPs |
-| KS | 1D Kuramoto--Sivashinsky, periodic | dissipative, stiff linear part | reuse setup of arXiv:2608.16084 (L=100, 1024 modes) and a cheaper 128-mode version for sweeps |
-| KF | 2D forced Kolmogorov flow, vorticity form | main candidate for an order-2 win | Re ~ 1000, 64^2 and 128^2, drag term as in Kochkov et al. 2021; pseudo-spectral |
-| KdV | 1D Korteweg--de Vries (or NLS) | conservative control | purely imaginary test-mode rates; history-based order-2 should not blow up |
+| KS | 1D Kuramoto--Sivashinsky, periodic, `u_t = -u u_x - u_xx - u_xxxx` | `training_data/1d_KS/KS_1024_full.h5`: `u` (1024, 2.6M) float64, L = 100, stored dt = 0.001 | solver in `training_data/1d_KS/canonicalPDEs.py` |
+| TURB | 2D forced turbulence, vorticity form, Re = 1000, forcing (4,4), drag r = 0.1 | `training_data/2d_turbulence/full_index.h5`: `omega` (579983, 256, 256) float32 | py2d solver in `training_data/py2d_turb_sims/`; confirm beta and the save interval |
 
-All systems are written as semilinear `u_t = A u + B(u)` with `A` the linear operator (diagonal in
-Fourier space) and `B` the nonlinear term. The solver must expose, as differentiable functions:
-`f(u) = A u + B(u)`, `g(u) = Df(u) f(u)` (via a Jacobian-vector product), `exp(hA)`,
-`phi1(hA)`, `phi2(hA)` with `phi1(z) = (e^z - 1)/z`, `phi2(z) = (e^z - 1 - z)/z^2`
-(use the contour-integral evaluation of Kassam and Trefethen 2005 for small |z|).
-Recommended: JAX for the solver and all derivative quantities. Training can use the existing
-PyTorch code if that is faster to reuse; decide with the user.
+The networks see only states from the data. Time derivatives `x^(k)` are needed only for the
+analysis (the norms `m_k` and the remainder check of Section 6), and are estimated by finite
+differences of the stored fine-dt trajectories. No method uses the vector field `f`.
 
-## 2. Methods (fixed IDs)
+## 2. Methods
 
-`h` is the time step, `N` is the network, `A` and `B` as in Section 1.
+One network per method. All methods use the same architecture, so they cost the same FLOPs per
+step; a finite-difference slot adds only a few vector additions. The network input is the
+current state only (P2), the target is standardized by its training RMS (P3), and the final
+layer is zero-initialized (P4). History states `x_{j-1}, x_{j-2}` enter only the known part;
+in training they are true states from the data, in rollout they are predicted states.
 
-| ID | Step map | Slot types | Paper reference |
-|----|----------|-----------|-----------------|
-| `direct` | `N(u)` | none | Taylor order 0 |
-| `euler` | `u + h N(u)` | none | Taylor order 1 |
-| `rk4` | classical RK4 with N as vector field | none | Runge--Kutta wrapper, Eq. (rk) |
-| `ieuler` | `u' = u + h N(u')`, fixed-point solve | none | implicit Euler wrapper |
-| `t2_exact` | `u + h f(u) + (h^2/2) N(u)` | exact slot | Taylor order 2, exact lower slot |
-| `t2_net` | `u + h F1(u) + (h^2/2) N(u)`, F1 = frozen network from `euler` | state-based slot | Rule 2 test |
-| `t2_hist` | `u + (u - u_prev) + (h^2/2) N(u)`; training uses true `u_prev`, rollout uses predicted | history-based slot | parasitic root e^{-z} |
-| `exp_direct` | `exp(hA) u + N(u)` | none | exponential known part |
-| `exp_euler` | `exp(hA) u + h phi1(hA) N(u)` | none | exponential known part |
-| `exp_t2` | `exp(hA) u + h phi1(hA) B(u) + h^2 phi2(hA) N(u)` | exact slot | exponential Taylor order 2 |
-| `rkn_exact` (optional) | RKN4 for `x'' = N(x)` with `v_j = f(x_j)` | exact slot | Section 11.5 (a) |
+| ID | Known part `Q_h` | Target `V = Phi_h - Q_h` (leading term) |
+|----|------------------|------------------------------------------|
+| `direct` | 0 | `Phi_h` |
+| `euler` | `x_j` | `h f + O(h^2)` |
+| `t2_fd` | `2 x_j - x_{j-1}` (two-point slot) | `h^2 x^(2) + O(h^4)` |
+| `t3_fd` | `3 x_j - 3 x_{j-1} + x_{j-2}` (two-point slots for `f` and `x^(2)`) | `h^3 x^(3) + O(h^4)` |
+| `t2_fd3` (optional) | `x_j + h F_1`, three-point `F_1 = (3/2 x_j - 2 x_{j-1} + 1/2 x_{j-2})/h` | `h^2 x^(2)/2 + O(h^3)` |
 
-Implement methods as (known part, slot weight, network) triples where possible, so that the
-hardness of every method can be computed by the same code (Section 4).
+With minimal-order finite-difference slots the known part of order p is the polynomial
+extrapolation through `x_j, ..., x_{j-p+1}`, and the target is `h^p x^(p)` to leading order
+(checked symbolically; the paper's Prop. 3 is the case p = 2). The slot error does not vanish
+relative to the target as `h -> 0`: it multiplies the target by `p!` and leaves its shape.
+So `delta_p = h^p m_p eta_p` and the crossover with order p-1 is
+`h*_p = (m_{p-1}/m_p)(eta_{p-1}/eta_p)`, a factor `p` below the exact-slot value.
+`t2_fd3` uses one more history state to make the slot error subleading, and recovers the
+exact-slot crossover up to `O(h)`.
 
-## 3. Sweeps
+Rollout: with a state-only network, the lifted step map of `t2_fd` and `t3_fd` has Jacobian
+determinant of modulus 1 (the last extrapolation weight is +-1), so it cannot contract volume.
+On a linear decaying mode it has the parasitic root `e^{-z}` (Prop. 4). Test this early (T6).
 
-- Time steps: 6--8 values per system, chosen so that `h * |lambda|` on the energetic modes spans
-  roughly 0.01 to 2. Report the chosen values and the resulting `z_k = h lambda_k` ranges.
-- Network sizes W: 3--4 values per architecture (same architecture across methods).
-- Architectures: FNO (primary), MLP or U-Net (secondary).
-- Seeds: 3.
-- Noise: nu in {0, two nonzero levels} on the observed next state, for Corollary 2 (noise window).
-- Estimate the total run count and GPU-hours per system before launching; show the user.
+## 3. Architecture and sizes
 
-## 4. Measurements that need no training
+- Vision transformer (patch embedding, pre-norm blocks, linear unpatchify head with zero init).
+  Reuse and adapt `~/Flop_Constrained_Temporal_Scaling/{1d_KS,2d_turbulence}/networks/nn_ViT.py`.
+- Size axis: non-embedding parameter count `P`, with the aspect ratio `d_model / n_layers`
+  fixed in the 40--100 range from the literature (value and citation to be fixed with the
+  user). Heads = `d_model / 64`, MLP ratio 4.
+- Sizes: 5--6 values spanning about two decades of `P` for fitting, plus 1--2 larger held-out
+  sizes for the prediction test.
+- Patch size: KS 16 (64 tokens), TURB 8 or 16 (1024 or 256 tokens); fixed across sizes.
+- Optimizer: Adam, no weight decay; same schedule and step budget for every method at a given
+  size (P5). Training time `t` is in optimizer steps, and `Pi = diag(lr_t / (sqrt(v_hat) + eps))`
+  from the Adam state (momentum neglected).
+- Seeds: 3 at the fit sizes, 1--3 at the held-out sizes.
 
-1. Measured hardness `Lip(Phi_h - Q_h^ex)` for every affine method and every h, from data.
-   Two estimators: (a) finite-pair ratios over nearest-neighbor pairs on the attractor, reported
-   as the max and the 99th percentile; (b) spectral norm of the Jacobian `D(Phi_h - Q_h^ex)(u)`
-   by power iteration with JVP/VJP through the differentiable solver, sampled over the attractor.
-2. `M_k`, `L_k` for k = 1, 2, 3 (estimate `L_k` with estimator (b) applied to `x^(k)`).
-3. Test-mode rates `lambda_k` of the linear operator, and per-mode hardness from Table 3 of the
-   paper at each h.
+## 4. Sweeps and scaling fits
 
-## 5. Metrics per trained run
+- Grid: methods {`direct`, `euler`, `t2_fd`} first, x sizes, x 3--4 values of `h`, x seeds.
+  `t3_fd` is added once the order-2 fits show where order 2 wins.
+- For each method, fit `eta(P) = eta_inf + a P^(-gamma)` for the training and validation
+  unlearned fractions, with bootstrap over seeds. Theory says `eta` of `euler`, `t2_fd`, `t3_fd`
+  does not depend on `h` (J2); test this across the `h` values before pooling them. `direct` is
+  fit at each `h` separately, since its `O(h)` correction is not small next to `eta(id)`.
+- Fit the same form to the tracked summaries (Section 5): slow power, final decay rate `rho(T)`,
+  and on the probe kernel the slow count and tail exponent. Check whether `gamma` of each method
+  follows from how its slow power moves with `P`.
+- From the fits and `m_k`, compute `h*_p(P)` and `P*_p(h)` with bootstrap bands.
+- Prediction test (T4): train the held-out sizes at `h` on both sides of the predicted crossover.
 
-- Injected error on held-out true states: sup norm and RMS; per-wavenumber spectrum.
-- Rollout error vs. time; correlation time (Pearson < 0.8, as in the eigenanalysis paper).
-- `|lambda_max|` and sigma = ln|lambda_max| / h of the step-map Jacobian (reuse the diagnostic from
-  arXiv:2608.16084).
-- For `t2_hist`: measured growth rate of the component `u_j - u_{j-1} - h f(u_j)` (parasitic mode).
-- Long rollouts: energy spectrum and one-point PDF vs. reference.
+## 5. Tracked quantities per run
 
-## 6. Figures (targets for the paper)
+The full kernel has size `(n n_x)^2` with `n n_x ~ 10^8`, so Q1--Q4 are measured on a fixed
+probe set.
 
-1. Per-mode hardness curves on the real and imaginary axes (analytic), crossovers marked
-   (Proposition 4), with `z_k = h lambda_k` overlaid for KS and KF at the chosen h.
-2. Measured hardness vs. h (Section 4.1), log-log, expected slopes 0 / 1 / 2 for
-   `direct` / `euler` / `t2_exact` on resolved modes; include `exp_*` methods.
-3. Injected error vs. h for trained methods at fixed W; expected slopes 0, alpha, 2 alpha (P1);
-   mark the window where order 2 wins.
-4. Injected error vs. measured hardness, all methods and h, one panel per W: tests whether the
-   capacity model collapses the data onto one curve per W (Assumption 3, P8); fit alpha and rho(W).
-5. Per-wavenumber injected error vs. per-mode hardness prediction (P3, P4, P5).
-6. Rollout error decomposed into injection x amplification (Eq. (compare) of the paper), using
-   `|lambda_max|` from the eigen diagnostic.
-7. Controls: `t2_hist` parasitic growth on KS vs. KdV (P6); `t2_net` vs. `t2_exact` (Rule 2, P7);
-   `rk4` representability floor at large h on KS (P5).
+- Every logged step (cheap): training and validation loss (hence `eta`, `eta_va`), and the decay
+  rate `rho = g^T Pi g / ||e||_tr^2` from a full-batch gradient `g` on a fixed probe batch.
+- About 20 checkpoints (moderate): probe kernel `J_s Pi J_s^T` on `n_s` probe states and `k`
+  random output projections per state (`n_s k` about 2000--8000, one VJP per row): eigenvalues
+  (Q1), target alignment `C_V` (Q2), residual spectrum and trapped error (Q3), drift between
+  checkpoints (Q4), and `kappa_va` (Q5).
+- From the loss curve: under a nearly frozen kernel `||r(t)||^2 = sum_i e^{-2 t lambda_i} V_i^2`,
+  so the training curve estimates `C_V`. Compare with the probe kernel.
+- Rank regime (J4): the training problem has `P < n n_x`; the probe kernel is full rank.
 
-## 7. Validation before experiments
+Log every metric as a tidy table row: run id, system, method, `h`, `P`, `d_model`, `n_layers`,
+seed, step, metric, value. Log git hash, config, and wall time for every run.
 
-- Solver: convergence in dt and resolution; KS and KF statistics against published values.
-- `g = Df f`: compare with finite differences in time of true trajectories.
-- `phi1`, `phi2`: compare with series at small z and closed form at large z.
-- Hardness estimators: check on a linear system where `Lip(Phi_h - Q_h^ex) = max_k |e^{z_k} - q(z_k)|`
-  is known exactly.
-- Each method with the network replaced by its exact target (where computable) should reproduce
-  `Phi_h` to solver precision.
+## 6. Measurements that need no training
 
-## 8. Milestones
+1. `m_k = ||x^(k)||_mu` for `k = 0..4`, per wavenumber as well, from finite differences of the
+   stored fine-dt trajectories (check convergence in the stencil spacing).
+2. The remainder ratio `h m_{p+1}/m_p` for each `h`; the theory applies where it is small. On KS
+   at 1024 points the stiff modes may make it large at any practical `h`.
+3. Per-mode `z_k = h lambda_k` of the linear part, to see which modes are unresolved.
+4. Time-step grid chosen from items 1--3 and reported before training.
 
-1. Solver + derivative quantities + validation (Section 7) for L63 and KS.
-2. L63: measured hardness and a small W sweep to check the capacity model.
-3. KS: Figure 2 (no training), then the method x h x W sweep, Figures 3--5.
-4. KF: same pipeline; this is the main candidate for the order-2 win.
-5. KdV control and Figure 7.
-6. Figure 6 and final plots.
+## 7. Tests (paper Section 8)
+
+| Test | What | Where |
+|------|------|-------|
+| T1 trapping | `rho(t)` decreasing, residual moving to `lambda <= 1/t`, Eq. (lower) with small drift | one mid-size run per system and method |
+| T2 alignment | `C_V` of each method's target on one reference probe kernel; slow power increasing with order | one mid size |
+| T3 `h`-independence | `delta_p ∝ h^p` with one `eta_p` across `h` | from the sweep |
+| T4 size scaling | Section 4 | both systems |
+| T5 reference-run prediction | frozen-form error of every method from one reference run vs trained values | probe set, one size |
+| T6 slots and rollout | `t2_fd` vs `t2_fd3` one-step error ratio 2; rollout growth along the parasitic root | smallest size, first |
+
+## 8. Validation before experiments
+
+- Finite-difference `x^(k)`: convergence in stencil spacing on the stored trajectories.
+- Kernel code: on a small MLP and a low-dimensional system, compare the probe kernel with the
+  full kernel, and check Eq. (residual-dynamics) against the measured loss change over a few steps.
+- `rho` from `g^T Pi g` against the finite-difference loss decrease per step.
+- Each method with the network output replaced by its exact target reproduces `Phi_h` to data
+  precision.
+
+## 9. Milestones
+
+1. No-training measurements (Section 6) for KS and TURB; report `m_k`, the remainder ratios,
+   and the proposed `h` grid.
+2. ViT, methods, and kernel code; validation (Section 8); timing runs per size.
+3. T6 rollout check at the smallest size.
+4. Cost estimate for the full sweep, shown to the user before launching.
+5. KS sweep, T1, T2, fits; then TURB.
+6. Held-out prediction test (T4), T5, final figures.
 Report back to the user at the end of each milestone with numbers and plots before continuing.

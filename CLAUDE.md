@@ -3,43 +3,58 @@
 ## What this project is
 Experiments for a paper that extends Ainslie et al. (arXiv:2608.16084, "Eigenanalysis framework
 for autoregressive neural emulators of multi-scale chaotic dynamics"). That paper explains error
-*amplification* (Jacobian spectrum of the learned step map). This paper explains error *injection*:
-why some parameterizations of the step map (direct step, Euler step, higher-order Taylor methods,
-Runge--Kutta wrappers) inject less one-step error than others.
+*amplification* (Jacobian spectrum of the learned step map). This paper explains the one-step
+error through the training kernel of the network: which method (direct step, Euler step, Taylor
+method of order p) a given network should use, and how the answer changes with network size.
 
-The theory is in `paper/learned_steppers.tex` (compiled: `paper/learned_steppers.pdf`).
-Read Sections 3--10 before writing experiment code. The experiment plan is in `EXPERIMENTS.md`.
+All LaTeX for this project lives only on Overleaf (project "A hardness theory for learned pushforward
+operators"); no .tex files are kept in this repo. The current paper is `main.tex` there.
+The theory for this experiment plan is `old_tex/hardness_framework_v3.tex` in that Overleaf project.
+Read all of it before writing experiment code. The experiment plan is in `EXPERIMENTS.md`.
+`old_tex/learned_steppers.tex` on Overleaf is an out-of-date earlier version. Do not consult it for anything.
 
 ## Core idea (one paragraph)
-A method is a step map `x_{j+1} = Q_h(x_j) + c_p * N_theta(x_j)`, where `Q_h` is the known part
-and `N_theta` is the network in the network slot. The hardness of a method is
-`Lip(Phi_h - Q_h^ex)`, the Lipschitz constant of the flow map minus the known part.
-Under a capacity model, injected error <= rho * hardness^alpha + floors.
-Direct step: hardness ~ 1. Euler step: hardness ~ h L. Taylor order p with exact lower slots:
-hardness ~ h^p L_p / p!. For a linear test mode with z = h*lambda, per-mode hardness of an affine
-method is |e^z - known multiplier| (Table 3 of the paper).
+A method is a step map `G(x) = Q_h(x) + sigma * N_theta(x)` with known part `Q_h`, scale
+`sigma`, and target `V = Phi_h - Q_h`. Under Adam modeled as preconditioned gradient flow, the
+residual obeys `dr/dt = -A_tr(t) r` with training kernel `A_tr = (1/n) J Pi J^T`. It decays at
+rate `rho`, the Rayleigh quotient of the residual on the kernel, so the error left after training
+is the residual mass on the slow eigenspectrum (eigenvalues <= 1/T). That trapped error is the
+hardness. The unlearned fraction `eta(V) = ||r(T)|| / ||V||` depends on the kernel spectrum
+(network and states) and the target alignment (target). For a Taylor method of order p with exact
+lower slots, the standardized target is `x^(p)/m_p + O(h)`, so the trained one-step error is
+`delta_p = (h^p/p!) m_p eta_p` with `eta_p` independent of `h`. Order p beats order p-1 for
+`h < h*_p = p (m_{p-1}/m_p)(eta_{p-1}/eta_p)`. With the size ansatz `eta_p ~ a_p N^{-gamma_p}`
+this gives the size `N*_p(h)` above which order p should be used.
+In the experiments the lower slots are finite differences of past states, not exact
+derivatives, so every method is one network of the same cost. With minimal-order
+finite-difference slots the target is `h^p x^(p)` to leading order (`p!` times the exact-slot
+target, same shape), and `h*_p = (m_{p-1}/m_p)(eta_{p-1}/eta_p)`.
 
 ## Terminology (use these exact names in code, configs, plots, and messages)
-Use the defined terms from Table 2 of the paper and do not substitute synonyms:
-method, step map, known part, network slot, lower slot, exact slot, state-based slot,
-history-based slot, slot error (systematic part, random part), slot weight, target, hardness,
-per-mode hardness, injected error, rollout error, amplification factor, test mode,
-resolved mode (|z| <= 1), unresolved mode (|z| > 1), parasitic root, exponential known part,
-Runge--Kutta wrapper, implicit Euler wrapper, direct step, Euler step, Taylor method of order p.
-Method IDs are fixed in `EXPERIMENTS.md` Section 2. Use them as config keys and legend labels.
+Use the defined terms of the paper and do not substitute synonyms:
+method, step map, known part, scale, target, residual, protocol (P1--P5), training kernel,
+validation kernel, mean kernel, preconditioner, decay rate, trapped error, hardness,
+unlearned fraction, slow eigenspectrum, slow count, tail exponent, target alignment, slow power,
+residual spectrum, drift, drift certificate, filtered target, frozen form, trained form,
+size ansatz, plateau, rank regime, time derivative `x^(k)`, lower slot, exact slot,
+state-based slot, history-based slot, finite-difference slot, parasitic root, direct step,
+Euler step, Taylor method of order p, crossover step `h*_p`, crossover size `N*_p`,
+tracked quantities Q1--Q5, tests T1--T6.
+Method and target IDs are fixed in `EXPERIMENTS.md` Section 2. Use them as config keys and
+legend labels.
 
 ## Working rules
-- Ask the user before launching any job expected to take more than ~1 GPU-hour, and report the
-  estimated cost of each sweep before running it.
-- Ask the user about available hardware (GPU type/count, cluster vs. local) at the start.
-- The user's previous code for the eigenanalysis paper is at
-  https://github.com/cainsliewastaken/Spectral_Stability . Check it for reusable KS data
-  generation, FNO/MLP models, integrator layers, and the Jacobian eigenvalue diagnostic before
-  writing new versions.
+- Compute: the global rule applies (ask before any Slurm job or heavy run, with account, QOS,
+  GPUs, and time). Report the estimated cost of each sweep before running it.
+- Hardware: NERSC Perlmutter (A100 GPU nodes). Data and checkpoints are on `$SCRATCH` behind the
+  `training_data` and `model_checkpoints` symlinks.
+- Reusable code: ViT and KS/turbulence data loading in `~/Flop_Constrained_Temporal_Scaling`;
+  kernel and spectral-bias diagnostics in `~/spectral_bias`; the eigenanalysis code at
+  https://github.com/cainsliewastaken/Spectral_Stability . Check these before writing new versions.
 - Every experiment is driven by a config file; results go to a tidy table (one row per
-  run x metric) so figures can be regenerated without retraining.
+  run x metric) so figures and scaling fits can be regenerated without retraining.
 - Fix seeds. Log git hash, config, and wall time for every run.
 - Validate each component against an analytic or numerical reference before using it
-  (see EXPERIMENTS.md Section 7).
+  (see EXPERIMENTS.md Section 8).
 - When a result disagrees with a prediction in the paper, report it plainly with the numbers.
   Do not tune until it agrees. Disagreements are results.
