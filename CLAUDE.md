@@ -55,6 +55,9 @@ experiments), `optimizer/` (SegFlow, KAdam, KronSign / Kronecker-Adam, KronRoot,
   from `L63_ROOT` (default `$SCRATCH/l63_held_rough`).
 - `optimizer/` scripts import `l63_design`, `l63test_torch`, `l63_late` from `chain/` (the
   path is added at the top of each script); keep the shared modules in `chain/`.
+- Work in this repository, not in `$SCRATCH/l63_held_rough/code`. That folder is only the live
+  copy of sessions started before the repository existed; `scripts/sync_l63_code.sh --apply`
+  pulls their newer files in (see README). New scripts go straight into `chain/` or `optimizer/`.
 - **n = 200 is a toy of a toy.** Every chain / optimizer verification, exponent, sign, fit and
   ranker so far is an n = 200 statement (user decision 2026-10-11). Use n in the thousands
   for anything new, and do not quote old numbers in the paper until redone.

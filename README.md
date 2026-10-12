@@ -20,7 +20,7 @@ init-only / fixed-projector statements of the earlier drafts. The files to read 
 | `paper/notes/` | `THEORY.md` (every statement, proof and status label; sections 8-20 are the chain), `WRITEUP.md` (consolidated experimental record), `REPORT.md` (the step-by-step log, sections 0-46), `optimizer_ideas.md`, `part6_segflow.md`, `part7_theory.md`, `slow_kernel_growth.md` | |
 | `paper/eos_*.tex` | The sharpening / edge-of-stability application section and its bibliography | |
 | `paper/old/` | Superseded drafts, kept for reference: `training_theory_2026-10-07.tex` (full paper build before the chain), `hardness_framework_v3.tex`, `rollout_history_note.tex`, `multistep_training_theory*.tex`, `archive/learned_steppers.tex` | |
-| `chain/` | Lorenz-63 testbed for the held-rough and chain results: GD ground-truth harness (`l63_late.py`, `opt_stepper.py`), kernel / spike / specQ analyses, the exact staged model (`ensemble_model.py`), reduced models, init-only ranker, perturbation (chaos) tests, design sweeps. `HANDOFF.md` is the original brief. | `$SCRATCH/l63_held_rough/runs` (symlink `chain/runs`) |
+| `chain/` | Lorenz-63 testbed for the held-rough and chain results: GD ground-truth harness (`l63_late.py`, `opt_stepper.py`), kernel / spike / specQ analyses, the exact staged model (`ensemble_model.py`), reduced models, init-only ranker, perturbation (chaos) tests, design sweeps. `HANDOFF.md` is the original brief; `original_upload/` is the experiment exactly as first uploaded on 2026-10-09 (first `l63test.py` / `analyze.py`, sandbox result). | `$SCRATCH/l63_held_rough/runs` (symlink `chain/runs`) |
 | `optimizer/` | The optimizer line built on the theory: SegFlow (Krylov segments within the Taylor radius), KAdam (Adam in the kernel eigenbasis), KronSign / Kronecker-Adam / SOAP-style and KronRoot (Newton-Schulz whitening) per-layer optimizers, Muon and Adam baselines, the field and KS problems, equal-budget tuning and speed sweeps. Imports `l63_design`, `l63test_torch`, `l63_late` from `chain/`. | `$SCRATCH/l63_held_rough/runs` (symlink `optimizer/runs`) |
 | `multistep/` | Multistep (unrolled) training of learned steppers on Lorenz-63: contraction along the rollout error, injected vs retained error, rollout kernel, curvature-scaled and line step rules, nudged training and the online kappa rule; `ks/` and `turb2d/` prototypes. Imported with its own git history. | `$SCRATCH/multistep_roughness` (symlink `multistep/results`) |
 | `numerics/` | One-step hardness numerics (sine and Lorenz targets, Krylov series, seminorm floors, soft bounds, wide / deep steppers) and `eos/` (edge-of-stability measurements). `report.md` and `EXPERIMENTS.md` describe them. | `$SCRATCH/pushforward_eos`, `$SCRATCH/pf_logs`, `numerics/results*` (untracked) |
@@ -41,6 +41,14 @@ and checkpoint trees on scratch and are git-ignored.
   rotations and the basis-refresh schedule under test (REPORT.md 41-46, `optimizer_ideas.md`).
 - Multistep: 13 follow-ups recorded in `multistep/results.md`; the KS and 2D-turbulence
   prototypes and the online kappa rule are the newest, untested at scale.
+
+## Syncing with the pre-repository working copy
+
+The L63 sessions that predate this repository edit `$SCRATCH/l63_held_rough/code` and `report/`
+directly. Until the last of them has ended, that folder is the live copy of `chain/`, `optimizer/`
+and `paper/notes`: run `scripts/sync_l63_code.sh` (dry run) and `scripts/sync_l63_code.sh --apply`
+to pull newer or new files into the repo, then commit. Delete the scratch `code/` and `report/`
+folders only after a sync that reports nothing to copy. The run tree `runs/` stays on scratch.
 
 ## Running
 

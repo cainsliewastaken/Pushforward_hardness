@@ -1029,3 +1029,81 @@ n|g_b|^2/|r|^2. 96 runs (8 variants x 2 targets x 2 bases x 3 lrs), 1 GPU node, 
   lam_k e_k (= n x gradient energy per mode; g_k u_k for any optimizer). Its median eigenvalue tracks 1/t late
   (t lam_wave = 0.4-2.8 from t = 20 on, band lam t in [0.3, 3] carries 50-90 % of the removal), and runs 5-20x below
   1/t during the early transition. Next test: window and damping keyed to this removal-weighted wave (not run).
+
+## 55. Window and damping keyed to the removal-weighted wave (kadam_front.py --front wave; job 59719077, 13.5 min)
+
+Wave = per-mode share of the first-order loss removal, g_k x (step direction)_k, EMA 0.9, negatives zeroed; window lower
+edge = removal-weighted lower quartile q25 / rho (equal push above, (lam/lam_lo)^0.5 below), optional boost 3 on
+[q25/rho, q25); "front" beta keyed to the wave median. 40 runs; baselines = equal push at the same lr (Section 54).
+Best per target/base vs the best-lr baseline, train / val:
+
+| target, base | best baseline | best wave variant |
+|---|---|---|
+| Delta 0.5, sign | 0.0037 / 0.0123 | front beta (lr 3e-3): 0.0032 / 0.0135 (tie); windows 5-20x worse |
+| Delta 0.5, RMS | 0.0222 / 0.0467 | rho 10 boost 3 (lr 0.09): 0.0174 / 0.0571 (train -22 %, val +22 %) |
+| Delta 1.0, sign | 0.447 / 0.623 | rho 10 boost 3 (lr 1e-3): 0.454 / 0.592 (val -5 %) |
+| Delta 1.0, RMS | 0.291 / 0.616 | rho 3 (lr 0.03): 0.294 / **0.543** (val -12 %, same train) |
+
+* The wave estimate behaves as intended under RMS normalisation (median falls 1e-3 -> 1e-4 -> 6e-5 over the run). Under
+  sign steps it is contaminated mid-run by the chattering top modes (median jumps to 10-40, the top of the spectrum).
+* Keyed to the wave, limiting the push far below it does not speed up training at the best settings; equal push remains
+  best on training error. It does reduce overfitting on the rough target (best val 0.543 vs 0.616, also better than the
+  Rayleigh-keyed 0.582), i.e. it acts as a spectral regulariser, not an accelerator.
+* Boosting the band just below the wave (x3) gives the lowest training error at the high RMS lr on both targets, but
+  pays in validation on the smooth target.
+* Verdict for the per-mode-push line at n = 2000: no per-step training gain over equal (sign) push; a 5-12 % validation
+  gain on the rough target. All per step; per FLOP the exact-basis method is ~290x Adam and cannot compete.
+* Correction (user, 2026-10-12): at n = 2000 the validation error is 2-3x the training error on both targets (e.g.
+  0.29 vs 0.62 RMS on Delta 1.0), so validation differences measure regularisation of a data-starved sample, not
+  anything that carries to large-data training. On the metric that matters at climate scale (training loss per FLOP,
+  with train ~ test), the wave-keyed window is a NEGATIVE result: equal push is best or tied in every case.
+
+## 56. Exponent q < 0, Gauss-Newton cap, and the Taylor-remainder detector (kadam_front.py; job 59719667, 7 min)
+
+Sign per mode with weight (s_k/s_1)^q (per-step residual decrease ~ lam_k^((1+q)/2)); optional per-mode cap at the
+Gauss-Newton step |g_k|/(lam_k lr L) (L = number of layer blocks); optional trust-region lr controller holding the
+measured Taylor remainder nu = |actual dL - GN-predicted dL| / |first-order dL| (one jvp per step) at kappa. Also logged:
+gamma(t), the slope of residual energy vs eigenvalue in the hidden layer's kernel basis (free: e_k = n g_k^2/lam_k).
+lr 3e-3 with linear decay unless stated; n = 2000, H160 d2, 3000 steps; training error (the metric that matters):
+
+| q, cap | rough (Delta 1.0) | smooth (Delta 0.5) | remainder nu at step 1000 (rough / smooth) |
+|---|---|---|---|
+| 0, no cap (= KAdam sign) | 0.0409 | 0.0038 | 0.010 / 0.026 |
+| -0.25, no cap | 0.0147 | 0.0021 | 0.39 / 0.087 |
+| **-0.25, GN cap** | **0.0032** | **0.0004** | 0.081 / 0.074 |
+| -0.5, no cap | 0.472 | 0.193 | 6.2 / 1.13 |
+| -0.5, GN cap | 0.381 | 0.227 | 1.7 / 1.56 |
+| TR controller (kappa 0.1/0.3, no decay), q 0 to -0.5 | 0.054-0.46 | 0.0004-0.016 | (controller throttled lr to 1e-5..1e-4) |
+
+* q = -0.25 with the Gauss-Newton cap is 13x (rough) and 10x (smooth) better in training error than equal sign push at
+  the same lr and cost; the cap alone is worth 4-5x at q = -0.25 (it stops the top modes from overshooting).
+* The Taylor remainder identifies when q is too negative: nu ~ 0.01-0.1 for q = 0 and -0.25, 1-6 for q = -0.5, where
+  the run fails. The radius, not the residual tilt, sets the usable q: gamma(t) runs -0.9 -> -0.4 (the residual tilts
+  toward the deep modes as the top ones are fitted), so the unconstrained "equal finishing time" q* = gamma - 1 ~ -1.5
+  is far beyond the radius.
+* The lr trust-region controller as built is worse than the decay schedule (it cut lr by 100x early and never
+  recovered); the remainder is better used to choose q than lr.
+* Still exact-basis (per step ~290x Adam's FLOPs); per step it is now ~100x Adam (0.39) and ~20x Muon (0.068) on the
+  rough target at 3000 steps.
+
+## 57. What sets the per-mode step: measured loss curvature along each kernel mode (code/mode_curvature.py, mode_curvature_path.py)
+
+Audit of the KAdam-front rule: theory supplies the basis (exact per-layer GN modes), the leverage s_k = sqrt(n lam_k)
+(singular value of the layer Jacobian; "square root" is only the parametrisation), the GN cap and the Taylor detector.
+Sign push, a single power law (s_k/s_1)^q, normalisation by s_1 (= an lr rescale, matters only at fixed lr), beta 0.9,
+the 1e-12 mode cutoff and the cap split across layers are design choices. To replace q by a measured quantity, the loss
+curvature along each mode was measured directly (n = 2000, H160 d2, Delta 1.0, seed 1; 16-24 log-spaced modes per hidden
+layer; forward-over-forward jvp):
+* Function-space curvature |f''[V_k,V_k]| is nearly flat in s_k (c ~ s^0.14-0.19): the per-mode radius from the size of
+  the remainder alone scales as s^0.8, predicting q ~ +0.8 (deep modes should move LESS). Contradicted by Section 56.
+* Residual curvature r.f''[V_k,V_k]/n (the non-GN part of the loss Hessian) AT INITIALISATION: negative on 100 % of
+  sampled modes in both hidden layers, ~constant in size (1e-2 layer 0, 1e-1 layer 1) over 12 decades of lam; the full
+  curvature h_k = lam_k + r.f''/n is negative from rank 21-31 down: every deep mode is a negative-curvature direction.
+* ALONG TRAINING (Adam lr 1e-2): at steps 300, 1000, 3000 the residual curvature is POSITIVE on 93-100 % of modes,
+  median 0.006-0.02, so h_k ~ lam_k + const with the constant dominating every mode below rank ~20-30.
+* The initial negative sign is the "network unlearning its own initial function" of THEORY.md 12.1 / Lemma 15 (raw,
+  uncentred residual); it is gone by step 300. The theory has the identity (residual-weighted second derivative = the
+  roughness drive) but not the sign, which is measured, not derived.
+Consequence (theory-derived, not yet tested): along training the per-mode Newton step is g_k/(lam_k + h_res) with h_res
+the measured residual curvature, i.e. Levenberg-Marquardt whose damping is not a tuning knob but the measured non-GN
+curvature; at initialisation, negative-curvature modes are moved to the Taylor radius. No exponent q appears.

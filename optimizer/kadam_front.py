@@ -56,6 +56,11 @@ p.add_argument('--rho', type=float, default=float('inf'), help='front window: mo
 p.add_argument('--beta_mode', default='fixed', choices=['fixed', 'front', 'mode'], help='mode-space momentum: fixed b1; one beta per block critically damping the front band; per-mode critical damping floored at the window edge')
 p.add_argument('--rho_d', type=float, default=0.0, help='beta_mode=mode: damping cut a_front/rho_d (0 = use --rho)')
 p.add_argument('--beta_max', type=float, default=0.995)
+p.add_argument('--q_kappa', type=float, default=0.0, help='>0: set q online, holding the Taylor remainder at q_kappa (q starts at --qmode)')
+p.add_argument('--cap_gn', type=int, default=0, help='1: cap each mode step at the Gauss-Newton step |g_k|/lam_k / (number of blocks)')
+p.add_argument('--tr_kappa', type=float, default=0.0, help='>0: trust-region lr controller holding the nonlinear (Taylor) remainder at kappa x first-order decrease')
+p.add_argument('--decay', type=int, default=1, help='1: linear lr decay to 0; 0: constant base lr (controller only)')
+p.add_argument('--log_taylor', type=int, default=1, help='1: log the GN-predicted vs actual loss change (one jvp per step)')
 p.add_argument('--boost', type=float, default=1.0, help='front=wave: push factor for modes just below the wave, lam in [q25/rho, q25)')
 p.add_argument('--front', default='rayleigh', choices=['rayleigh', 'median', 'wave'], help='front eigenvalue: residual Rayleigh quotient, or energy-weighted median eigenvalue of the residual (energy per mode = n g_k^2/lam_k, free)')
 p.add_argument('--beta_min', type=float, default=0.5)
@@ -127,6 +132,7 @@ def emit(metric, value, step=None):
 m = torch.zeros(P, device=DEV); vp = torch.zeros(P, device=DEV)        # Adam moments (parameter space)
 nW = sum(w.numel() for w in Ws); mbuf = torch.zeros(nW, device=DEV)    # Muon momentum on weight matrices
 flop_eq = 0.0; n_refresh = 0; t_refresh = 0.0
+qcur = a.qmode; prevF = None; rf_ema = None; lrmult = 0.01 if a.tr_kappa > 0 else 1.0; prevTR = None; nu_ema = None; num_ema = 0.0; den_ema = 0.0   # controller starts small and grows
 theta0 = theta.clone()
 offs = np.cumsum([0] + [int(np.prod(sh)) for sh in shapes])     # theta layout: W_0..W_depth, then b_0..b_depth
 L1 = a.depth + 1
@@ -201,8 +207,26 @@ def spike_log(step):
             emit(f'dW_n90_l{l}', int((c < 0.90).sum()) + 1, step); emit(f'dW_n99_l{l}', int((c < 0.99).sum()) + 1, step)
 
 for step in range(1, a.steps + 1):
-    fac = (1 - (step - 1) / a.steps) * (min(1.0, step / a.warmup) if a.warmup > 0 else 1.0); lr = a.lr * fac
+    fac = ((1 - (step - 1) / a.steps) if a.decay else 1.0) * (min(1.0, step / a.warmup) if a.warmup > 0 else 1.0); lr = a.lr * fac * lrmult
     r, L, g = loss_grad(theta); flop_eq += 3
+    if prevF is not None and a.opt == 'kadam':               # function-space Taylor remainder ||df - J dtheta|| / ||J dtheta||
+        r_prev, lJd = prevF; lin = float(lJd.norm())
+        if lin > 0:
+            rf = float(((r - r_prev) + lJd).norm()) / lin
+            rf_ema = rf if rf_ema is None else 0.9 * rf_ema + 0.1 * rf
+    if prevTR is not None and a.opt == 'kadam':
+        L0, pred1, predGN = prevTR                      # nu = Taylor remainder of the last step / its first-order decrease
+        num_ema = 0.9 * num_ema + 0.1 * abs(float(L) - L0 - predGN); den_ema = 0.9 * den_ema + 0.1 * abs(pred1)
+        nu_ema = num_ema / max(den_ema, 1e-300)          # Taylor remainder / first-order decrease, ratio of running means
+        if a.tr_kappa > 0:
+            if nu_ema > 1.5 * a.tr_kappa: lrmult *= 0.8
+            elif nu_ema < a.tr_kappa / 1.5: lrmult *= 1.05
+            lrmult = min(max(lrmult, 1e-3), 1e3)
+        if a.q_kappa > 0 and rf_ema is not None and lr > 0.05 * a.lr:   # online q from the function-space remainder
+            if rf_ema > 1.5 * a.q_kappa: qcur = min(qcur + 0.02, 0.5)
+            elif rf_ema < a.q_kappa / 1.5: qcur = max(qcur - 0.005, -1.0)
+        if step % 100 == 0: emit('nu', nu_ema, step); emit('lrmult', lrmult, step); emit('lr_eff', lr, step); emit('q', qcur, step)
+        if step % 100 == 0 and rf_ema is not None: emit('rf', rf_ema, step)
     E = math.sqrt(2 * float(L))
     if not math.isfinite(E) or E > 1e3:
         emit('diverged', 1, step); break
@@ -353,6 +377,7 @@ for step in range(1, a.steps + 1):
                         B['rem'] = None if B['rem'] is None else O2 @ B['rem']
                     mk_new = None if B['mk'] is None else Vn.T @ (B['V'] @ B['mk'])      # carry the mode-space momentum into the new basis
                     B['V'], B['vk'], B['wq'] = Vn, vk_new, (sb / sb[0]) ** a.qmode
+                    B['sr'] = sb / sb[0]
                     B['lam'], B['mk'] = lam, mk_new
                     if Qb is not None and bi == (1 if a.blocks == 'layer' else 0) and ((step - 1) % 500 == 0 or step + a.refresh > a.steps):
                         cr2 = (Qb.T @ r) ** 2; lfl = float((lam * cr2).sum() / cr2.sum())
@@ -403,13 +428,35 @@ for step in range(1, a.steps + 1):
                 core = torch.sign(mk) if a.signmode == 1 else mk / sq
                 remk = gk * core                                            # this mode's share of the first-order loss removal
                 B['rem'] = remk.clone() if B['rem'] is None else B['rem'].mul_(0.9).add_(remk, alpha=0.1)
-                sv = Vb @ (B['wq'] * w * core) + (m_rest / bc1) / ((vpb / bc2).sqrt() + a.eps)
+                if a.q_kappa > 0: B['wq'] = B['sr'] ** qcur
+                eff = B['wq'] * w * core
+                if a.cap_gn:                                                # never move a mode past its own Gauss-Newton step
+                    cap = gk.abs() / (lamk * max(lr, 1e-300) * len(blocks))
+                    eff = torch.sign(eff) * torch.minimum(eff.abs(), cap)
+                    if step % 100 == 0 and B is blocks[min(1, len(blocks) - 1)]: emit('capped_frac', float((eff.abs() < (B['wq'] * w * core).abs()).float().mean()), step)
+                sv = Vb @ eff + (m_rest / bc1) / ((vpb / bc2).sqrt() + a.eps)
+                if step % 100 == 0 and B is blocks[min(1, len(blocks) - 1)] and B['rem'] is not None and float(B['rem'].clamp(min=0).sum()) > 0:
+                    wt = B['rem'].clamp(min=0).flip(0); cw = torch.cumsum(wt, 0) / wt.sum(); la = lamk.flip(0)
+                    emit('wave_med_log', float(la[min(int((cw < 0.5).sum()), la.numel() - 1)]), step)
+                if step % 100 == 0 and B is blocks[min(1, len(blocks) - 1)]:   # residual spectrum slope gamma(t): e_k ~ v_k / lam_k
+                    ek = ((gk ** 2) / lamk.clamp(min=1e-300)).cpu().numpy(); lk = lamk.cpu().numpy(); okk = lk > 1e-12 * lk[0]
+                    lb = np.floor(np.log10(lk[okk])); xs = []; ys = []
+                    for bb in np.unique(lb):
+                        mm = lb == bb
+                        if mm.sum() >= 5: xs.append(np.log10(lk[okk][mm]).mean()); ys.append(np.log10(ek[okk][mm].mean() + 1e-300))
+                    if len(xs) >= 3: emit('gamma_t', float(np.polyfit(xs, ys, 1)[0]), step)
                 if step % 100 == 0 and B is blocks[min(1, len(blocks) - 1)]:
                     emit('lamf', lf, step); emit('a_front', af, step); emit('wave_q25', q25, step)
                     emit('beta_front', float(bk[win].mean()) if bool(win.any()) else float(bk.mean()), step)
                 if ix is None: step_vec = sv
                 else: step_vec[ix] = sv
                 flop_eq += 2 * 2 * Vb.shape[0] * Vb.shape[1] / FWD
+            if a.log_taylor or a.tr_kappa > 0:
+                with torch.enable_grad():
+                    _, Jd = torch.func.jvp(lambda th: f_flat(th, X), (theta,), (step_vec,))
+                flop_eq += 2
+                pred1 = -lr * float(g @ step_vec); prevTR = (float(L), pred1, pred1 + 0.5 * lr ** 2 * float(Jd @ Jd) / a.n)
+                prevF = (r.clone(), lr * Jd.detach())
             theta -= lr * step_vec
     if step in spike_steps:
         spike_log(step)
