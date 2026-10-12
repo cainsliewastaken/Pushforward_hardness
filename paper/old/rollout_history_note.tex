@@ -1,0 +1,395 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm,mathtools}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{xr}
+\usepackage[colorlinks=true,linkcolor=blue,citecolor=blue]{hyperref}
+
+% Labels of the main note are read from build/hardness_framework_v3.aux with prefix M-.
+% Fallback numbering if the link is dropped:
+%   Prop. M-prop:train = 1, M-prop:parasitic = 4, M-prop:leading = 3,
+%   Thm. M-thm:trapped = 1, M-thm:error = 2, M-thm:crossover = 3,
+%   Lemma M-lem:frozen = 1, M-lem:remainder = 2, M-lem:fd = 4, Cor. M-cor:target = 1,
+%   Def. M-def:hardness = 1, Sec. M-sec:setting = 2, M-sec:switch = 6, M-sec:tests = 8.
+\externaldocument[M-]{build/hardness_framework_v3}
+\newcommand{\Mref}[1]{\ref{M-#1} of~\cite{main}}
+\newcommand{\Meqref}[1]{Eq.~\eqref{M-#1} of~\cite{main}}
+
+\newtheorem{theorem}{Theorem}
+\newtheorem{lemma}{Lemma}
+\newtheorem{proposition}{Proposition}
+\newtheorem{corollary}{Corollary}
+\theoremstyle{definition}
+\newtheorem{definition}{Definition}
+\newtheorem{assumption}{Assumption}
+\theoremstyle{remark}
+\newtheorem*{remark}{Remark}
+
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\Aset}{\mathcal{A}}
+\newcommand{\Net}{\mathcal{N}_\theta}
+\newcommand{\Jac}{\mathcal{J}}
+\newcommand{\tr}{\mathrm{tr}}
+\newcommand{\Tr}{\operatorname{tr}}
+\newcommand{\va}{\mathrm{va}}
+\newcommand{\bX}{\mathbf{X}}
+\newcommand{\bG}{\mathbf{G}}
+
+\title{Rollout stability of finite-difference lower slots\\[4pt]
+\large Volume of the lifted step map, two remedies, and the kernel of unrolled training}
+\author{Draft supplement to \cite{main}}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+The main note~\cite{main} predicts the one-step error of a Taylor method of order $p$ and the time step below which order $p$ has lower error than order $p-1$.
+When the lower slots are finite differences of past states, a rollout feeds predicted states into the known part.
+This note shows that if the network input is the current state only, the resulting map on the lifted state (current and past states) has Jacobian determinant of modulus one for every network, so it cannot contract phase-space volume.
+On a dissipative system the perturbations off the lifted attractor then grow, at a summed rate equal to the dissipation rate of the flow.
+Two modifications remove this obstruction.
+A damped known part keeps the network input and the one-step theory of~\cite{main} unchanged and changes the target to $h^2(\beta f + x^{(2)})$.
+A network that also receives the past states can learn the damping, but the one-step loss does not determine it, so training must unroll several steps.
+For unrolled training with backpropagation through all steps, the stacked residual obeys a closed equation with a symmetric positive semidefinite kernel, so the decay rate, trapped error, and hardness of~\cite{main} carry over.
+To leading order in $h$ the unrolled kernel consists of identical blocks and the unrolled target keeps the shape of $x^{(p)}$, so the unlearned fraction of order $p$ is unchanged at leading order and the stabilizing terms enter at order $h$ per step.
+\end{abstract}
+
+% ===============================================================
+\section{Setting}\label{sec:setting}
+% ===============================================================
+
+The system, data, network, and notation are those of Section~\Mref{sec:setting}.
+In particular $\dot x = f(x)$, $\Phi_t$ is the flow map, $x^{(k)}$ is the $k$-th time derivative as a function of the state, $m_k = \|x^{(k)}\|_\mu$, $\sigma$ is the scale of the network output, and $z = h\lambda$ for a linear test mode $\dot x = \lambda x$.
+Throughout, the state space is finite dimensional, $x \in \R^{n_{\mathrm x}}$ (for a partial differential equation, a Fourier--Galerkin truncation), so that $\Phi_t$ is a diffeomorphism for every $t \in \R$.
+
+A history-based method of depth $q \ge 1$ has the step map
+\begin{equation}\label{eq:history-method}
+x_{j+1} = G(\bX_j) = \sum_{i=0}^{q}\ell_i\,x_{j-i} + \sigma\,\Net(\cdot), \qquad \bX_j = (x_j, x_{j-1}, \dots, x_{j-q}) \in \R^{(q+1)n_{\mathrm x}},
+\end{equation}
+with fixed scalar weights $\ell_i$.
+The network input is either the current state, $\Net(x_j)$, or the whole lifted state, $\Net(\bX_j)$.
+The lifted map is
+\begin{equation}\label{eq:lifted}
+\bG(\bX_j) = \bX_{j+1} = \big(G(\bX_j), x_j, \dots, x_{j-q+1}\big).
+\end{equation}
+In training, the past states in $\bX_j$ are true states from the data.
+In rollout, they are predicted states.
+
+The Taylor method of order $p$ with minimal finite-difference lower slots has $q = p-1$ and uses the $p$ states $x_j, \dots, x_{j-p+1}$.
+For $p = 2$ it is the method of Proposition~\Mref{prop:leading} with the two-point slot, whose known part is $x_j + h\cdot(x_j - x_{j-1})/h = 2x_j - x_{j-1}$.
+For general $p$ the lower slots are the backward differences of orders $1, \dots, p-1$, and the known part is the polynomial extrapolation of the $p$ states to the next step, with weights
+\begin{equation}\label{eq:weights}
+\ell_i = (-1)^i\binom{p}{i+1}, \qquad i = 0, \dots, p-1 .
+\end{equation}
+For $p = 2, 3, 4$ these are $(2,-1)$, $(3,-3,1)$, and $(4,-6,4,-1)$, and in every case $|\ell_{q}| = 1$.
+
+\begin{lemma}[Target with minimal finite-difference slots]\label{lem:fd-target}
+Under Assumption~1 of~\cite{main}, the target of the Taylor method of order $p$ with the weights of Eq.~\eqref{eq:weights} is
+\begin{equation}\label{eq:fd-target}
+V_p^{\mathrm{fd}} = \Phi_h - \sum_{i=0}^{p-1}\ell_i\,\Phi_{-ih} = h^p\,x^{(p)} + O(h^{p+1}) .
+\end{equation}
+\end{lemma}
+
+\begin{proof}
+The weights in Eq.~\eqref{eq:weights} are the Lagrange weights that extrapolate a polynomial $P$ of degree at most $p-1$ from the nodes $0, -1, \dots, -(p-1)$ to the point $1$.
+The extrapolation is exact for $P(s) = s^k$ with $k \le p-1$, so $\sum_i\ell_i(-i)^k = 1$ for these $k$.
+For $s^p$ the extrapolation error at $s = 1$ is $\prod_{i=0}^{p-1}(1 + i) = p!$, so $\sum_i\ell_i(-i)^p = 1 - p!$.
+Expand $\Phi_h$ and each $\Phi_{-ih}$ with Lemma~\Mref{lem:remainder} to order $p$.
+The coefficient of $h^kx^{(k)}/k!$ in $V_p^{\mathrm{fd}}$ is $1 - \sum_i\ell_i(-i)^k$, which is $0$ for $k \le p-1$ and $p!$ for $k = p$.
+The remainders are $O(h^{p+1})$.
+\end{proof}
+
+Lemma~\ref{lem:fd-target} extends the case $p = 2$ of Proposition~\Mref{prop:leading} to every $p$.
+The target is $p!$ times the exact-slot target $h^px^{(p)}/p!$ and has the same shape.
+With $\delta_p = h^pm_p\eta_{p,\va}$ in place of Eq.~\eqref{M-eq:error-p} of~\cite{main}, the crossover of Theorem~\Mref{thm:crossover} becomes
+\begin{equation}\label{eq:hstar-fd}
+h_p^{\ast,\mathrm{fd}} = \frac{m_{p-1}}{m_p}\cdot\frac{\eta_{p-1,\va}}{\eta_{p,\va}},
+\end{equation}
+which is a factor $p$ below the exact-slot value of \Meqref{eq:hstar}, when order $p-1$ also uses minimal finite-difference slots.
+We checked Eq.~\eqref{eq:fd-target} symbolically for $p = 1, \dots, 4$.
+
+% ===============================================================
+\section{Volume of the lifted map}\label{sec:volume}
+% ===============================================================
+
+\begin{proposition}[Determinant of the lifted map]\label{prop:det}
+For the method of Eq.~\eqref{eq:history-method},
+\begin{equation}\label{eq:det}
+\big|\det D\bG(\bX)\big| = \Big|\det\Big(\ell_q I + \sigma\,\frac{\partial\Net}{\partial x_{j-q}}(\bX)\Big)\Big| .
+\end{equation}
+If the network input is the current state only, the right-hand side is $|\ell_q|^{n_{\mathrm x}}$, which equals $1$ for the weights of Eq.~\eqref{eq:weights}.
+\end{proposition}
+
+\begin{proof}
+Write $B_i = \partial G/\partial x_{j-i} = \ell_iI + \sigma\,\partial\Net/\partial x_{j-i}$.
+By Eq.~\eqref{eq:lifted}, $D\bG$ has first block row $(B_0, \dots, B_q)$ and below it the shift $[\,I_{qn_{\mathrm x}}\ \ 0\,]$.
+Write $D\bG = \begin{psmallmatrix} R & B_q \\ I & 0\end{psmallmatrix}$ with $R = (B_0, \dots, B_{q-1})$.
+Exchanging the first $n_{\mathrm x}$ rows with the last $qn_{\mathrm x}$ rows multiplies the determinant by $(-1)^{qn_{\mathrm x}^2}$ and gives the block lower-triangular matrix $\begin{psmallmatrix} I & 0 \\ R & B_q\end{psmallmatrix}$, whose determinant is $\det B_q$.
+If $\Net$ depends on $x_j$ only, $B_q = \ell_qI$.
+\end{proof}
+
+We checked Eq.~\eqref{eq:det} numerically on random blocks for $q = 1, 2$.
+
+\begin{corollary}[No contracting rollout with state-only input]\label{cor:lyap}
+Let the network input be the current state only and let the weights be those of Eq.~\eqref{eq:weights}.
+\begin{enumerate}[label=(\alph*)]
+\item $\bG$ is a diffeomorphism of $\R^{(q+1)n_{\mathrm x}}$ that preserves volume. For every ergodic invariant probability measure $\nu$ of $\bG$ for which $\log\|D\bG^{\pm1}\|$ is $\nu$-integrable, the $(q+1)n_{\mathrm x}$ Lyapunov exponents of $\nu$ sum to zero.
+\item Suppose in addition that the network output equals its target on a neighborhood $U$ of $\Aset$, $\sigma\Net = V_p^{\mathrm{fd}}$ on $U$. Then the lifted attractor $\Gamma = \{(x, \Phi_{-h}x, \dots, \Phi_{-qh}x) : x \in \Aset\}$ is invariant, $\bG$ restricted to $\Gamma$ is conjugate to $\Phi_h$ on $\Aset$, and the $qn_{\mathrm x}$ Lyapunov exponents of perturbations off $\Gamma$ sum to $-h\int_\Aset\Tr Df\,d\mu$. On a dissipative system this sum is positive, and the largest of these exponents is at least $-h\int_\Aset\Tr Df\,d\mu/(qn_{\mathrm x})$.
+\end{enumerate}
+\end{corollary}
+
+\begin{proof}
+(a) Given $\bX_{j+1}$, the entries $x_j, \dots, x_{j-q+1}$ are read off, and $x_{j-q} = \ell_q^{-1}\big(x_{j+1} - \sum_{i<q}\ell_ix_{j-i} - \sigma\Net(x_j)\big)$, so $\bG$ is invertible with a smooth inverse.
+By Proposition~\ref{prop:det}, $|\det D\bG| = 1$.
+By the Oseledets theorem, the sum of the Lyapunov exponents of $\nu$ is $\int\log|\det D\bG|\,d\nu = 0$.
+
+(b) The map $\iota(x) = (x, \Phi_{-h}x, \dots, \Phi_{-qh}x)$ is a smooth embedding.
+For $x \in U$, $G(\iota(x)) = \sum_i\ell_i\Phi_{-ih}x + V_p^{\mathrm{fd}}(x) = \Phi_hx$ by Eq.~\eqref{eq:fd-target}, so $\bG\circ\iota = \iota\circ\Phi_h$ on $U$, and $\Gamma = \iota(\Aset)$ is invariant because $\Phi_h(\Aset) = \Aset$.
+Let $\nu = \iota_\ast\mu$.
+The tangent bundle of $\iota(U)$ over $\Gamma$ is invariant under $D\bG$.
+The Lyapunov spectrum of $\nu$ is the union of the spectrum of $D\bG$ restricted to this bundle and the spectrum of the induced map on the quotient bundle, which describes perturbations off $\Gamma$.
+Since $\iota$ is a conjugacy with bounded derivative and bounded inverse derivative on the compact set $\Aset$, the restricted spectrum is the spectrum of $D\Phi_h$ with respect to $\mu$.
+Its sum is $\int\log|\det D\Phi_h|\,d\mu = \int\int_0^h\Tr Df(\Phi_tx)\,dt\,d\mu(x) = h\int\Tr Df\,d\mu$, by the Liouville formula and the invariance of $\mu$.
+By (a), the quotient exponents sum to $-h\int\Tr Df\,d\mu$.
+The largest of $qn_{\mathrm x}$ numbers is at least their mean.
+\end{proof}
+
+Corollary~\ref{cor:lyap} does not depend on the network, on the training, or on the time step.
+It is a property of the structure of Eq.~\eqref{eq:history-method} with state-only input.
+Part (b) assumes an exact network, and a trained network with a small error perturbs $\Gamma$ and its exponents but not the zero sum of part (a).
+For the linear test mode, the quotient exponent is $-\operatorname{Re}z$ per step, from the parasitic root $e^{-z}$ of Proposition~\Mref{prop:parasitic}.
+
+\begin{remark}[Semilinear systems]
+For $f(x) = Lx + B(x)$ with a trace-free nonlinear Jacobian, $\Tr Df = \Tr L$.
+In a Fourier--Galerkin basis this holds for the term $-\tfrac12(u^2)_x$ of the Kuramoto--Sivashinsky equation and for the advection term of the two-dimensional vorticity equation, for fields of zero mean, and the beta term is skew and contributes zero trace.
+% VERIFY: trace-free advection for the py2d discretization (dealiasing, mean mode handling).
+Then the summed growth rate off $\Gamma$ per unit time is $-\Tr L = -\sum_k\operatorname{Re}\lambda_k$.
+For the Kuramoto--Sivashinsky equation with $L = 100$ and 1024 modes, $\operatorname{Re}\lambda_k = k^2 - k^4$, the mean rate $-\Tr L/n_{\mathrm x}$ is $2.1\times10^5$, and the largest decay rate is $1.07\times10^6$.
+For the two-dimensional flow with $\nu = 10^{-3}$ and linear drag $0.1$ on a $256^2$ grid in a $2\pi$-periodic box, the mean rate is $11.0$ and the largest decay rate is $32.9$.
+% VERIFY: domain size 2*pi and viscosity 1/Re for the TURB dataset.
+\end{remark}
+
+% ===============================================================
+\section{Damped known part}\label{sec:damped}
+% ===============================================================
+
+Replace the known part $2x_j - x_{j-1}$ of order 2 by
+\begin{equation}\label{eq:damped}
+Q_h = (1 + \omega)\,x_j - \omega\,x_{j-1}, \qquad \omega = 1 - \beta h,
+\end{equation}
+with a damping rate $\beta \ge 0$ and a state-only network.
+The case $\beta = 0$ is the two-point method, and $\beta h = 1$ is the Euler step.
+
+\begin{proposition}[Damped known part]\label{prop:damped}
+\begin{enumerate}[label=(\alph*)]
+\item $|\det D\bG| = |\omega|^{n_{\mathrm x}}$.
+\item The target is
+\begin{equation}\label{eq:damped-target}
+V_\omega = (1-\omega)\,h\,f + (1+\omega)\,\frac{h^2}{2}\,x^{(2)} + (1-\omega)\,\frac{h^3}{6}\,x^{(3)} + O(h^4),
+\end{equation}
+and for $\omega = 1 - \beta h$ with $\beta$ fixed, $V_\omega = h^2\big(\beta f + x^{(2)}\big) + O(h^3)$.
+\item For the linear test mode with the network output equal to its target, the rollout recurrence has the roots $e^z$ and $\omega e^{-z}$.
+\end{enumerate}
+\end{proposition}
+
+\begin{proof}
+(a) is Proposition~\ref{prop:det} with $\ell_1 = -\omega$.
+(b) With $\Phi_{-h} = \sum_{k\le3}(-h)^kx^{(k)}/k! + O(h^4)$ from Lemma~\Mref{lem:remainder}, $Q_h = x + \omega hf - \omega\tfrac{h^2}{2}x^{(2)} + \omega\tfrac{h^3}{6}x^{(3)} + O(h^4)$; subtracting from $\Phi_h$ gives Eq.~\eqref{eq:damped-target}.
+Substituting $\omega = 1 - \beta h$, the first term is $\beta h^2f$, the second is $h^2x^{(2)} - \tfrac{\beta}{2}h^3x^{(2)}$, and the third is $O(h^4)$.
+(c) On the true trajectory $x_{j-1} = e^{-z}x_j$, so the network target is $(e^z - 1 - \omega + \omega e^{-z})x_j$ and the rollout is $x_{j+1} = (e^z + \omega e^{-z})x_j - \omega x_{j-1}$.
+Its characteristic polynomial is $\xi^2 - (e^z + \omega e^{-z})\xi + \omega = (\xi - e^z)(\xi - \omega e^{-z})$.
+\end{proof}
+
+We checked Eq.~\eqref{eq:damped-target} symbolically and the roots of part (c) numerically.
+The parasitic root $\omega e^{-z}$ has modulus below one on a mode with $\operatorname{Re}\lambda < 0$ when
+\begin{equation}\label{eq:beta-condition}
+\beta > \frac{1 - e^{h\operatorname{Re}\lambda}}{h} .
+\end{equation}
+For $h|\operatorname{Re}\lambda| \ll 1$ the right-hand side is $|\operatorname{Re}\lambda|(1 + O(h\operatorname{Re}\lambda))$, so the damping rate must exceed the decay rate of the mode.
+For $h|\operatorname{Re}\lambda| \gg 1$ it tends to $1/h$, so $\omega \to 0$ and the method becomes the Euler step on that mode.
+On a mode with $\operatorname{Re}\lambda = 0$, any $\omega < 1$ gives a parasitic root of modulus $\omega < 1$.
+
+The damped method keeps the protocol and the one-step theory of~\cite{main}.
+Its target is of order $h^2$ as long as $\beta$ does not grow as $h \to 0$, and its standardized shape $(\beta f + x^{(2)})/\|\beta f + x^{(2)}\|_\mu$ does not depend on $h$ at leading order.
+Theorems~\Mref{thm:error} and~\ref{M-thm:crossover} apply with $x^{(2)}$ replaced by $\beta f + x^{(2)}$.
+A scalar $\beta$ must exceed the largest decay rate among the modes to be stabilized.
+By the numbers in the remark of Section~\ref{sec:volume}, this gives $\beta h \gg 1$ at any practical $h$ for the Kuramoto--Sivashinsky equation at 1024 modes, and $\beta h \approx 3$ at $h = 0.1$ for the two-dimensional flow at $256^2$, so a scalar damping reduces to the Euler step on these grids.
+A damping $\omega_k = 1 - \beta_kh$ that depends on the wavenumber avoids this.
+It can be estimated from data without the vector field, for example from the lag-$h$ autocorrelation of each Fourier mode.
+% VERIFY: the per-wavenumber version has not been analyzed beyond the linear test mode.
+
+% ===============================================================
+\section{History input}\label{sec:history}
+% ===============================================================
+
+Let the network receive the lifted state, $\Net(\bX_j)$.
+
+\begin{proposition}[History input]\label{prop:history}
+\begin{enumerate}[label=(\alph*)]
+\item $|\det D\bG|$ is given by Eq.~\eqref{eq:det} and can be smaller than one.
+\item The one-step training loss does not determine $\partial\Net/\partial x_{j-q}$ on the training states. Let $c(\bX) = x_{j-q} - \Phi_{-qh}(x_j)$. For every matrix $M$, the networks $\Net$ and $\Net + Mc$ have the same one-step residual on every training state, and their derivatives with respect to $x_{j-q}$ differ by $M$.
+\item For the linear test mode with $q = 1$, weights $(2,-1)$, network $\Net(\bX_j) = g_0x_j + g_1x_{j-1}$, and network output equal to its target on the true trajectory, the rollout recurrence has the roots $e^z$ and $(1 - \sigma g_1)e^{-z}$.
+\end{enumerate}
+\end{proposition}
+
+\begin{proof}
+(a) The derivative $\partial\Net/\partial x_{j-q}$ enters $B_q$ in Eq.~\eqref{eq:det}.
+(b) Every training input is of the form $(x, \Phi_{-h}x, \dots, \Phi_{-qh}x)$, on which $c = 0$.
+(c) The rollout is $x_{j+1} = (2 + \sigma g_0)x_j - (1 - \sigma g_1)x_{j-1}$.
+The product of its roots is $1 - \sigma g_1$.
+Exactness on the true trajectory means that $x_j = e^{jz}$ solves the recurrence, so $e^z$ is a root, and the other root is $(1-\sigma g_1)e^{-z}$.
+\end{proof}
+
+Part (c) is the damped method of Section~\ref{sec:damped} with $\omega = 1 - \sigma g_1$.
+The history input lets the network learn the damping, mode by mode, from the data.
+The required history sensitivity is $\sigma g_1 = \beta h$.
+With $\sigma \approx h^2m_2$ for the two-point method, $g_1 \approx \beta/(hm_2)$, so the history-dependent part of the standardized network output grows as $1/h$.
+Part (b) says that one-step training gives no information about this part.
+The damping learned by a one-step-trained network is set by its inductive bias, not by the loss.
+Training on several unrolled steps supplies the missing information, because the unrolled inputs contain predicted states that lie off $\Gamma$.
+
+% ===============================================================
+\section{Unrolled training}\label{sec:unrolled}
+% ===============================================================
+
+\subsection{Residual dynamics}
+
+For a training state $x_i$ with true history $\bX_i$, define the unrolled predictions
+\begin{equation}\label{eq:unroll}
+\hat x_{i,1} = G(\bX_i), \qquad \hat x_{i,k+1} = G(\hat\bX_{i,k}), \qquad k = 1, \dots, K-1,
+\end{equation}
+where $\hat\bX_{i,k}$ is the lifted state at step $k$, whose entries are the predictions $\hat x_{i,m}$ for $m \ge 1$ and the true states for $m \le 0$.
+The residual of step $k$ in state units is $r_k = \hat x_{i,k} - \Phi_{kh}(x_i)$.
+Each step is standardized by a fixed scale $\sigma_k > 0$, $\tilde e_k = r_k/\sigma_k$, which extends protocol P3 of~\cite{main} to every unrolled step.
+The loss is $\mathcal L = \tfrac1{2n}\sum_{k=1}^K\|\tilde e_{k,\tr}\|^2$, and $\tilde e_\tr \in \R^{Knn_{\mathrm x}}$ stacks the $K$ standardized residuals over the training states.
+
+\begin{proposition}[Unrolled residual dynamics]\label{prop:unrolled}
+Under preconditioned gradient flow $\dot\theta = -\Pi\,\nabla_\theta\mathcal L$, with the gradient taken through all $K$ steps of Eq.~\eqref{eq:unroll},
+\begin{equation}\label{eq:unrolled-dynamics}
+\dot{\tilde e}_\tr = -A^{(K)}_\tr\,\tilde e_\tr, \qquad A^{(K)}_\tr = \frac1n\,\Jac^{(K)}\,\Pi\,\Jac^{(K)\top}, \qquad \Jac^{(K)} = \frac{\partial\tilde e_\tr}{\partial\theta} \in \R^{Knn_{\mathrm x}\times P}.
+\end{equation}
+The block of $\Jac^{(K)}$ for step $k$ is $\sigma_k^{-1}\,\partial\hat x_k/\partial\theta$, with
+\begin{equation}\label{eq:jac-recursion}
+\frac{\partial\hat x_{k+1}}{\partial\theta} = \sigma\,\partial_\theta\Net(\hat\bX_k) + \sum_{i=0}^{q}\Big(\ell_iI + \sigma\,\frac{\partial\Net}{\partial x_{j-i}}(\hat\bX_k)\Big)\frac{\partial\hat x_{k-i}}{\partial\theta}, \qquad \frac{\partial\hat x_m}{\partial\theta} = 0 \ \text{ for } m \le 0 .
+\end{equation}
+\end{proposition}
+
+\begin{proof}
+$\nabla_\theta\mathcal L = \tfrac1n\Jac^{(K)\top}\tilde e_\tr$, and by the chain rule $\dot{\tilde e}_\tr = \Jac^{(K)}\dot\theta$.
+Eq.~\eqref{eq:jac-recursion} is the chain rule applied to Eq.~\eqref{eq:unroll}, with the true past states independent of $\theta$.
+\end{proof}
+
+Eq.~\eqref{eq:unrolled-dynamics} has the form of Proposition~\Mref{prop:train}, with a stacked residual of $K$ blocks and a symmetric positive semidefinite kernel of the same size.
+The input of the network does not enter the size of the residual.
+Theorem~\Mref{thm:trapped}, Lemma~\Mref{lem:frozen}, and Definition~\Mref{def:hardness} therefore hold with $A_\tr$ replaced by $A^{(K)}_\tr$.
+The derivation requires the gradient through all steps.
+If the predicted states are detached before they are fed back, $\dot\theta = -\tfrac1n\Pi\Jac_{\mathrm{det}}^\top\tilde e_\tr$ with a truncated Jacobian, the kernel $\tfrac1n\Jac^{(K)}\Pi\Jac_{\mathrm{det}}^\top$ is not symmetric, and the decay-rate identity of Theorem~\Mref{thm:trapped}(a) no longer holds.
+For a small multilayer perceptron with history input and $K = 2$, one gradient step with learning rate $10^{-4}$ changed the stacked residual by $-10^{-4}A^{(2)}_\tr\tilde e_\tr$ up to a relative error of $8.8\times10^{-6}$.
+
+\subsection{Unrolled target}\label{sec:unrolled-target}
+
+\begin{proposition}[Initial unrolled residual]\label{prop:unrolled-target}
+Let the final layer be initialized to zero (protocol P4 of~\cite{main}), so $\Net = 0$ at $t = 0$.
+For the Taylor method of order $p \ge 1$ with the weights of Eq.~\eqref{eq:weights},
+\begin{equation}\label{eq:unrolled-target}
+r_k(0) = -\binom{k+p-1}{p}\,h^p\,x^{(p)} + O(h^{p+1}), \qquad k = 1, \dots, K .
+\end{equation}
+For the direct step, $r_k(0) = -\Phi_{kh}$.
+\end{proposition}
+
+\begin{proof}
+With $\Net = 0$ the step map extrapolates the last $p$ states with the weights of Eq.~\eqref{eq:weights}, which is exact on polynomials of degree at most $p-1$.
+Let $P$ be the polynomial of degree at most $p-1$ in $s$ that interpolates $\Phi_{sh}(x_i)$ at $s = 0, -1, \dots, -(p-1)$.
+By induction on $k$, $\hat x_{i,k} = P(k)$, since the $p$ states entering step $k$ are values of $P$.
+The interpolation error of $s \mapsto \Phi_{sh}(x_i)$ at $s = k$ follows as in the proof of Lemma~\ref{lem:fd-target}.
+The monomials $s^m$ with $m \le p-1$ are reproduced, and the error for $s^p$ at $s = k$ is $\prod_{i=0}^{p-1}(k+i) = p!\binom{k+p-1}{p}$.
+Multiplying by $h^px^{(p)}/p!$ and bounding the rest with Lemma~\Mref{lem:remainder} gives Eq.~\eqref{eq:unrolled-target}.
+\end{proof}
+
+We checked Eq.~\eqref{eq:unrolled-target} symbolically for $p = 1, 2, 3$ and $k = 1, \dots, 4$.
+For the Euler step ($p = 1$) it gives $r_k(0) = -khf + O(h^2)$, and for $p = 2$ the factors are $1, 3, 6, 10$.
+With $\sigma_k = \binom{k+p-1}{p}h^pm_p$, the standardized initial residual is $-(1, \dots, 1)\otimes x^{(p)}/m_p + O(h)$.
+The unrolled target keeps the shape of the $p$-th derivative and does not depend on $h$ at leading order, which extends Corollary~\Mref{cor:target}.
+
+\subsection{Unrolled kernel at leading order}\label{sec:leading-kernel}
+
+\begin{proposition}[Leading-order unrolled kernel]\label{prop:leading-kernel}
+Let $p \ge 1$, let $\Net$ and its derivatives be bounded near $\Gamma$, and let the standardized residuals $\tilde e_k$ be bounded, with $\sigma = \sigma_1 = h^pm_p$ and $\sigma_k$ as in Section~\ref{sec:unrolled-target}.
+Then every block of $\Jac^{(K)}$ satisfies
+\begin{equation}\label{eq:leading-jac}
+\frac{1}{\sigma_k}\frac{\partial\hat x_k}{\partial\theta} = \partial_\theta\Net(x_i, x_i, \dots, x_i) + O(h),
+\end{equation}
+so $A^{(K)}_\tr = (\mathbf 1_K\mathbf 1_K^\top)\otimes A^{\mathrm{rep}}_\tr + O(h)$, where $A^{\mathrm{rep}}_\tr$ is the one-step training kernel of the network evaluated on repeated-state inputs $(x_i, \dots, x_i)$.
+\end{proposition}
+
+\begin{proof}
+Since $r_m = \sigma_m\tilde e_m = O(h^p)$ and $\Phi_{mh}(x_i) - x_i = O(h)$, every entry of $\hat\bX_k$ is $x_i + O(h)$, so $\partial_\theta\Net(\hat\bX_k) = \partial_\theta\Net(x_i, \dots, x_i) + O(h)$.
+In Eq.~\eqref{eq:jac-recursion}, $\sigma\,\partial\Net/\partial x_{j-i} = O(h^p)$.
+Write $y_k = \sigma^{-1}\partial\hat x_k/\partial\theta$.
+Then $y_{k+1} = \partial_\theta\Net(x_i, \dots, x_i) + \sum_i\ell_iy_{k-i} + O(h)$, with $y_m = 0$ for $m \le 0$.
+The solution is $y_k = a_k\,\partial_\theta\Net(x_i, \dots, x_i) + O(h)$, where $a_{k+1} = 1 + \sum_i\ell_ia_{k-i}$ and $a_m = 0$ for $m \le 0$.
+The extrapolation weights reproduce polynomials of degree at most $p-1$, so the recursion for $a$ states that the $p$-th backward difference of $a$ equals one, with $a_0 = \dots = a_{1-p} = 0$.
+The unique solution is $a_k = \binom{k+p-1}{p}$, and $\sigma_k/\sigma = a_k$.
+\end{proof}
+
+For a multilayer perceptron with history input on a three-dimensional linear flow, $p = 2$, and $K = 3$, the relative difference between the standardized Jacobian blocks of steps $2$ and $1$ was $0.027, 0.013, 0.0066, 0.0033$ at $h = 0.1, 0.05, 0.025, 0.0125$, and between steps $3$ and $1$ twice these values, in agreement with Eq.~\eqref{eq:leading-jac}.
+
+Proposition~\ref{prop:leading-kernel} and Proposition~\ref{prop:unrolled-target} together say that, at leading order in $h$, training on $K$ unrolled steps is training on $K$ copies of one problem.
+The target of each copy is $-x^{(p)}/m_p$, and the kernel is that of the network on repeated-state inputs.
+The unlearned fraction of order $p$ under unrolled training is then $\eta_p + O(h)$, and the crossover of Eq.~\eqref{eq:hstar-fd} holds at leading order under the continuity assumption of Theorem~\Mref{thm:error}.
+% VERIFY: eta_p for repeated-state inputs equals eta_p of the state-only network only if the network restricted to the diagonal matches the state-only architecture; this is an architectural statement to check for the ViT.
+The terms that stabilize the rollout (the history sensitivity of Section~\ref{sec:history} and the network Jacobian in Eq.~\eqref{eq:jac-recursion}) enter the kernel at order $h$ per step.
+The parasitic growth per step is also of order $h$, $|e^{-z}| - 1 \approx h|\operatorname{Re}\lambda|$.
+Over $K$ steps the stabilizing information is of relative size $Kh|\operatorname{Re}\lambda|$, which suggests choosing $K$ with $Kh|\operatorname{Re}\lambda| \gtrsim 1$ for the modes to be stabilized.
+% VERIFY: this is a heuristic from the order counting; it has not been derived.
+The direct step is excluded from Proposition~\ref{prop:leading-kernel}, since its network output is not small and $\sigma\,\partial\Net/\partial x$ is of order one.
+
+\subsection{What the unrolled loss rewards on a linear test mode}\label{sec:minimizer}
+
+Consider Proposition~\ref{prop:history}(c) with the parasitic root $\xi_2$ as a free parameter and the true root $\xi_1 = e^z$ fixed.
+An error $\varepsilon$ injected at the first step propagates through the companion matrix, and its contribution to the residual of step $k+1$ is $S_k(\xi_1, \xi_2)\varepsilon$, with $S_k(a, b) = \sum_{i=0}^ka^ib^{k-i}$.
+The $K$-step loss from this error is proportional to $\sum_{k=0}^{K-1}|S_k(\xi_1, \xi_2)|^2$.
+Table~\ref{tab:minimizer} lists its minimizer over complex $\xi_2$, found on a grid of spacing $0.005$.
+
+\begin{table}[htbp]
+\centering
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+& $K = 2$ & $K = 3$ & $K = 5$ & $K = 10$ \\
+\midrule
+$z = -0.5$ & $0.605$ & $0.490$ & $0.500$ & $0.500$ \\
+$z = 0.5i$ & $1.002$ & $0.816$ & $0.796$ & $0.828$ \\
+\bottomrule
+\end{tabular}
+\caption{Modulus of the parasitic root $\xi_2$ that minimizes the $K$-step loss contribution of one injected error, for the linear test mode with the history-input network of Proposition~\ref{prop:history}(c). The one-step loss does not depend on $\xi_2$ (Proposition~\ref{prop:history}(b)).}
+\label{tab:minimizer}
+\end{table}
+
+On the decaying mode, $K = 2$ already selects a stable parasitic root.
+On the oscillatory mode, $K = 2$ selects a root on the unit circle up to the grid spacing, and $K \ge 3$ selects a stable one.
+This calculation fixes the true root, treats one injected error, and ignores the cost of representing the history sensitivity.
+It indicates that $K \ge 3$ is the smallest horizon that constrains the parasitic root on both types of mode.
+It is not a statement about trained networks.
+
+% ===============================================================
+\section{Consequences for the experiments}\label{sec:consequences}
+% ===============================================================
+
+\begin{enumerate}[label=C\arabic*.]
+\item Taylor methods with finite-difference slots and state-only input have the one-step error of Eq.~\eqref{eq:hstar-fd}, but by Corollary~\ref{cor:lyap} their rollout on the Kuramoto--Sivashinsky equation and the two-dimensional flow cannot stay on the attractor. They remain useful as a control (test T6 of Section~\Mref{sec:tests}).
+\item The damped known part of Eq.~\eqref{eq:damped} keeps the protocol and the one-step theory. A scalar damping reduces to the Euler step at the grid resolutions of the datasets. A damping per wavenumber, estimated from data, is untested.
+\item History input with unrolled training changes protocol P2 of~\cite{main} to ``the network receives the states used by the known part'', and P3 to one scale $\sigma_k$ per unrolled step. The gradient must pass through all steps. The same $K$ and input should be used for every method, including the direct step and the Euler step, so that protocol P5 holds.
+\item Under C3 the residual dynamics, trapped error, and hardness of~\cite{main} hold with the unrolled kernel (Proposition~\ref{prop:unrolled}), and the unlearned fraction and crossover are unchanged at leading order in $h$ (Propositions~\ref{prop:unrolled-target} and~\ref{prop:leading-kernel}). The tracked quantities Q1--Q5 are measured on $A^{(K)}_\tr$.
+\item The linear test mode suggests $K \ge 3$, and the order counting of Section~\ref{sec:leading-kernel} suggests $Kh|\operatorname{Re}\lambda| \gtrsim 1$ for the modes to be stabilized.
+\end{enumerate}
+
+Items that need justification are the cost, in hardness, of the history sensitivity $g_1 \approx \beta/(hm_2)$ of Section~\ref{sec:history}; the heuristic horizon of C5; the behavior of the quotient exponents of Corollary~\ref{cor:lyap} for a trained network with non-normal, state-dependent Jacobian; and whether the leading-order kernel on repeated-state inputs coincides with the kernel of the state-only architecture.
+
+\begin{thebibliography}{9}
+\bibitem{main}
+The slow eigenspectrum of the training kernel. Draft, \texttt{paper/hardness\_framework\_v3.tex}.
+\end{thebibliography}
+
+\end{document}

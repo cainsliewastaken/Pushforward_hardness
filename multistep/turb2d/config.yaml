@@ -1,0 +1,37 @@
+# 2D turbulence prototype (turb2d/). Same physics as the stored py2d data (Re 1000, forcing k=4, drag 0.1, beta 20)
+# at 128^2 with solver step 1e-3 (verified against the 256^2 data: see turb2d notes). Emulator step dt = 0.1
+# (the stored data's model step); windows and horizons in time units. Starts: stored 256^2 snapshots truncated
+# to 128^2 and re-equilibrated for `settle` time units.
+N: 128
+Re: 1000.0
+fkx: 4
+fky: 4
+alpha: 0.1
+beta: 20.0
+h: 5.0e-4
+dt: 0.1
+h5: /pscratch/sd/c/cainslie/training_data/2d_turbulence/full_index.h5
+stride: 100             # snapshot indices between candidate starts (1 time unit)
+settle: 2.0             # re-equilibration at 128^2 (time units)
+seed_train: 1000
+seed_test: 2000
+n_train: 2048
+n_test: 256
+n_eval: 256
+p_train: 20             # training trajectories: 20 emulator steps = 2 time units
+T_eval: 1.0             # held-out free-rollout error logged over [0, T_eval] (10 steps)
+horizon: 4.0            # held-out trajectories (40 steps)
+long_horizons: [0.5, 1.0, 2.0, 4.0]
+
+modes: 16
+width: 24
+layers: 4
+lr: 1.0e-3
+lr_end: 1.0e-6
+warmup: 500
+steps: 8000
+clip: 1.0
+batch: 16
+log_every: 250
+threads: 8
+out_root: ${SCRATCH}/multistep_roughness

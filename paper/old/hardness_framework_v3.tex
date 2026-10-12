@@ -1,0 +1,655 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm,mathtools}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage[colorlinks=true,linkcolor=blue,citecolor=blue]{hyperref}
+
+\newtheorem{theorem}{Theorem}
+\newtheorem{lemma}{Lemma}
+\newtheorem{proposition}{Proposition}
+\newtheorem{corollary}{Corollary}
+\theoremstyle{definition}
+\newtheorem{definition}{Definition}
+\newtheorem{assumption}{Assumption}
+\newtheorem{ansatz}{Ansatz}
+\newtheorem{designrule}{Rule}
+\theoremstyle{remark}
+\newtheorem*{remark}{Remark}
+
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\Aset}{\mathcal{A}}
+\newcommand{\Net}{\mathcal{N}_\theta}
+\newcommand{\Hard}{\mathcal{H}}
+\newcommand{\Lip}{\operatorname{Lip}_{\Aset}}
+\newcommand{\ex}{\mathrm{ex}}
+\newcommand{\tr}{\mathrm{tr}}
+\newcommand{\va}{\mathrm{va}}
+\newcommand{\Dmap}{\mathcal{D}}
+\newcommand{\Kmap}{\mathcal{K}}
+\newcommand{\Prop}{\mathcal{U}}
+\newcommand{\Jac}{\mathcal{J}}
+\newcommand{\id}{\mathrm{id}}
+\newcommand{\refm}{\mathrm{ref}}
+\newcommand{\Rem}{\mathcal{T}}
+\newcommand{\slow}{\mathrm{slow}}
+
+\title{The slow eigenspectrum of the training kernel\\[4pt]
+\large Trapped error, its scaling with network size, and when a learned time stepper should use a higher-order method}
+\author{Draft}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+A learned time stepper advances a dynamical system by one step with a neural network.
+The network can predict the next state directly, an increment as in the Euler step, or a higher time derivative combined with known lower derivatives, as in a Taylor method of order $p$.
+This note asks which of these a given network should use, and answers it through the training kernel of the network.
+The residual of a trained network decays at a rate equal to the Rayleigh quotient of the residual on the kernel, so the error that survives training is the part of the residual that sits on the slow eigenspectrum of the kernel.
+We define the hardness of a task as this trapped error, show that it is bounded below by the residual mass on eigenvalues smaller than the inverse training budget, and identify the quantities that determine it: the spectrum of the kernel, which depends on the network and the states, and the alignment of the target with that spectrum, which depends on the target.
+A Taylor method of order $p$ has a target of size $h^p m_p/p!$ whose shape, after standardization, is that of the $p$-th time derivative and does not depend on $h$.
+Its trained error is therefore $h^p m_p\,\eta_p/p!$, where $\eta_p$ is the unlearned fraction of the $p$-th derivative on the network.
+Higher derivatives are rougher functions of the state, so $\eta_p$ increases with $p$ and decreases with network size.
+We state a scaling ansatz for $\eta_p$ as a function of size, show how its exponents are measured on small networks, and derive the size $N_p^\ast(h)$ above which, or the step $h_p^\ast(N)$ below which, order $p$ has lower error than order $p-1$.
+Proofs are in Appendix~\ref{app:proofs}.
+\end{abstract}
+
+\tableofcontents
+
+% ===============================================================
+\section{Introduction}\label{sec:intro}
+% ===============================================================
+
+A learned time stepper is a neural network trained to advance the state of a dynamical system by one time step.
+The same network can be used in several ways.
+In the direct step, the network outputs the next state.
+In the Euler step, it outputs an increment, and the next state is the current state plus the time step times this increment.
+In a Taylor method of order $p$, known lower time derivatives are combined with a network that outputs the $p$-th derivative.
+Each choice gives the network a different target to learn.
+The goal of this note is to say, for a given network and dataset, which choice gives the lower error, and how the answer changes as the network grows.
+
+The argument has three parts.
+Section~\ref{sec:kernel} analyzes one training run through the training kernel of the network.
+The residual decays at a rate set by where it sits on the spectrum of the kernel, and the error that survives training is the residual mass that sits on the slow part of the spectrum.
+This is the hardness of the task.
+It is determined by two things: the spectrum of the kernel, which is a property of the network and the states, and the alignment of the target with the eigenvectors of the kernel, which is a property of the target.
+The section ends with a list of the quantities that must be tracked during a training run to see both.
+
+Section~\ref{sec:scaling} asks how these quantities change with the size of the network, the amount of data, and the training budget.
+The exact statements available are constraints: the rank of the kernel is at most the number of parameters, so a small network has an exact null space in which no error decays; and the spectrum per training state converges as the data grow, so data act on generalization and not on the training residual.
+Within these constraints, the dependence on size is a scaling ansatz whose exponents are measured on small networks.
+
+Section~\ref{sec:targets} describes the targets of time-stepping methods.
+The target of order $p$ has size proportional to $h^p$, and its shape after standardization is that of the $p$-th time derivative, independent of $h$.
+For a polynomial vector field the $p$-th derivative is a polynomial of degree that grows with $p$, which is why it is rougher and lies further along the slow spectrum.
+Section~\ref{sec:switch} combines the three parts.
+The trained error of order $p$ is $h^p m_p\,\eta_p/p!$, with $\eta_p$ the unlearned fraction of the $p$-th derivative, and the crossover between orders $p-1$ and $p$ is at $h_p^\ast(N) = p\,(m_{p-1}\eta_{p-1})/(m_p\eta_p)$.
+Under the scaling ansatz this gives the network size above which order $p$ is the better choice.
+Section~\ref{sec:open} lists what needs justification, and Section~\ref{sec:tests} lists the experiments.
+
+% ===============================================================
+\section{Setting}\label{sec:setting}
+% ===============================================================
+
+\subsection{System and data}
+
+The system is $\dot x = f(x)$ with $x \in \R^{n_{\mathrm{x}}}$.
+The flow map $\Phi_t$ sends a state to the state a time $t$ later.
+The data are pairs $(x, \Phi_h(x))$ computed by a numerical solver with time step $h$.
+The solver error is neglected, so the data are noiseless.
+The vector field $f$ is available to the solver that generates the data; it may or may not be available to the time stepper.
+
+The time derivatives of a trajectory are functions of the state.
+Set $x^{(0)}(x) = x$, $x^{(1)} = f$, and $x^{(k+1)} = Dx^{(k)}\,f$, so that the $k$-th time derivative at state $x$ is $x^{(k)}(x)$.
+
+\begin{assumption}[Regularity]\label{ass:regular}
+The states lie in a compact set $\Aset$ that is invariant under the flow, $\Phi_t(\Aset) = \Aset$ for all $t \in \R$.
+For every order $k$ used below, $x^{(k)}$ is bounded and Lipschitz on $\Aset$, with $M_k = \sup_{\Aset}\|x^{(k)}\|$, Lipschitz constant $L_k$, and $L = L_1$.
+Since $x^{(0)}$ is the identity, $L_0 = 1$.
+\end{assumption}
+
+\begin{assumption}[Sampling]\label{ass:sampling}
+The flow on $\Aset$ has an ergodic invariant probability measure $\mu$, and training and validation states are sampled from $\mu$.
+\end{assumption}
+
+For a chaotic dissipative system, $\Aset$ is the attractor and $\mu$ its physical measure.
+Assumption~\ref{ass:sampling} holds for states taken from long trajectories after the transient, by Birkhoff's theorem, and is the standard working assumption for turbulence, the Kuramoto--Sivashinsky equation, and weather.
+For a function $u$ on $\Aset$ we write $\|u\|_\infty = \sup_\Aset\|u\|$, $\|u\|_\mu = (\int\|u\|^2d\mu)^{1/2}$, and $m_k = \|x^{(k)}\|_\mu \le M_k$.
+
+\subsection{Network, methods, and protocol}
+
+The network $\Net$ has parameters $\theta \in \R^P$ and a width $N$; size is measured by $N$ or by $P$ as convenient.
+A method is a step map $G(x) = Q_h(x) + \sigma\,\Net(x)$, where $Q_h$ is a known part and $\sigma$ a scale.
+The target of the method is $V = \Phi_h - Q_h$, the function the network output must equal, up to the scale, for the step map to be exact.
+The methods themselves are defined in Section~\ref{sec:targets}; until then only $V$ matters.
+
+Methods are compared under the following protocol.
+\begin{enumerate}[label=P\arabic*.]
+\item The architecture, size, and initialization are the same for every method.
+\item The network input is the current state only.
+\item Each method trains on $V/\sigma$, with $\sigma$ the root mean square of $V$ over the training states, and the step map multiplies the network output by $\sigma$.
+\item The final linear layer is initialized to zero, so the initial network output is zero.
+\item The training procedure and budget are the same for every method.
+\end{enumerate}
+P3 gives every method a network target of unit root mean square, and P4 makes the initial residual equal to minus the target.
+
+Let $x_1,\dots,x_n$ be the training states and $y_1,\dots,y_m$ the validation states.
+For a function $u$, $u_\tr \in \R^{nn_{\mathrm x}}$ stacks $u(x_1),\dots,u(x_n)$, with inner product $\langle a,b\rangle_\tr = \tfrac1n a^\top b$ and norm $\|u\|_\tr = \langle u_\tr,u_\tr\rangle_\tr^{1/2}$; $u_\va$, $\langle\cdot,\cdot\rangle_\va$, and $\|\cdot\|_\va$ are defined likewise on the validation states.
+Operator norms are taken with respect to these norms.
+By Assumption~\ref{ass:sampling}, $\|u\|_\tr$ and $\|u\|_\va$ approximate $\|u\|_\mu$ for large samples.
+The residual of a method in state units is $r = G - \Phi_h$.
+
+% ===============================================================
+\section{Kernel analysis of a training run}\label{sec:kernel}
+% ===============================================================
+
+\subsection{Residual dynamics}
+
+The network is trained on the mean squared error over the training states.
+Following \cite{ainslie2026spectral}, the optimizer Adam is modeled as gradient flow preconditioned by a diagonal matrix $\Pi(t)$ with positive entries, $t$ the training time; minibatch noise and momentum are neglected.
+Let $\Jac_\tr(t)$ and $\Jac_\va(t)$ be the Jacobians of the stacked network outputs on the training and validation states with respect to $\theta$.
+The training kernel and the validation kernel are
+\begin{equation}\label{eq:kernel}
+A_\tr(t) = \frac1n\,\Jac_\tr\,\Pi\,\Jac_\tr^\top, \qquad A_\va(t) = \frac1n\,\Jac_\va\,\Pi\,\Jac_\tr^\top .
+\end{equation}
+The training kernel is symmetric and positive semidefinite, with eigenvalues $\lambda_1(t) \ge \lambda_2(t) \ge \dots \ge 0$ and orthonormal eigenvectors $u_i(t)$ in the inner product $\langle\cdot,\cdot\rangle_\tr$.
+
+\begin{proposition}[Residual dynamics]\label{prop:train}
+Under the protocol,
+\begin{equation}\label{eq:residual-dynamics}
+\dot r_\tr = -A_\tr(t)\,r_\tr, \qquad \dot r_\va = -A_\va(t)\,r_\tr, \qquad r_\tr(0) = -V_\tr, \quad r_\va(0) = -V_\va .
+\end{equation}
+With $\Prop(t,s)$ the solution operator of $\dot r = -A_\tr r$ and $T$ the training time,
+\begin{equation}\label{eq:train-residual}
+r_\tr(T) = -\,\Prop(T,0)\,V_\tr, \qquad r_\va(T) = -\big(V_\va - \Kmap_T V_\tr\big), \qquad \Kmap_T = \int_0^T A_\va(t)\,\Prop(t,0)\,dt .
+\end{equation}
+\end{proposition}
+
+Proposition~\ref{prop:train} is proved in Appendix~\ref{app:train}.
+It follows from the chain rule and does not linearize the network.
+The kernel changes during training because the parameters change, and the path of the kernel depends on the target.
+
+\subsection{Decay rate and trapped error}
+
+Write the residual in the eigenbasis of the current kernel, $\hat r_i(t) = \langle u_i(t), r_\tr(t)\rangle_\tr$.
+
+\begin{theorem}[Decay rate and trapped error]\label{thm:trapped}
+Let $\rho(t) = \langle r_\tr, A_\tr r_\tr\rangle_\tr/\|r_\tr\|_\tr^2$ be the Rayleigh quotient of the residual on the kernel.
+\begin{enumerate}[label=(\alph*)]
+\item The residual decays at rate $\rho$:
+\begin{equation}\label{eq:rate}
+\frac{d}{dt}\|r_\tr\|_\tr^2 = -2\,\rho(t)\,\|r_\tr\|_\tr^2, \qquad \rho(t) = \frac{\sum_i \lambda_i(t)\,\hat r_i(t)^2}{\sum_i \hat r_i(t)^2} .
+\end{equation}
+\item For a budget $\tau > 0$, define the trapped error at time $t$ as the residual mass on eigenvalues at most $1/\tau$,
+\begin{equation}\label{eq:trapped}
+\Hard_\tau(t)^2 = \sum_{i:\ \lambda_i(t) \le 1/\tau}\hat r_i(t)^2 .
+\end{equation}
+Then, with $d_t(s) = \|(A_\tr(s) - A_\tr(t))\,r_\tr(s)\|_\tr$ the drift of the kernel along the residual,
+\begin{equation}\label{eq:lower}
+\|r_\tr(t+\tau)\|_\tr \ \ge\ e^{-1}\,\Hard_\tau(t) - \int_t^{t+\tau} d_t(s)\,ds .
+\end{equation}
+\item The validation residual moves at a rate bounded by the square root of the training decay rate,
+\begin{equation}\label{eq:val-rate}
+\|\dot r_\va\|_\va \le \kappa_\va(t)\,\sqrt{\rho(t)}\,\|r_\tr\|_\tr, \qquad \kappa_\va = \frac{\|\Jac_\va\Pi^{1/2}\|}{\sqrt m} .
+\end{equation}
+\end{enumerate}
+\end{theorem}
+
+Theorem~\ref{thm:trapped} is proved in Appendix~\ref{app:trapped}.
+Part (a) says that the residual decays quickly while it sits on large eigenvalues and slowly once it sits on small ones.
+Since the fast components are removed first, $\rho(t)$ decreases through training and the residual migrates to the slow eigenspectrum.
+Part (b) is a lower bound on the error: whatever happens in the next $\tau$ units of training, the error cannot fall below the mass that currently sits on eigenvalues below $1/\tau$, except by rotating the kernel, which is what the drift term measures.
+A network whose kernel is nearly constant late in training cannot remove this error at all.
+Part (c) says that the validation residual stops moving when the training residual is trapped, so the trapped error is also what is left on the validation states.
+
+\begin{definition}[Hardness]\label{def:hardness}
+The hardness of a task, given by a target $V$, a network, and training states, is the trapped error $\Hard_\tau(T)$ at the end of training for a budget $\tau$ comparable to $T$.
+The unlearned fraction of the task is $\eta(V) = \|r_\tr(T)\|_\tr/\|V\|_\tr$, and $\eta_\va(V) = \|r_\va(T)\|_\va/\|V\|_\va$ on the validation states.
+\end{definition}
+
+When the residual is trapped, $\|r_\tr(T)\|_\tr \approx \Hard_T(T)$ and the unlearned fraction is the trapped fraction.
+The definition is a diagnostic of a trained network.
+It does not depend on the kernel at initialization, and it does not require the kernel to be constant.
+
+\subsection{How the residual gets trapped: spectrum and alignment}
+
+Theorem~\ref{thm:trapped} describes the residual at the end.
+To explain how it got there, freeze the kernel at its mean over training, $\bar A_\tr = \tfrac1T\int_0^T A_\tr\,dt$, with eigenpairs $(\bar\lambda_i,\bar u_i)$, and write $\hat V_i = \langle\bar u_i, V_\tr\rangle_\tr$ for the alignment of the target with the mean kernel.
+
+\begin{lemma}[Filtered target]\label{lem:frozen}
+With $d(s) = \|(A_\tr(s) - \bar A_\tr)\,r_\tr(s)\|_\tr$,
+\begin{equation}\label{eq:frozen}
+\Big\|\,r_\tr(T) + e^{-T\bar A_\tr}V_\tr\Big\|_\tr \le \int_0^T d(s)\,ds, \qquad \big\|e^{-T\bar A_\tr}V_\tr\big\|_\tr^2 = \sum_i e^{-2T\bar\lambda_i}\,\hat V_i^2 .
+\end{equation}
+\end{lemma}
+
+Lemma~\ref{lem:frozen} is proved in Appendix~\ref{app:frozen}.
+Up to the drift, the residual at the end of training is the target filtered by the kernel: each component of the target along $\bar u_i$ is damped by $e^{-T\bar\lambda_i}$.
+The unlearned fraction is then
+\begin{equation}\label{eq:eta-spectral}
+\eta(V)^2 \approx \frac{\sum_i e^{-2T\bar\lambda_i}\hat V_i^2}{\sum_i \hat V_i^2},
+\end{equation}
+the power of the target on eigenvalues below about $1/T$.
+Two things enter: the spectrum $\{\bar\lambda_i\}$, which is set by the network and the states and is the same for every target trained on them up to the drift, and the alignment $\{\hat V_i\}$, which is set by the target.
+A task is hard when the kernel has many small eigenvalues and the target has much of its power on them.
+The drift term is the certificate for this picture; it is recorded during training and, being weighted by the residual, it ignores changes of the kernel on directions that carry no error.
+
+\subsection{What to track}\label{sec:track}
+
+The following quantities describe a training run.
+All are computed from the Jacobians and the residual, which are available during training.
+\begin{enumerate}[label=Q\arabic*.]
+\item \emph{Kernel spectrum.} The eigenvalues $\lambda_i(T)$ of the final kernel, and of the mean kernel.
+Summaries: the slow count $n_\slow = \#\{i : \lambda_i \le 1/T\}$, and the tail exponent $\alpha$ if $\lambda_i \approx \lambda_1 i^{-\alpha}$ for large $i$.
+\item \emph{Target alignment.} The cumulative power of the target on the mean kernel, $C_V(\lambda) = \sum_{\bar\lambda_i \le \lambda}\hat V_i^2/\|V\|_\tr^2$, and its value at $\lambda = 1/T$, the slow power $\pi_\slow(V) = C_V(1/T)$.
+\item \emph{Residual spectrum.} The components $\hat r_i(T)$ on the final kernel, the trapped error $\Hard_\tau(T)$, the decay rate $\rho(T)$, and the unlearned fractions $\eta(V)$ and $\eta_\va(V)$.
+\item \emph{Drift certificate.} $\int_0^T d(s)\,ds$ of Lemma~\ref{lem:frozen} relative to $\|r_\tr(T)\|_\tr$, and $\int_t^{T} d_t(s)\,ds$ of Theorem~\ref{thm:trapped} for the $t$ at which the residual was last a fixed multiple of its final value.
+\item \emph{Generalization.} $\eta_\va(V)/\eta(V)$, and $\kappa_\va$ of Eq.~\eqref{eq:val-rate}.
+\end{enumerate}
+Q1 is the property of the network and states; Q2 is the property of the target; Q3 is their combination and is the hardness; Q4 says whether Q1 and Q2 explain Q3; Q5 says whether the training residual is the right proxy for the validation error.
+
+% ===============================================================
+\section{Scaling of the tracked quantities}\label{sec:scaling}
+% ===============================================================
+
+The hardness of a task changes when the network grows, when more data are used, or when training is longer.
+This section states what can be said exactly, then states the scaling ansatz that the experiments of Section~\ref{sec:tests} test.
+
+\subsection{Exact constraints}
+
+\begin{proposition}[Constraints on the spectrum]\label{prop:constraints}
+\begin{enumerate}[label=(\alph*)]
+\item \emph{Rank.} At every $t$, $\operatorname{rank}A_\tr(t) \le P$. If $P < nn_{\mathrm x}$, at least $nn_{\mathrm x} - P$ eigenvalues are exactly zero, and the component of the residual in $\ker A_\tr(t)$ has decay rate zero at time $t$.
+\item \emph{Data.} For a fixed parameter vector, the nonzero eigenvalues of $A_\tr$ are those of the $P\times P$ matrix $\Pi^{1/2}\big(\tfrac1n\Jac_\tr^\top\Jac_\tr\big)\Pi^{1/2}$, and $\tfrac1n\Jac_\tr^\top\Jac_\tr \to \int_\Aset \Jac_x^\top\Jac_x\,d\mu(x)$ as $n \to \infty$, where $\Jac_x$ is the Jacobian of the output at state $x$.
+\item \emph{Budget.} $\Hard_\tau(t)$ is nonincreasing in $\tau$, and by Lemma~\ref{lem:frozen} the residual after training for a time $T$ is, up to the drift, at least the target mass on $\bar\lambda_i \le 1/T$ times $e^{-1}$.
+\end{enumerate}
+\end{proposition}
+
+Proposition~\ref{prop:constraints} is proved in Appendix~\ref{app:constraints}.
+Part (a) separates two regimes.
+A network with fewer parameters than residual components, $P < nn_{\mathrm x}$, has an exact null space; error in it does not decay at all, and can be reached only when the null space rotates.
+A network with $P \ge nn_{\mathrm x}$ can have a full-rank kernel, and its trapped error sits on small but nonzero eigenvalues.
+The scaling of hardness with size is different in the two regimes, and experiments should say which one they are in.
+Part (b) says that, for a fixed network, the spectrum per training state converges as the data grow.
+Adding data therefore does not slow the training residual; it acts on generalization, through $\Kmap_T$ and the validation kernel, and on the path of the parameters.
+Part (c) says that a longer budget lowers the threshold $1/T$ below which error is trapped; it does not remove the error on the slowest modes unless $T$ exceeds their inverse eigenvalue.
+
+\subsection{Scaling ansatz}
+
+The trained error of a task is $\|V\|\,\eta(V)$.
+The size of the target does not depend on the network, so the scaling of the error with size is the scaling of the unlearned fraction.
+The exact constraints do not determine it: in the limit of infinite width the kernel stops changing during training and its spectrum stops depending on width, so $\eta$ plateaus, while at finite width the kernel adapts to the target and the plateau is approached from above.
+The dependence on width below the plateau is what the experiments measure.
+
+\begin{ansatz}[Size scaling]\label{ans:size}
+For a fixed training protocol and dataset, and for widths $N$ in a range below the plateau, the unlearned fraction of a target $V$ satisfies
+\begin{equation}\label{eq:ansatz}
+\eta(V; N) \simeq a(V)\,N^{-\gamma(V)} ,
+\end{equation}
+and the same holds for $\eta_\va$ with its own prefactor and exponent.
+\end{ansatz}
+
+The prefactor and exponent are properties of the target on the architecture.
+By Eq.~\eqref{eq:eta-spectral}, $\eta$ is the target power below $1/T$ on the mean kernel, so $\gamma(V)$ measures how fast the slow part of the spectrum that carries $V$ is lifted as the network grows.
+A target that sits further along the tail has more to gain from size and, if the tail is lifted uniformly, a larger exponent; whether it does is a finding, not an assumption.
+The exponents are measured on a sequence of small networks and extrapolated; the extrapolation is valid as long as the fitted range is below the plateau, which the tracked spectrum shows directly, since at the plateau the spectrum stops changing with $N$.
+
+\begin{remark}[Data scaling]
+For kernel regression with a fixed kernel whose eigenvalues decay as $i^{-\alpha}$, the generalization error decays as a power of the number of samples with an exponent set by $\alpha$ and by the decay of the target's alignment coefficients.
+A target with more power on the tail has the slower data exponent.
+Part (b) of Proposition~\ref{prop:constraints} says that this is where data enter; the quantity to track is the tail of $C_V$ on the validation kernel, and the prediction is that targets that are hard in the sense of Section~\ref{sec:kernel} are also the ones that need the most data.
+This note does not develop the data axis further.
+\end{remark}
+
+% ===============================================================
+\section{Targets of time-stepping methods}\label{sec:targets}
+% ===============================================================
+
+The framework so far applies to any target.
+This section gives the targets of time-stepping methods and the two properties that decide their hardness: the size of the target, which carries the dependence on $h$, and its shape, which is that of a time derivative and is rougher for higher order.
+
+\subsection{Taylor methods and the remainder lemma}
+
+\begin{definition}[Taylor method of order $p$]\label{def:taylor}
+Let $p \ge 0$ and let $F_k \approx x^{(k)}$, $k = 1,\dots,p-1$, be estimates of the lower time derivatives, with $F_0 = x^{(0)}$.
+The Taylor method of order $p$ is
+\begin{equation}\label{eq:taylor}
+x_{j+1} = Q_h(x_j) + \sigma\,\Net(x_j), \qquad Q_h = \sum_{k=0}^{p-1} c_k F_k, \qquad c_k = \frac{h^k}{k!},
+\end{equation}
+with target $V_p = \Phi_h - Q_h$.
+Order $0$ is the direct step, $V_0 = \Phi_h$; order $1$ is the Euler step, $V_1 = \Phi_h - \id$.
+If every lower slot is exact, $F_k = x^{(k)}$, the target is $V_p^\ex$.
+\end{definition}
+
+\begin{lemma}[Taylor remainder along the flow]\label{lem:remainder}
+Under Assumption~\ref{ass:regular}, for $s \in \R$ and $n \ge 0$,
+\begin{equation}\label{eq:remainder}
+\Phi_s = \sum_{k=0}^{n}\frac{s^k}{k!}\,x^{(k)} + \Rem_n(s), \qquad
+\|\Rem_n(s)\|_\infty \le \frac{M_{n+1}|s|^{n+1}}{(n+1)!}, \qquad
+\Lip\big(\Rem_n(s)\big) \le \frac{L_{n+1}e^{|s|L}|s|^{n+1}}{(n+1)!},
+\end{equation}
+and $\Lip(\Phi_s) \le e^{|s|L}$.
+Under Assumption~\ref{ass:sampling} also $\|\Rem_n(s)\|_\mu \le m_{n+1}|s|^{n+1}/(n+1)!$.
+\end{lemma}
+
+\begin{corollary}[Size and shape of the target]\label{cor:target}
+For $p \ge 1$ with exact lower slots, $V_p^\ex = c_p\,x^{(p)} + \Rem_p(h)$.
+Hence
+\begin{equation}\label{eq:size-shape}
+\|V_p^\ex\|_\mu = c_p\,m_p\,(1 + O(h)), \qquad \frac{V_p^\ex}{\|V_p^\ex\|_\mu} = \frac{x^{(p)}}{m_p} + O(h) ,
+\end{equation}
+where the $O(h)$ terms are bounded by $h\,m_{p+1}/((p+1)m_p)$ in $\|\cdot\|_\mu$.
+For the direct step, $V_0 = \id + hf + \Rem_1(h)$, and for the Euler step, $V_1 = hf + \Rem_1(h)$, so $\Lip(V_1) \le e^{hL}-1$ while $e^{-hL} \le \Lip(V_0) \le e^{hL}$.
+\end{corollary}
+
+Lemma~\ref{lem:remainder} and Corollary~\ref{cor:target} are proved in Appendix~\ref{app:remainder}.
+The corollary is the link to Section~\ref{sec:kernel}.
+The size of the target of order $p$ is $c_p m_p$, which carries all the dependence on $h$ to leading order.
+Its shape, which is what the network trains on under P3, is $x^{(p)}/m_p$ up to $O(h)$, and does not depend on $h$.
+So, to leading order, every Taylor method of order $p$ poses the same training problem, whatever the time step, and its unlearned fraction is the unlearned fraction of the $p$-th derivative,
+\begin{equation}\label{eq:eta-p}
+\eta_p = \eta\big(x^{(p)}\big), \qquad \eta\big(V_p^\ex\big) = \eta_p + O(h) .
+\end{equation}
+The direct step is the exception: its target is the identity plus a small correction, and its hardness is that of the identity, $\eta_0 = \eta(\id)$, which is small for a network that learns the identity easily.
+
+\subsection{Why higher derivatives are rougher}
+
+\begin{lemma}[Degree of the time derivatives]\label{lem:degree}
+If $f$ is a polynomial of degree $d \ge 2$ in the state, then $x^{(k)}$ is a polynomial of degree at most $k(d-1) + 1$, and the bound is attained generically.
+\end{lemma}
+
+Lemma~\ref{lem:degree} is proved in Appendix~\ref{app:degree}.
+Most systems of interest have quadratic vector fields, $d = 2$: Lorenz, Galerkin truncations of the Kuramoto--Sivashinsky and Navier--Stokes equations, and the dry primitive equations.
+For these, $x^{(k)}$ has degree $k+1$.
+For a kernel that is a function of inner products of states, and for isotropic inputs, polynomials of higher degree lie in eigenspaces of smaller eigenvalue, with a decay that depends on the architecture.
+The states on an attractor are not isotropic, so this is a heuristic for the physical measure; the measured alignment $C_{x^{(k)}}$ of Q2 is the actual statement.
+The prediction is that $\pi_\slow(x^{(k)})$, and therefore $\eta_k$, increases with $k$.
+
+\subsection{Imperfect lower slots and rollout}
+
+When $f$ is not available to the stepper, the lower derivatives are estimated.
+A lower slot is state-based if $F_k$ depends on the current state only and history-based if it uses predicted states from earlier steps.
+A finite difference is state-based during training and history-based during rollout.
+
+\begin{lemma}[Finite-difference slot]\label{lem:fd}
+Let $F_1 = h^{-1}\sum_{i=0}^q\phi_i\,\Phi_{-ih}$ with $\sum_i\phi_i(-i)^k/k! = \delta_{k1}$ for $k = 0,\dots,q$.
+Then $F_1 - f = h^{-1}\sum_i\phi_i\Rem_q(-ih)$ and $\|F_1 - f\|_\infty \le C_qM_{q+1}h^q$ with $C_q = \sum_i|\phi_i|\,i^{q+1}/(q+1)!$.
+The two-point difference $(1,-1)$ has $q = 1$, $C_1 = 1/2$; the three-point difference $(3/2,-2,1/2)$ has $q = 2$, $C_2 = 1$.
+\end{lemma}
+
+\begin{proposition}[Leading target with imperfect slots]\label{prop:leading}
+Let $e_k = F_k - x^{(k)} = h^{p-k}b_k + O(h^{p-k+1})$ for $k = 1,\dots,p-1$.
+Then $V_p = h^p w_p + O(h^{p+1})$ with $w_p = x^{(p)}/p! - \sum_{k=1}^{p-1}b_k/k!$.
+For $p = 2$, the two-point backward difference gives $w_2 = x^{(2)}$ and the three-point difference gives $w_2 = x^{(2)}/2$, the exact-slot value.
+\end{proposition}
+
+\begin{proposition}[Parasitic root of a history-based slot]\label{prop:parasitic}
+Apply the Taylor method of order 2 with $F_1 = (x_j - x_{j-1})/h$ in rollout to $\dot x = \lambda x$, with $z = h\lambda$ and the network output equal to its exact target.
+The rollout recurrence is $x_{j+1} = (e^z + e^{-z})x_j - x_{j-1}$, with roots $e^z$ and $e^{-z}$.
+\end{proposition}
+
+Lemma~\ref{lem:fd} and Propositions~\ref{prop:leading} and~\ref{prop:parasitic} are proved in Appendix~\ref{app:slots}.
+A finite-difference slot of order $q$ changes the target by $O(h^{q+1})$, so it keeps the order-$p$ target when $q \ge p-1$.
+When $q = p-1$ it changes the leading term: the two-point slot doubles the size of the order-2 target and leaves its shape, hence $\eta_2$, unchanged.
+The parasitic root $e^{-z}$ has modulus larger than one on decaying modes, since the history-based slot turns the method into the two-step recurrence of $\ddot x = \lambda^2 x$, which cannot distinguish forward from backward time.
+On a dissipative system, a slot used in rollout should be state-based.
+
+% ===============================================================
+\section{When to switch order}\label{sec:switch}
+% ===============================================================
+
+\subsection{The trained error of a Taylor method}
+
+\begin{theorem}[Error of order $p$]\label{thm:error}
+Let the Taylor method of order $p \ge 1$ with exact lower slots be trained under the protocol, and let the validation residual be measured in $\|\cdot\|_\mu$.
+Then
+\begin{equation}\label{eq:error-p}
+\delta_p(h) = \frac{h^p}{p!}\,m_p\,\eta_{p,\va}\,\big(1 + O(h)\big),
+\end{equation}
+where $\eta_{p,\va}$ is the validation unlearned fraction of the $p$-th derivative, and the $O(h)$ term is bounded by $h\,m_{p+1}/((p+1)m_p)$ times a constant that depends on the continuity of the training map.
+If the kernels are frozen at the mean kernels of a reference run, the training map is linear, the constant is $1 + \|G_T\|$ with $G_T = \int_0^T\bar A_\va e^{-t\bar A_\tr}dt$, and Eq.~\eqref{eq:error-p} holds with $\eta_{p,\va}$ replaced by $\|\Dmap x^{(p)}\|_\va/\|x^{(p)}\|_\va$, $\Dmap u = u_\va - G_T u_\tr$.
+\end{theorem}
+
+Theorem~\ref{thm:error} is proved in Appendix~\ref{app:error}.
+It separates the trained error into three factors: the classical factor $h^p/p!$, the size $m_p$ of the $p$-th derivative, and the unlearned fraction $\eta_{p,\va}$, which is the hardness of the $p$-th derivative on the network and does not depend on $h$.
+The first two are properties of the system and can be computed from solver data; the third is the tracked quantity Q3 of one training run at any small $h$.
+The frozen form is the version that predicts a method before training it, from the kernels of one reference run; the gap between it and the trained value is bounded in Appendix~\ref{app:error} by the drift and by the difference between the reference kernels and the method's own.
+
+\subsection{The crossover}
+
+\begin{theorem}[Crossover between orders]\label{thm:crossover}
+Under the conditions of Theorem~\ref{thm:error}, order $p$ has lower error than order $p-1$ for
+\begin{equation}\label{eq:hstar}
+h < h_p^\ast = p\,\frac{m_{p-1}}{m_p}\cdot\frac{\eta_{p-1,\va}}{\eta_{p,\va}} \qquad (1 + O(h)),
+\end{equation}
+and higher error above it.
+In the frozen form, with $\nu_k = \|\Dmap x^{(k)}\|_\va$ and $\epsilon_p = (1+\|G_T\|)\,M_{p+1}h^{p+1}/(p+1)!$, the sufficient condition without remainder is $2(c_p\nu_p + \epsilon_p) < c_{p-1}\nu_{p-1}$.
+\end{theorem}
+
+Theorem~\ref{thm:crossover} is proved in Appendix~\ref{app:error}.
+The threshold has two factors.
+The first, $p\,m_{p-1}/m_p$, is the classical Taylor condition that the next term be smaller than the last.
+The second, $\eta_{p-1}/\eta_p$, is the learnability ratio.
+By Section~\ref{sec:targets} it is below one, since the $p$-th derivative is rougher than the $(p-1)$-th, so the network moves the crossover to a smaller time step than the classical condition gives.
+For $p = 1$ the theorem compares the Euler step with the direct step: $h_1^\ast = (m_0/m_1)\,(\eta_0/\eta_1)$, where $\eta_0$ is the unlearned fraction of the identity.
+
+\subsection{Scaling of the crossover with network size}
+
+\begin{corollary}[Crossover under the size ansatz]\label{cor:scaling}
+Under Ansatz~\ref{ans:size} for $x^{(p-1)}$ and $x^{(p)}$, with exponents $\gamma_{p-1}$ and $\gamma_p$ and prefactors $a_{p-1}$ and $a_p$,
+\begin{equation}\label{eq:hstar-N}
+h_p^\ast(N) = p\,\frac{m_{p-1}a_{p-1}}{m_p a_p}\,N^{\gamma_p - \gamma_{p-1}} .
+\end{equation}
+If $\gamma_p > \gamma_{p-1}$, order $p$ becomes viable at a given step $h$ once the width exceeds
+\begin{equation}\label{eq:Nstar}
+N_p^\ast(h) = \Big(\frac{h\,m_p a_p}{p\,m_{p-1}a_{p-1}}\Big)^{1/(\gamma_p - \gamma_{p-1})} .
+\end{equation}
+If $\gamma_p \le \gamma_{p-1}$, the crossover step does not grow with size, and order $p$ is viable at $h$ either for all sizes in the range or for none.
+\end{corollary}
+
+The corollary is immediate from Theorem~\ref{thm:crossover}.
+It is the statement that a sequence of small networks determines when a larger one should switch order: the four numbers $a_{p-1}, a_p, \gamma_{p-1}, \gamma_p$ are fitted on the small networks, and $N_p^\ast(h)$ follows.
+The condition $\gamma_p > \gamma_{p-1}$ says that the rougher target gains more from size.
+Under Eq.~\eqref{eq:eta-spectral} this is the statement that growing the network lifts the far tail of the spectrum, where $x^{(p)}$ sits, faster than it lifts the near tail, where $x^{(p-1)}$ sits.
+Whether this holds is test T4 of Section~\ref{sec:tests}, and it is the empirical center of the note.
+
+\subsection{Decision rules}
+
+\begin{designrule}[Order for a given network]\label{rule:order}
+Train the direct step, the Euler step, and order 2 once each at a small $h$, and record Q1--Q5.
+Read off $\eta_0, \eta_1, \eta_2$ and compute $h_1^\ast$ and $h_2^\ast$ from Eq.~\eqref{eq:hstar}.
+Use the highest order whose threshold exceeds the intended time step.
+\end{designrule}
+
+\begin{designrule}[Order for a larger network]\label{rule:size}
+Repeat Rule~\ref{rule:order} on a sequence of sizes below the plateau, fit Ansatz~\ref{ans:size}, and use Eq.~\eqref{eq:Nstar} to decide the order for the target size.
+Check that the fitted range is below the plateau by confirming that the spectrum Q1 still changes with $N$.
+\end{designrule}
+
+\begin{designrule}[Lower slots]\label{rule:fd}
+Use exact lower slots when $f$ is available.
+Otherwise use a finite-difference slot of order at least $p-1$, prefer the three-point difference for $p = 2$ since it keeps the exact-slot leading term, and never use a finite difference of predicted states in rollout on a dissipative system.
+\end{designrule}
+
+The validation error is a one-step error.
+It enters the rollout error through the amplification by the step map, as in Eq.~(20) of \cite{ainslie2026}.
+This note does not treat rollout beyond Proposition~\ref{prop:parasitic}.
+
+% ===============================================================
+\section{Items that need justification}\label{sec:open}
+% ===============================================================
+
+\begin{enumerate}[label=J\arabic*.]
+\item The drift certificate Q4. The trapped-error picture holds to the extent that $\int d$ is small relative to the final residual. This is a measurement.
+\item The $h$-independence of $\eta_p$, Eq.~\eqref{eq:eta-p}. It is exact for frozen kernels and holds for trained networks if the training map is continuous in the standardized target; the $O(h)$ term of Theorem~\ref{thm:error} is checked by training order $p$ at several $h$ and confirming $\delta_p \propto h^p$ with the same $\eta_p$.
+\item The size ansatz and the sign of $\gamma_p - \gamma_{p-1}$. In the infinite-width limit both exponents are zero, so the ansatz describes feature learning at finite width, and the extrapolation is valid only below the plateau.
+\item The rank regime. Small networks with $P < nn_{\mathrm x}$ have an exact null space, and their scaling may differ from that of networks with full-rank kernels. The experiments should span both regimes or state which one they are in.
+\item The model of Adam as preconditioned gradient flow, as in \cite{ainslie2026spectral}. Everything in Section~\ref{sec:kernel} holds for any positive diagonal $\Pi(t)$.
+\item The isotropy heuristic of Section~\ref{sec:targets}. The alignment of $x^{(k)}$ with the kernel on attractor states is measured, not derived.
+\item Methods that place the network inside the stages of an integrator, and the link from the one-step root-mean-square error to the rollout error.
+\end{enumerate}
+
+% ===============================================================
+\section{Tests}\label{sec:tests}
+% ===============================================================
+
+\begin{enumerate}[label=T\arabic*.]
+\item \emph{Trapping.} For one network and one target, track Q1--Q4 during training. Theorem~\ref{thm:trapped} predicts that $\rho(t)$ decreases, that the residual spectrum concentrates on $\lambda_i \le 1/t$, and that the lower bound of Eq.~\eqref{eq:lower} holds with a small drift term.
+\item \emph{Spectrum and alignment.} On one network, compute $C_V$ of Q2 for $V = \id, f, x^{(2)}, x^{(3)}$ on the mean kernel of a reference run. Lemma~\ref{lem:degree} predicts that the slow power $\pi_\slow$ increases with the order of the derivative, and Eq.~\eqref{eq:eta-spectral} predicts $\eta$ from $C_V$.
+\item \emph{$h$-independence.} Train order 1 and order 2 at several $h$. Theorem~\ref{thm:error} predicts $\delta_p \propto h^p$ with an $h$-independent $\eta_p$, and Theorem~\ref{thm:crossover} predicts the crossover of the two curves at $h_2^\ast$.
+\item \emph{Size scaling.} Repeat T3 over a sequence of widths, fit Ansatz~\ref{ans:size} for $\eta_0,\eta_1,\eta_2$, and compare the extrapolated $N_2^\ast(h)$ with the width at which order 2 actually overtakes order 1. Track Q1 to locate the plateau and the rank regime of Proposition~\ref{prop:constraints}(a).
+\item \emph{Reference-run prediction.} Compute the frozen-form hardness of every method from one reference run and compare with the trained values. Appendix~\ref{app:error} gives the gap in terms of the drift and the kernel difference.
+\item \emph{Slots.} Order 2 with an exact slot, a two-point slot, and a three-point slot. Proposition~\ref{prop:leading} predicts error ratios $2$ and $1$ with the same $\eta_2$. In rollout on a dissipative system, Proposition~\ref{prop:parasitic} predicts growth along the parasitic root for the history-based slot.
+\end{enumerate}
+
+% ===============================================================
+\appendix
+\section{Notation}\label{app:notation}
+% ===============================================================
+
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabular}{@{}p{0.29\textwidth}p{0.64\textwidth}@{}}
+\toprule
+Symbol & Meaning \\
+\midrule
+$f$, $\Phi_t$, $h$ & vector field, flow map over time $t$, time step \\
+$\Aset$, $\mu$ & invariant set of the states, ergodic invariant measure \\
+$x^{(k)}$, $M_k$, $L_k$, $m_k$ & $k$-th time derivative as a function of state; its supremum, Lipschitz constant, and $L^2(\mu)$ norm \\
+$\Rem_n(s)$ & Taylor remainder of $\Phi_s$ after order $n$ \\
+$\Net$, $\theta$, $P$, $N$ & network, parameters, their number, width \\
+$G$, $Q_h$, $\sigma$, $V$ & step map, known part, scale, target $\Phi_h - Q_h$ \\
+$p$, $c_k$, $F_k$, $V_p$, $V_p^\ex$ & order, $h^k/k!$, lower-slot estimates, target of order $p$, with exact slots \\
+$q$, $\phi_i$, $C_q$, $b_k$, $w_p$ & finite-difference order, coefficients, constant; leading slot error; leading target function \\
+$x_i$, $y_i$, $n$, $m$ & training and validation states and their numbers \\
+$u_\tr$, $\langle\cdot,\cdot\rangle_\tr$, $\|\cdot\|_\tr$ & stacked values, inner product $\tfrac1n a^\top b$, and norm on training states; likewise $\va$ \\
+$r$, $r_\tr$, $r_\va$ & residual $G - \Phi_h$ and its training and validation parts \\
+$t$, $T$, $\tau$ & training time, total budget, look-ahead budget \\
+$\Pi(t)$, $\Jac_\tr$, $\Jac_\va$ & preconditioner of Adam; Jacobians of the outputs on training and validation states \\
+$A_\tr$, $A_\va$, $\bar A_\tr$, $\bar A_\va$ & training and validation kernels and their means over $[0,T]$ \\
+$\lambda_i$, $u_i$, $\hat r_i$ & eigenvalues and eigenvectors of $A_\tr(t)$; residual components \\
+$\bar\lambda_i$, $\bar u_i$, $\hat V_i$ & eigenpairs of $\bar A_\tr$; target alignment \\
+$\Prop(t,s)$, $\Kmap_T$, $G_T$, $\Dmap$ & solution operator; exact and frozen response operators; frozen validation map \\
+$\rho$, $\Hard_\tau$, $d$, $d_t$ & decay rate, trapped error, drift of the kernel along the residual \\
+$\eta(V)$, $\eta_\va(V)$, $\eta_p$ & unlearned fractions; that of $x^{(p)}$ \\
+$n_\slow$, $\alpha$, $C_V$, $\pi_\slow$, $\kappa_\va$ & tracked quantities Q1, Q2, Q5 \\
+$a(V)$, $\gamma(V)$, $a_p$, $\gamma_p$ & prefactor and exponent of the size ansatz \\
+$\delta_p$, $h_p^\ast$, $N_p^\ast$, $\nu_k$, $\epsilon_p$ & trained error of order $p$, crossover step, crossover width, frozen-form norms and remainder \\
+$\lambda$, $z$ & rate of a linear test equation, $z = h\lambda$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% ===============================================================
+\section{Proofs}\label{app:proofs}
+% ===============================================================
+
+\subsection{Proof of Proposition~\ref{prop:train}}\label{app:train}
+Let $\tilde e_\tr$ and $\tilde e_\va$ be the stacked residuals of the network output against the standardized target $V/\sigma$.
+The loss is $\mathcal L = \tfrac1{2n}\|\tilde e_\tr\|^2$ with gradient $\tfrac1n\Jac_\tr^\top\tilde e_\tr$, and the preconditioned flow is $\dot\theta = -\tfrac1n\Pi\Jac_\tr^\top\tilde e_\tr$.
+By the chain rule, $\dot{\tilde e}_\tr = \Jac_\tr\dot\theta = -A_\tr\tilde e_\tr$ and $\dot{\tilde e}_\va = \Jac_\va\dot\theta = -A_\va\tilde e_\tr$.
+Since $G - \Phi_h = \sigma(\Net - V/\sigma)$, $r = \sigma\tilde e$ obeys the same equations, and P4 gives $r(0) = -V$.
+Integrating $\dot r_\va = A_\va\Prop(t,0)V_\tr$ gives Eq.~\eqref{eq:train-residual}. \qed
+
+\subsection{Proof of Theorem~\ref{thm:trapped}}\label{app:trapped}
+(a) $\frac{d}{dt}\|r_\tr\|_\tr^2 = 2\langle r_\tr,\dot r_\tr\rangle_\tr = -2\langle r_\tr, A_\tr r_\tr\rangle_\tr$, and in the eigenbasis $\langle r, Ar\rangle_\tr = \sum_i\lambda_i\hat r_i^2$.
+
+(b) Fix $t$ and write $A = A_\tr(t)$.
+For $s \ge t$, $\dot r_\tr(s) = -A\,r_\tr(s) - (A_\tr(s) - A)\,r_\tr(s)$, so by variation of constants
+\begin{equation*}
+r_\tr(t+\tau) = e^{-\tau A}r_\tr(t) - \int_t^{t+\tau}e^{-(t+\tau-s)A}\big(A_\tr(s) - A\big)r_\tr(s)\,ds .
+\end{equation*}
+The integral has norm at most $\int_t^{t+\tau}d_t(s)\,ds$, since $e^{-uA}$ is a contraction for $u \ge 0$.
+In the eigenbasis of $A$, $\|e^{-\tau A}r_\tr(t)\|_\tr^2 = \sum_i e^{-2\tau\lambda_i}\hat r_i^2 \ge e^{-2}\sum_{\lambda_i\le1/\tau}\hat r_i^2 = e^{-2}\Hard_\tau(t)^2$.
+The triangle inequality gives Eq.~\eqref{eq:lower}.
+
+(c) $\|\dot r_\va\|_\va = m^{-1/2}\|A_\va r_\tr\| = m^{-1/2}n^{-1}\|\Jac_\va\Pi^{1/2}(\Pi^{1/2}\Jac_\tr^\top r_\tr)\| \le m^{-1/2}n^{-1}\|\Jac_\va\Pi^{1/2}\|\,\|\Pi^{1/2}\Jac_\tr^\top r_\tr\|$, and $\|\Pi^{1/2}\Jac_\tr^\top r_\tr\|^2 = n\,r_\tr^\top A_\tr r_\tr = n^2\rho\|r_\tr\|_\tr^2$. \qed
+
+\subsection{Proof of Lemma~\ref{lem:frozen}}\label{app:frozen}
+Let $D(t) = \Prop(t,0) - e^{-t\bar A_\tr}$.
+Then $\dot D = -\bar A_\tr D - (A_\tr(t) - \bar A_\tr)\Prop(t,0)$ with $D(0) = 0$, so
+$D(T)V_\tr = -\int_0^T e^{-(T-s)\bar A_\tr}(A_\tr(s) - \bar A_\tr)\Prop(s,0)V_\tr\,ds = \int_0^T e^{-(T-s)\bar A_\tr}(A_\tr(s) - \bar A_\tr)\,r_\tr(s)\,ds$,
+using $\Prop(s,0)V_\tr = -r_\tr(s)$.
+Since $e^{-u\bar A_\tr}$ is a contraction, $\|D(T)V_\tr\|_\tr \le \int_0^T d(s)\,ds$, and $r_\tr(T) + e^{-T\bar A_\tr}V_\tr = -D(T)V_\tr$.
+The spectral identity is the eigendecomposition of $\bar A_\tr$. \qed
+
+\subsection{Proof of Proposition~\ref{prop:constraints}}\label{app:constraints}
+(a) $A_\tr = \tfrac1n(\Jac_\tr\Pi^{1/2})(\Jac_\tr\Pi^{1/2})^\top$ has rank at most that of $\Jac_\tr \in \R^{nn_{\mathrm x}\times P}$.
+For $v \in \ker A_\tr(t)$, $\langle v, A_\tr v\rangle_\tr = 0$, so the component of $r_\tr$ along $v$ contributes zero to $\rho$ in Eq.~\eqref{eq:rate}.
+(b) $BB^\top$ and $B^\top B$ share nonzero eigenvalues, with $B = n^{-1/2}\Jac_\tr\Pi^{1/2}$, so the nonzero eigenvalues of $A_\tr$ are those of $\Pi^{1/2}(\tfrac1n\Jac_\tr^\top\Jac_\tr)\Pi^{1/2}$.
+Since $\Jac_\tr^\top\Jac_\tr = \sum_i\Jac_{x_i}^\top\Jac_{x_i}$ and the $x_i$ are sampled from $\mu$, the law of large numbers gives the limit.
+(c) The sum in Eq.~\eqref{eq:trapped} runs over a set that shrinks as $\tau$ grows.
+The last claim is Lemma~\ref{lem:frozen} with $e^{-2T\bar\lambda_i} \ge e^{-2}$ for $\bar\lambda_i \le 1/T$. \qed
+
+\subsection{Proof of Lemma~\ref{lem:remainder} and Corollary~\ref{cor:target}}\label{app:remainder}
+Fix $x \in \Aset$.
+By invariance, $\Phi_t(x) \in \Aset$ for all $t$ and $\frac{d^k}{dt^k}\Phi_t(x) = x^{(k)}(\Phi_t(x))$, so Taylor's theorem gives
+\begin{equation}\label{eq:taylorrem}
+\Rem_n(s)(x) = \int_0^s\frac{(s-t)^n}{n!}\,x^{(n+1)}\big(\Phi_t(x)\big)\,dt .
+\end{equation}
+The integrand has norm at most $M_{n+1}|s-t|^n/n!$, which gives the supremum bound.
+For $x,x' \in \Aset$, $\Delta(t) = \|\Phi_t(x) - \Phi_t(x')\|$ satisfies $\Delta(t) \le \Delta(0) + L|\int_0^t\Delta|$, and Gr\"onwall's inequality gives $\Delta(t) \le e^{|t|L}\|x - x'\|$, which is $\Lip(\Phi_t) \le e^{|t|L}$; subtracting Eq.~\eqref{eq:taylorrem} at $x'$ from that at $x$ and using this gives the Lipschitz bound.
+For the $\mu$ bound, Minkowski's integral inequality and the invariance $\|x^{(n+1)}\circ\Phi_t\|_\mu = m_{n+1}$ give $\|\Rem_n(s)\|_\mu \le |\int_0^s\frac{|s-t|^n}{n!}dt|\,m_{n+1}$.
+
+For the corollary, $V_p^\ex = \Rem_{p-1}(h) = c_px^{(p)} + \Rem_p(h)$ by Eq.~\eqref{eq:remainder} with $n = p-1$ and $n = p$.
+Then $\big|\|V_p^\ex\|_\mu - c_pm_p\big| \le \|\Rem_p(h)\|_\mu \le c_p m_p\cdot hm_{p+1}/((p+1)m_p)$, and $\|V_p^\ex/\|V_p^\ex\|_\mu - x^{(p)}/m_p\|_\mu \le 2\|\Rem_p(h)\|_\mu/(c_pm_p)$ by the triangle inequality for normalized vectors.
+For the direct and Euler steps, $\Lip(V_1) = \Lip(\int_0^h f\circ\Phi_t\,dt) \le L\int_0^he^{tL}dt = e^{hL}-1$, and $\Lip(\Phi_h) \ge e^{-hL}$ follows from $\|x - x'\| = \|\Phi_{-h}\Phi_hx - \Phi_{-h}\Phi_hx'\| \le e^{hL}\|\Phi_hx - \Phi_hx'\|$. \qed
+
+\subsection{Proof of Lemma~\ref{lem:degree}}\label{app:degree}
+By induction.
+$x^{(1)} = f$ has degree $d = 1\cdot(d-1)+1$.
+If $x^{(k)}$ has degree at most $k(d-1)+1$, then $Dx^{(k)}$ has degree at most $k(d-1)$, and $x^{(k+1)} = Dx^{(k)}f$ has degree at most $k(d-1) + d = (k+1)(d-1) + 1$.
+The top-degree part of $x^{(k+1)}$ is $D(\text{top of }x^{(k)})\cdot(\text{top of }f)$, which vanishes only on a proper algebraic subset of coefficient space. \qed
+
+\subsection{Proofs of Lemma~\ref{lem:fd} and Propositions~\ref{prop:leading} and~\ref{prop:parasitic}}\label{app:slots}
+Lemma~\ref{lem:remainder} with $s = -ih$, $n = q$ gives $\Phi_{-ih} = \sum_{k\le q}\frac{(-ih)^k}{k!}x^{(k)} + \Rem_q(-ih)$; multiply by $\phi_i/h$ and sum.
+The order conditions leave $h^0x^{(1)} = f$, so $F_1 - f = h^{-1}\sum_i\phi_i\Rem_q(-ih)$, and $\|\Rem_q(-ih)\|_\infty \le M_{q+1}(ih)^{q+1}/(q+1)!$ gives $C_q$.
+The stated coefficients satisfy the order conditions; $C_1 = 1/2$ and $C_2 = (2 + 4)/6 = 1$.
+
+For Proposition~\ref{prop:leading}, $Q_h = Q_h^\ex + \sum_{k=1}^{p-1}c_ke_k$ and $c_kh^{p-k} = h^p/k!$, so $V_p = c_px^{(p)} + \Rem_p(h) - \sum_kc_k(h^{p-k}b_k + O(h^{p-k+1})) = h^pw_p + O(h^{p+1})$.
+Two-point slot: $\Phi_{-h} = \id - hf + \tfrac{h^2}{2}x^{(2)} + \Rem_2(-h)$, so $e_1 = (\id - \Phi_{-h})/h - f = -\tfrac h2x^{(2)} + O(h^2)$, $b_1 = -x^{(2)}/2$, and $w_2 = x^{(2)}/2 + x^{(2)}/2 = x^{(2)}$.
+Three-point slot: $e_1 = O(h^2)$ by Lemma~\ref{lem:fd}, so $b_1 = 0$.
+
+For Proposition~\ref{prop:parasitic}, on the true trajectory $x_{j-1} = e^{-z}x_j$, so the known part is $x_j + (x_j - x_{j-1}) = (2 - e^{-z})x_j$ and the exact network target is $(e^z - 2 + e^{-z})x_j$.
+In rollout, $x_{j+1} = 2x_j - x_{j-1} + (e^z - 2 + e^{-z})x_j = (e^z + e^{-z})x_j - x_{j-1}$, with characteristic polynomial $(\xi - e^z)(\xi - e^{-z})$. \qed
+
+\subsection{Proofs of Theorems~\ref{thm:error} and~\ref{thm:crossover}}\label{app:error}
+\emph{Frozen form.}
+Let $\Dmap u = u_\va - G_Tu_\tr$ with $G_T$ from the reference mean kernels.
+$\Dmap$ is linear and $\|\Dmap u\|_\va \le \|u\|_\va + \|G_T\|\|u\|_\tr$.
+By Corollary~\ref{cor:target}, $V_p^\ex = c_px^{(p)} + \Rem_p(h)$, so
+\begin{equation}\label{eq:frozen-error}
+\big|\,\|\Dmap V_p^\ex\|_\va - c_p\nu_p\,\big| \le \|\Dmap\Rem_p(h)\|_\va \le \epsilon_p ,
+\end{equation}
+with $\epsilon_p$ as in Theorem~\ref{thm:crossover} (or with $M_{p+1}$ replaced by $m_{p+1}$ when the sample norms are replaced by $\|\cdot\|_\mu$).
+Dividing by $c_pm_p$ gives Eq.~\eqref{eq:error-p} in the frozen form with constant $1 + \|G_T\|$.
+For the crossover, $V_{p-1}^\ex = c_{p-1}x^{(p-1)} + c_px^{(p)} + \Rem_p(h)$, so $\|\Dmap V_{p-1}^\ex\|_\va \ge c_{p-1}\nu_{p-1} - c_p\nu_p - \epsilon_p$, while $\|\Dmap V_p^\ex\|_\va \le c_p\nu_p + \epsilon_p$; the sufficient condition follows, and dropping the remainders gives the crossover at $c_p\nu_p = c_{p-1}\nu_{p-1}$, that is $h = p\,\nu_{p-1}/\nu_p$, which is Eq.~\eqref{eq:hstar} with $\nu_k = \|x^{(k)}\|_\va\,\eta_{k,\va}$.
+
+\emph{Trained form.}
+Under P3 the network trains on $V_p^\ex/\sigma_p$, and by Corollary~\ref{cor:target} this is $x^{(p)}/m_p + O(h)$.
+Write $\Psi$ for the map from a standardized target to the standardized validation residual at time $T$; the validation error of the method is $\sigma_p\|\Psi(V_p^\ex/\sigma_p)\|_\va$.
+If $\Psi$ is Lipschitz with constant $\Lambda$ near $x^{(p)}/m_p$, then $\big|\|\Psi(V_p^\ex/\sigma_p)\|_\va - \|\Psi(x^{(p)}/m_p)\|_\va\big| \le \Lambda\|V_p^\ex/\sigma_p - x^{(p)}/m_p\|_\va = O(h)$, and $\|\Psi(x^{(p)}/m_p)\|_\va = \eta_{p,\va}$ by definition.
+With $\sigma_p = c_pm_p(1 + O(h))$ this is Eq.~\eqref{eq:error-p}, and the crossover follows as in the frozen case.
+For frozen kernels $\Psi$ is the linear map $\Dmap$ and $\Lambda = 1 + \|G_T\|$.
+
+\emph{Gap between the forms.}
+By Proposition~\ref{prop:train}, the trained validation error is $\|V_\va - \Kmap_TV_\tr\|_\va$, so
+$\big|\,\delta_\va - \|\Dmap V\|_\va\,\big| \le \|(\Kmap_T - G_T)V_\tr\|_\va + \|(G_T - G_T^{\mathrm{own}})V_\tr\|_\va$, where $G_T^{\mathrm{own}}$ uses the method's own mean kernels.
+The first term is bounded by $\int_0^T\|(A_\va(t) - \bar A_\va)r_\tr(t)\|_\va dt + \|\bar A_\va\|\int_0^T(T-s)\,d(s)\,ds$ by the argument of Appendix~\ref{app:frozen} applied to $r_\va$, and the second by $\big(T\|\bar A_\va - \bar A_\va^\refm\| + \tfrac{T^2}{2}\|\bar A_\va^\refm\|\,\|\bar A_\tr - \bar A_\tr^\refm\|\big)\|V\|_\tr$, using $\|e^{-tX} - e^{-tY}\| \le t\|X - Y\|$ for symmetric positive semidefinite $X, Y$. \qed
+
+% ===============================================================
+\begin{thebibliography}{9}
+\bibitem{ainslie2026}
+C.~Ainslie, P.~Hassanzadeh, M.~W.~Mahoney, and A.~Chattopadhyay.
+Eigenanalysis framework for autoregressive neural emulators of multi-scale chaotic dynamics.
+arXiv:2608.16084, 2026.
+
+\bibitem{ainslie2026spectral}
+C.~Ainslie, C.-Y.~Lai, and A.~Chattopadhyay.
+The dynamics of spectral bias in operator learning.
+In preparation.
+\end{thebibliography}
+
+\end{document}

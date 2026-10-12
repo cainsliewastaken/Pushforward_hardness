@@ -1,0 +1,360 @@
+% ---------------------------------------------------------------------------
+% Section: The held rough error and the closure beyond the lazy regime
+%
+% Drop-in section for the paper. Conventions of Part III: Pi = I, c_p = 1,
+% gradient flow, E = \hat Y - Y. Cross-references to existing results are
+% hard-coded by number (Corollary 1, Theorem 4, Proposition 15, ...); replace
+% them with \ref{...} to your labels. The theorem environments used are
+% proposition, theorem, corollary, definition, assumption, remark, proof.
+% ---------------------------------------------------------------------------
+
+\section{The held rough error and the closure beyond the lazy regime}
+\label{sec:held-rough}
+
+Proposition~20 says where every expansion about $\theta_0$ stops: a rough
+direction is fitted only after a displacement of order the analyticity radius
+$R$, so no series in $\theta-\theta_0$ describes the stretch of training in
+which the rough part of the error is removed. This section changes the
+expansion variable. The one-time theory of Part~I bounds the eigenvalue of the
+kernel on a rough direction by the peak feature roughness,
+$\lambda_k R(v_k)^2 \le \sigma_R^2$ (Corollary~1), and Proposition~15 gives the
+exact rate of $\sigma_R$ along training. Together they say that the part of
+the error that a roughness function counts as rough can lose energy only
+through one scalar function of time, $\sigma_R(t)$, up to a leak from the
+smooth part; and the a~priori bound on the growth of $\sigma_R$ then gives a
+floor on the rough part of the error that holds at every time, with no ball
+and no horizon, and that decays at most as the exponential of a cubic in $t$.
+Read across a nested family of seminorms, the floor says that the error at
+time $t$ is at least the energy of the initial error above a cutoff mode that
+moves up as $\sigma_R$ grows. An upper bound, and with it a prediction, is given in
+Section~\ref{sec:chain}, where the expansion point is moved along the path:
+the one closure hypothesis an earlier draft used here (that the kernel's
+Rayleigh quotient on the rough residual stays a fixed fraction of $\sigma_R^2$)
+is measured to fail along training, and the cutoff bound of that section
+replaces it with a theorem and a named remainder. Everything in this section
+is exact.
+
+Throughout, $R(u)=\|Pu\|$ is a projector seminorm, with $P$ a symmetric
+projector on sampled functions, so that $C_R=1$ and
+$\sigma_R(\theta)^2=\lambda_{\max}\big(PK(\theta)P\big)$; the cluster seminorm
+and the manifold high-pass of Section~4.1 are of this form. Write
+\begin{equation}
+E_r = PE, \qquad E_s = (I-P)E, \qquad \sigma(t)=\sigma_R(\theta(t)),
+\label{eq:split-rs}
+\end{equation}
+for the rough and the smooth part of the error under $R$ and for the peak
+feature roughness along the path. Since $Y$ is fixed, $\dot E_r = P\dot E$,
+and $\|E_r(0)\| = R(E_0) \ge R(Y)-R(\hat Y_0)$.
+
+\subsection{The rough part loses energy only through $\sigma_R$}
+
+\begin{proposition}[Energy of the rough part]
+\label{prop:rough-energy}
+Let $N_\theta$ be continuously differentiable in $\theta$ and let $\theta(t)$
+be the gradient-flow path. Then, with the notation of
+Eq.~\eqref{eq:split-rs}:
+\begin{enumerate}
+\item[(a)] Exactly,
+\begin{equation}
+\frac{d}{dt}\,\|E_r\|^2 = -2\,\langle E_r, K E_r\rangle - 2\,\langle E_r, K E_s\rangle,
+\qquad
+0 \le \langle E_r, K E_r\rangle \le \sigma^2\,\|E_r\|^2,
+\qquad
+|\langle E_r, K E_s\rangle| \le \sigma\,\lambda_1^{1/2}\,\|E_r\|\,\|E_s\|.
+\label{eq:rough-rate}
+\end{equation}
+\item[(b)] For every $\varepsilon>0$ and every $t$,
+\begin{equation}
+\|E_r(t)\|^2 \;\ge\; \|E_r(0)\|^2\,
+\exp\!\Big(-(2+\varepsilon)\!\int_0^t \sigma(s)^2\,ds\Big)
+\;-\;\frac{1}{\varepsilon}\int_0^t \lambda_1(s)\,\|E_s(s)\|^2\,
+\exp\!\Big(-(2+\varepsilon)\!\int_s^t \sigma(\tau)^2\,d\tau\Big)\,ds .
+\label{eq:rough-floor-path}
+\end{equation}
+\item[(c)] The rate at which the rough part can lose energy is bounded by the
+peak feature roughness alone once the smooth part is gone:
+$-\frac{d}{dt}\|E_r\|^2 \le 2\sigma^2\|E_r\|^2 + 2\sigma\lambda_1^{1/2}\|E_r\|\,\|E_s\|$.
+\end{enumerate}
+\end{proposition}
+
+\begin{proof}
+(a) $\frac{d}{dt}\frac12\|E_r\|^2 = \langle PE, P\dot E\rangle = \langle E_r,\dot E\rangle = -\langle E_r, KE\rangle$
+by Theorem~7(a), and $E = E_r+E_s$. $K$ is positive semidefinite, so
+$\langle E_r,KE_r\rangle\ge0$. For a unit $\psi$ in the range of $P$,
+$R(\psi)=\|\psi\|=1$, so $\psi\in R^\circ$ and $\|\psi\|_K\le\sigma_R$ by the
+definition of $\sigma_R$ (proof of Theorem~1(a)); hence
+$\langle E_r,KE_r\rangle=\|E_r\|_K^2\le\sigma^2\|E_r\|^2$. For the cross
+term, $\langle a,Kb\rangle = g_a\cdot g_b$, so
+$|\langle E_r,KE_s\rangle|\le \|E_r\|_K\|E_s\|_K\le \sigma\|E_r\|\cdot\lambda_1^{1/2}\|E_s\|$.
+(b) By (a) and $2ab\le \varepsilon a^2+b^2/\varepsilon$ with
+$a=\sigma\|E_r\|$ and $b=\lambda_1^{1/2}\|E_s\|$,
+\[
+\frac{d}{dt}\|E_r\|^2 \;\ge\; -(2+\varepsilon)\,\sigma^2\,\|E_r\|^2 \;-\;\frac{\lambda_1}{\varepsilon}\,\|E_s\|^2 ,
+\]
+a linear differential inequality for the nonnegative function $\|E_r\|^2$;
+Gr\"onwall's inequality in its integrating-factor form gives
+Eq.~\eqref{eq:rough-floor-path}. (c) is (a) with the two bounds.
+\end{proof}
+
+Part (a) is the energy identity of Theorem~7(a) projected on the rough
+subspace. Its content is that the kernel enters the energy of the rough part
+only through two numbers at each instant: its Rayleigh quotient on the rough
+subspace, capped by $\sigma^2$, and its coupling of the rough subspace to the
+smooth one, capped by $\sigma\lambda_1^{1/2}$. Part (b) is the dynamic form of
+the floor of Theorem~4. Where Theorem~8(b) charges the path linearly,
+$\int\sigma_R|\dot\theta|$, Eq.~\eqref{eq:rough-floor-path} charges it
+exponentially, $\exp(-(2+\varepsilon)\int\sigma^2)$, and the two are different
+readings of the same fact, that the output can acquire roughness only at rate
+$\sigma_R$. The second term is the leak: the smooth part of the error drives
+the rough part through the off-diagonal block of the kernel, and it is small
+once the smooth part has been removed, which the floor of Part~I says happens
+while the rough part stays. With $\varepsilon\to0$ the exponent tends to the
+rate $2\sigma^2$ of Corollary~1 and the leak coefficient grows; for a bound
+that is to be read along a run, $\varepsilon$ is chosen to balance the two
+terms. Along a run, $\sigma(t)$ is a top eigenvalue of $PKP$ at each saved
+state and $\|E_s(t)\|$ is read off, so Eq.~\eqref{eq:rough-floor-path} is a
+check with no free constant.
+
+\subsection{The a priori floor on the rough part}
+
+Proposition~15(b) bounds the growth of $\sigma_R$ along gradient flow by
+$\Theta_R\le \sigma_R\lambda_1^{1/2}H_2\|E\|$ (with $C_R=1$). Inserted into
+Proposition~\ref{prop:rough-energy}, this gives a floor on the rough part that
+is computed from the initial state and holds at every time.
+
+\begin{theorem}[The rough part is held: a priori form]
+\label{thm:rough-apriori}
+Let $N_\theta$ be twice continuously differentiable in $\theta$, let
+$\theta(t)$ be the gradient-flow path, and let $\bar\lambda_1$ and $\bar H_2$
+be the largest values of $\lambda_1(\theta(s))$ and $H_2(\theta(s))$ for
+$s\le t$ (or over the ball of radius $\ell(t)$ about $\theta_0$, which
+contains the path). Let $\sigma_0=\sigma_R(\theta_0)$ and
+\begin{equation}
+a = \bar\lambda_1^{1/2}\,\bar H_2\,\|E_0\|, \qquad
+\Sigma(s) = \sigma_0 + a\,s, \qquad
+I(t) = \int_0^t \Sigma(s)^2\,ds = \sigma_0^2\,t + \sigma_0\,a\,t^2 + \tfrac13\,a^2\,t^3 .
+\label{eq:Sigma-I}
+\end{equation}
+Then $\sigma(s)\le\Sigma(s)$ for all $s\le t$, and for every $\varepsilon>0$,
+\begin{equation}
+\|E_r(t)\|^2 \;\ge\; \|E_r(0)\|^2\, e^{-(2+\varepsilon)I(t)} \;-\; \frac{\bar\lambda_1}{\varepsilon}\, J_s(t),
+\qquad
+J_s(t) = \int_0^t \|E_s(s)\|^2\,ds .
+\label{eq:rough-floor-apriori}
+\end{equation}
+In particular $\|E(t)\|\ge\|E_r(t)\|$ obeys the same bound, and
+$\|E_r(0)\|\ge R(Y)-R(\hat Y_0)$.
+\end{theorem}
+
+\begin{proof}
+Let $S(t)=\sigma_0^2+2\int_0^t\Theta_R$, so that $\sigma(t)^2\le S(t)$ by
+Eq.~(98) and $S'=2\Theta_R\le 2\sigma\lambda_1^{1/2}H_2\|E\|\le 2S^{1/2}\bar\lambda_1^{1/2}\bar H_2\|E_0\|$,
+using $\sigma\le S^{1/2}$ and $\|E\|\le\|E_0\|$ (Theorem~7(a)). Hence
+$(S^{1/2})'\le a$ and $\sigma(s)\le S(s)^{1/2}\le\sigma_0+as=\Sigma(s)$.
+Insert $\sigma\le\Sigma$ into Eq.~\eqref{eq:rough-floor-path}, bound
+$\lambda_1(s)$ by $\bar\lambda_1$ and the inner exponential in the leak term
+by one.
+\end{proof}
+
+The theorem is the counterpart, for the energy of the rough part, of the
+minimum-path-length statement of Corollary~5. Three features distinguish it.
+It holds at every time with no horizon and no analyticity, since nothing is
+expanded. Its decay is at most exponential in a cubic: with no rough features
+at the start, $\sigma_0=0$, which is the situation of Proposition~20 for a
+network with a smooth activation, the exponent is $\frac{2+\varepsilon}{3}a^2t^3$,
+so the rough part is held for a time of order $a^{-2/3}$. And the kernel
+enters only through $\sigma_0$, $\bar\lambda_1$ and $\bar H_2$: the
+initial peak feature roughness, the top eigenvalue, and the second-derivative
+size, which are the three numbers through which an architecture enters the
+rest of this section. The quantity $J_s(t)$ is the time integral of the energy
+of the smooth part; a priori it is bounded by the band of Theorem~10 about
+$e^{-K_0t}E_0$ projected on $I-P$, and along a run it is read off.
+
+\begin{corollary}[Minimum time to remove the rough part]
+\label{cor:min-time-rough}
+Under the hypotheses of Theorem~\ref{thm:rough-apriori}, if $\|E_r(t)\|\le\epsilon$
+with $\epsilon^2+\bar\lambda_1J_s(t)/\varepsilon<\|E_r(0)\|^2$, then
+\begin{equation}
+(2+\varepsilon)\,I(t) \;\ge\; \log\frac{\|E_r(0)\|^2}{\epsilon^2+\bar\lambda_1 J_s(t)/\varepsilon},
+\label{eq:min-time-rough}
+\end{equation}
+and in particular, when $\sigma_0=0$,
+\begin{equation}
+t \;\ge\; \Big(\frac{3}{(2+\varepsilon)\,a^2}\,
+\log\frac{\|E_r(0)\|^2}{\epsilon^2+\bar\lambda_1 J_s(t)/\varepsilon}\Big)^{1/3} .
+\label{eq:cube-root}
+\end{equation}
+\end{corollary}
+
+\begin{proof}
+Rearrange Eq.~\eqref{eq:rough-floor-apriori}; $I$ is increasing in $t$, and
+for $\sigma_0=0$, $I(t)=a^2t^3/3$.
+\end{proof}
+
+Eq.~\eqref{eq:cube-root} is the a priori ignition time of a rough direction
+from a smooth start, and it depends on the architecture through
+$a=\bar\lambda_1^{1/2}\bar H_2\|E_0\|$ alone: the fastest the peak feature
+roughness can grow per unit time is $\bar\lambda_1^{1/2}\bar H_2$ per unit
+of error, and the rough part is held until the integrated square of that
+growth is of order one. Like Corollary~5 it is one-sided; unlike it, the time
+scale is a cube root rather than a square, because the roughness supply
+itself grows linearly while the error is held.
+
+\subsection{The roughness spectrum and the moving cutoff}
+
+The floor of Theorem~\ref{thm:rough-apriori} holds for every projector
+seminorm. Read across a nested family, it locates where the held error sits.
+Let $P_1\succeq P_2\succeq\cdots$ be a nested family of projectors, each the
+projector of a seminorm $R_m(u)=\|P_mu\|$; for the manifold high-pass of
+Section~4.1, $P_m$ removes the first $m$ graph-Laplacian modes, and the range
+of $P_m$ shrinks as $m$ grows. Write $\sigma_m(\theta)^2=\lambda_{\max}(P_mKP_m)$,
+which is nonincreasing in $m$, and
+\begin{equation}
+\rho_m = \|P_m E_0\|, \qquad
+I_m(t) = \sigma_m(\theta_0)^2\,t+\sigma_m(\theta_0)\,a\,t^2+\tfrac13 a^2t^3 .
+\label{eq:rough-spectrum}
+\end{equation}
+$m\mapsto\rho_m$ is the roughness spectrum of the initial error: the energy
+of $E_0$ above mode $m$. It is fixed by the dataset and the initial output,
+and for a target with $\hat Y_0$ small it is the roughness spectrum of the
+labels.
+
+\begin{definition}[Cutoff mode]
+\label{def:cutoff}
+For $t\ge0$ and $\varepsilon>0$, the cutoff mode is
+\begin{equation}
+m^\star(t) = \min\{\,m : (2+\varepsilon)\,I_m(t)\le\log 2\,\},
+\label{eq:cutoff}
+\end{equation}
+the lowest mode above which, at time $t$, the a priori bound allows the rough
+part to have lost at most half its energy.
+\end{definition}
+
+Since $I_m$ is nonincreasing in $m$ and increasing in $t$, the set in
+Eq.~\eqref{eq:cutoff} is an up-set in $m$ and $m^\star(t)$ is nondecreasing
+in $t$: the cutoff moves up through the modes as training proceeds, and it
+moves even when $\sigma_m(\theta_0)=0$, through the $a^2t^3$ term, which is
+feature learning.
+
+\begin{proposition}[The error at time $t$ is at least the energy above the cutoff]
+\label{prop:cutoff-floor}
+Under the hypotheses of Theorem~\ref{thm:rough-apriori}, for every $t$,
+\begin{equation}
+\|E(t)\|^2 \;\ge\; \|P_{m^\star(t)}E(t)\|^2 \;\ge\; \tfrac12\,\rho_{m^\star(t)}^2 \;-\; \frac{\bar\lambda_1}{\varepsilon}\int_0^t\|(I-P_{m^\star(t)})E(s)\|^2\,ds .
+\label{eq:cutoff-floor}
+\end{equation}
+\end{proposition}
+
+\begin{proof}
+Theorem~\ref{thm:rough-apriori} with $P=P_{m^\star(t)}$ and
+$e^{-(2+\varepsilon)I_{m^\star}(t)}\ge\frac12$ by the definition of $m^\star$.
+\end{proof}
+
+In words: at time $t$, the error is at least the part of the initial error
+that is rougher than the cutoff mode, up to the leak, and the cutoff is set
+by the roughness capacity of the network, $\sigma_m(\theta_0)$ and $a$, and
+by nothing else. Without feature learning ($a=0$) the cutoff is the smallest
+$m$ with $\sigma_m(\theta_0)^2t\le\log2/(2+\varepsilon)$, which is the spectral
+bias of the lazy regime stated in roughness rather than in frequency; with
+feature learning the cutoff rises faster, and Corollary~\ref{cor:min-time-rough}
+says how much faster it can rise at most. This is the quantity that the
+closure below takes as its estimate of the held rough error: for a dataset
+whose roughness spectrum has a step at some mode $m_Y$, the error is held near
+$\rho_{m_Y}$ until $m^\star(t)$ passes $m_Y$, and the time at which it does is
+Eq.~\eqref{eq:min-time-rough} for $P=P_{m_Y}$.
+
+\subsection{The closure, revisited}
+The statements above bound the rough part from below. The upper bound needs
+the growth of the kernel \emph{along the residual} with the sign that learning
+needs, and the natural closure, that $\langle E_r,KE_r\rangle\ge c\,\sigma_R^2\|E_r\|^2$
+with $c$ of order one, is false along training: measured on four runs with the
+manifold high-pass at $m=20$ and $60$, the ratio $\langle E_r,KE_r\rangle/(\sigma_R^2\|E_r\|^2)$
+is $0.02$--$0.09$ at initialisation and decays to $0.001$--$0.005$, while
+$\sigma_R^2$ is lifted $6$--$50\times$ [n=200]. The mechanism is the one the
+chain of Section~\ref{sec:chain} proves: the kernel's growth is targeted at the
+smoothed residual and raises the top of the rough subspace by the gain law,
+while the residual itself moves to the slowest directions of that subspace,
+so $c(t)\approx\lambda_{\mathrm{eff}}(t)/\sigma_R(t)^2\to0$. The error is not held
+in any fixed roughness seminorm; what is held is its energy on the modes still
+unfit in the \emph{current} kernel basis. The two-sided statement that replaces
+the band is the cutoff bound of Section~\ref{sec:chain}: the energy of the
+initial error on the continuously transported unfit set, with the cross-front
+rotation as the only remainder, and the onset of the lift given by a
+convergent expansion in the richness parameter in place of a reduced model.
+
+\subsection{Depth and the comparison of architectures}
+
+Everything above enters an architecture through three numbers at the start of
+training, $\sigma_R(\theta_0)$, $\bar\lambda_1$ and $\bar H_2$, and through
+the two run quantities $c$ and $\Theta_R$. For two designs on the same
+dataset, the comparison principle of Corollary~6 applies with the bounds of
+this section.
+
+\begin{corollary}[Comparing designs on the rough part]
+\label{cor:depth}
+Let designs $A$ and $B$ be trained by gradient flow on the same dataset, let
+$P$ be the projector of a roughness function fixed by the inputs, and let
+$T>0$.
+\begin{enumerate}
+\item[(i)] (Proved.) $\|E_r^A(T)\|^2$ is at least the right side of
+Eq.~\eqref{eq:rough-floor-apriori} computed with $\sigma_0^A$, $a_A$ and
+$J_s^A(T)$.
+\item[(ii)] (Proved, Section~\ref{sec:chain}.) $\|E^B(T)\|^2$ is at most the
+ceiling of the cutoff bound computed for $B$: the energy of its initial error on
+the modes that are still unfit at $T$ under its lifted spectrum, plus the
+cross-front leakage and the decayed fit part.
+\item[(iii)] If the bound in (ii) is below the bound in (i), then
+$\|E^B(T)\|<\|E_r^A(T)\|$: $B$ has learned more of the rough part of the
+labels by time $T$.
+\end{enumerate}
+\end{corollary}
+
+The corollary separates what depth does into two effects that can be checked
+one at a time. A deeper network can have larger initial peak feature
+roughness $\sigma_R(\theta_0)$, because its gradient features decorrelate over
+shorter input distances when the initialization is near the edge of chaos;
+that lowers the held rough error after the lazy phase, since the cutoff of
+Definition~\ref{def:cutoff} starts higher. And it can have larger
+$\lambda_1^{1/2}H_2$, which is the rate $b$ at which it can supply roughness
+per unit of error; that shortens the ignition time of
+Corollary~\ref{cor:min-time-rough} and advances the onset of the lift given by
+the richness expansion of Section~\ref{sec:chain}. Both
+are computed before training, one top eigenvalue of $PKP$ and one nested
+automatic differentiation per design, and both are expected to grow with
+depth; the theory says which part of the error each one removes and in what
+time, but not that either grows with depth, which is a measurement or a
+statement about the initialization. Where the initialization statistics of
+deep networks are known in closed form, they can supply $\sigma_R(\theta_0;L)$,
+$\lambda_1(L)$ and $H_2(L)$ as functions of depth, and this is the only place
+in the theory where a limit of the initialization enters; nothing along the
+path is taken to a limit.
+
+\subsection{Scope and what to measure}
+
+\textbf{Exact under gradient flow, no hypothesis beyond smoothness.}
+Proposition~\ref{prop:rough-energy}; Theorem~\ref{thm:rough-apriori} and
+Corollary~\ref{cor:min-time-rough} with $\bar\lambda_1$ and $\bar H_2$ taken
+along the path or over the ball of radius $\ell(t)$;
+Proposition~\ref{prop:cutoff-floor}; Corollary~\ref{cor:depth}(i).
+The leak term is exact and is read off a run; its a priori bound through
+Theorem~10 is available while the band of that theorem is informative.
+\textbf{Proved in Section~\ref{sec:chain}.} The cutoff bound (two-sided, with
+the leakage as remainder); Corollary~\ref{cor:depth}(ii)--(iii); the onset law.
+Nothing in this section is approximated; the one hypothesis of the earlier
+draft has been measured false and removed.
+The measurements that decide whether the closure is the right one, to be added
+to the list of Section~15: (13) $\sigma_R(t)$ along each run for the
+manifold high-pass at several $m$, against its a priori bound $\Sigma(t)$ of
+Eq.~\eqref{eq:Sigma-I} and against the realized drive $\Theta_R$;
+(14) the ratio $\langle E_r,KE_r\rangle/(\sigma_R^2\|E_r\|^2)$ along each run,
+which was the constant $c$ of the earlier closure and is now a diagnostic of
+where the residual sits in the rough subspace (measured: decaying to
+$10^{-3}$ [n=200]); (15) $\|E_r(t)\|^2$ against
+Eq.~\eqref{eq:rough-floor-path} and against the two sides of the cutoff bound
+of Section~\ref{sec:chain}, and $J_s(t)$;
+(16) the cutoff mode $m^\star(t)$ against the mode at which the measured
+error's roughness spectrum actually drops, which tests
+Proposition~\ref{prop:cutoff-floor} as an estimate rather than as a bound;
+(17) $\sigma_R(\theta_0)$, $\lambda_1$ and $H_2$ as functions of depth at
+initialization, which are the three numbers through which depth enters
+Corollary~\ref{cor:depth}.

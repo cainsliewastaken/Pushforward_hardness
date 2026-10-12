@@ -1,0 +1,124 @@
+% ---------------------------------------------------------------------------
+% Appendix: error propagation through the chain, and numerical verifications
+% (companion to Section sec:chain). All numbers at n = 200; see the scope
+% subsection of the main section.
+% ---------------------------------------------------------------------------
+\section{The chain under truncation: error propagation and verifications}
+\label{app:chain}
+
+\subsection{How a truncation at one stage reaches time $T$}
+\label{ssec:chain-error}
+
+A truncated chain replaces the exact stage map by its order-$k$ expansion about
+the stage's initial state. Three exact structures decide how the local error
+of stage $s$ appears at $T$.
+
+\begin{proposition}[The propagator is algebraic]
+\label{prop:propagator}
+A perturbation of the state at time $s$ evolves by $\dot{\delta\theta}=-H(t)\,\delta\theta$,
+$H=J^{\!\top}J/n+\frac1n\sum_iE_i\nabla^2N_i$, so the propagator
+$\Phi(T,s)=\mathrm{T}\!\exp(-\!\int_s^TH)$ obeys
+$\|\Phi(T,s)\|\le\exp\!\big(\int_s^T\lambda_{\max}(-H)_+\big)\le\exp\!\big(\int_s^T\tfrac1n\|E\|H_2\big)$:
+only the residual-curvature part can expand, and its integrand decays with the
+residual. [n=200: $\|\Phi\|\le21$ over a full run in the worst direction, i.e.\ an
+integrated negative curvature $\ln 21\approx3$, an average of $10^{-3}$ per unit
+time; the $H_2$ form of the bound is valid but loose by $e^{13}$, since it
+replaces the negative curvature by its worst case $\|E\|H_2/n\approx10^{-2}$.]
+\end{proposition}
+
+\begin{proposition}[Three channels]
+\label{prop:channels}
+A feature error $\delta\Psi_s$ at stage $s$ reaches $T$ as (i) an additive,
+undamped feature offset $\Phi(T,s)\delta\Psi_s$ (since $\Psi_T=\Psi_0+\sum_r\delta\Psi_r$),
+hence a kernel error linear in the offset while it is smaller than the
+features; (ii) a residual error $\delta E(T)=-\int_s^T\mathrm{T}\!\exp(-\!\int_u^TK)\,\delta K(u)E(u)\,du$,
+contracted by $K$ in every lifted direction and sourced only by the kernel
+error acting on the residual; (iii) a feedback on later stages,
+$\delta(\delta\Psi_r)\sim J'[J^{\!\top}\delta E]$ for $r>s$, bounded by
+Proposition~\ref{prop:propagator} and of the order of (ii) times the drive.
+\end{proposition}
+
+\begin{theorem}[Global error of the order-$k$ chain]
+\label{thm:global-error}
+If each stage's order-$(k{+}1)$ remainder is at most $\varepsilon$ times its
+first-order increment, then
+$\|\Psi_T^{\mathrm{chain}}-\Psi_T\|\le\varepsilon\,\Phi_{\max}\sum_s\|\delta\Psi_s\|$ and
+$\|E_T^{\mathrm{chain}}-E_T\|\le\frac{2\varepsilon\Phi_{\max}}n\|\Psi_T\|\sum_s\|\delta\Psi_s\|\int_0^T\|E\|+O(\varepsilon^2)$.
+The stage errors are proportional to the stage \emph{increments} and add, so
+their sum is $\varepsilon$ times the total feature change along the path, not
+$\varepsilon$ times the number of stages: the chain is consistent of order $k$
+and stable with an algebraic propagator, hence convergent, uniformly in the
+number of stages. Fewer, longer stages at higher order and many short stages
+at first order both converge; they differ in cost, with
+$S_k\sim\varepsilon^{-1/k}\int(\|\Psi^{(k+1)}\|/\|\Psi'\|)^{1/k}$ stages needed.
+\end{theorem}
+\begin{proof}
+Triangle inequality over stages with Proposition~\ref{prop:channels}(i),
+Proposition~\ref{prop:propagator} for the propagator, variation of constants
+for (ii). The numerical convergence to three digits across a tenfold range of
+stage budgets at $k=1$ is this theorem observed.
+\end{proof}
+
+\begin{remark}
+For proofs the $k=1$, many-stage end suffices: it is the flow itself, and
+nothing in this section needs more than first order per stage plus the
+propagator bound. For computation the chain is not cheap: long stages need
+high-order directional derivatives of the Jacobian at every expansion point,
+short stages need of order $10^4$ of them; either way its cost is that of
+integrating the dynamics. Its value is the error accounting, which makes
+every truncated or reduced version of it a controlled approximation with a
+named error term. The constants are finite but not small in exactly two
+circumstances: early, where the residual-curvature part of $H$ makes the
+propagator grow (the sharpness-reduction phase), and for errors landing in a
+slow mode, where (ii) gives no damping and the offset of (i) is later
+amplified by the lift of that mode. That is the chain's own statement of
+Propositions~\ref{prop:visibility}--\ref{prop:amplification}: what is wrong,
+or unknown, in the slow modes early survives and is amplified; what is wrong
+in the fast modes is forgotten.
+\end{remark}
+
+
+\subsection{Numerical verifications of the identities and of the leading orders}
+\label{app:chain-verif}
+
+\begin{remark}
+A numerical realisation of the chain (one eigendecomposition of the
+$N\times N$ kernel per stage, the maps of
+Proposition~\ref{prop:chain-identities}(c,d) applied to the network's own
+units) reproduces the real gradient-flow run to four digits in $\|E\|$ and to
+$0.1\%$ in every kernel eigenvalue at $t=8$, tracks it to $1$--$3\%$ at $T$ on
+every design tested including depth~8 and width~512, and is converged to
+three digits across a tenfold range of stage budgets [n=200]. It is gradient
+flow on the sample integrated in large stages; its only use in this section is
+as the exact reference against which every reduced statement is checked.
+\end{remark}
+
+\begin{remark}[What was measured, n=200]
+(a) is verified to within $10\%$ at initialisation for tanh, ReLU, GELU and
+softplus; the bulk is $2$--$5\%$ of the core for tanh at unit gain and
+$30$--$50\%$ for ReLU (whose local derivative is a $0/1$ pattern), yet $98$--$100\%$
+of the first-order change lies in three singular directions for every
+activation. Along the path the independence of (a) fails within a few steps,
+as it must once the units adapt to the residual, while the rank persists: at
+$t=0.3$ the per-unit-mean split gives a bulk ratio of $0.9$ against the
+dispersion prediction of $0.05$, and the cumulative change is still $98\%$ in
+three directions; the correlation-free bound (b) holds with $r=1$--$2$, i.e.\
+the update lies $93\%$ in $3$ and $99.9\%$ in $9$ directions. Cores of
+successive stages add coherently while the drive keeps its direction, which
+is the cross-layer alignment measured earlier (randomising one layer's
+rotation destroys the lift); the bulk-plus-spike spectrum of trained weights
+is the random initialisation plus this coherent low-rank sum.
+\end{remark}
+
+\begin{remark}[Verification, n=200]
+With $\epsilon=1/s$ and the coefficients through second order (including the
+second-order weight change and the feedback of the lifted kernel on the lazy
+residual), the predicted lift of init eigen-directions agrees with the
+measured one to $0$--$16\%$ at output scales $s=2,4,8,16$ for as long as the
+measured lift is below order one, including the early \emph{decrease} along
+deep-tail directions and its sign change; the truncated series fails sharply
+once the lift exceeds one, where Theorem~\ref{thm:radius} says it must. The
+leading coefficient $a_1$ changes sign along $\tau$, so no universal power of
+$s$ describes the delay to a given lift; the function is predicted, the
+exponent does not exist.
+\end{remark}

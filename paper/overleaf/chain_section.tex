@@ -1,0 +1,647 @@
+% ---------------------------------------------------------------------------
+% Section: Training through time: the chained expansion, its applications,
+%          and why the late stage is not predictable from the initialisation
+%
+% Drop-in section for the paper. Conventions of Part III: Pi = I, c_p = 1,
+% gradient flow, E = \hat Y - Y, K(theta) the (1/n-normalised) tangent kernel
+% so that \dot E = -K E, J the Jacobian on the data, theta_0 the initialisation,
+% lambda_1 = lambda_max(K), H_2 the second-derivative bound of Part I.
+% Cross-references to earlier results (Proposition 20 = the analyticity radius
+% of expansions about theta_0; Section sec:held-rough = the held rough error)
+% are hard-coded; replace them with \ref{...} to your labels. Environments:
+% theorem, proposition, corollary, definition, assumption, remark, proof.
+% Every numerical statement below was obtained at n = 200 training points on
+% the Lorenz-63 testbed and is marked [n=200]; see the last subsection.
+% ---------------------------------------------------------------------------
+
+\section{Training through time: the chained expansion and the limits of prediction}
+\label{sec:chain}
+
+Proposition~20 says that no series in $\theta-\theta_0$ reaches the stretch of
+training in which the rough part of the error is removed, and
+Section~\ref{sec:held-rough} replaced the expansion variable by the peak
+feature roughness. This section keeps $\theta$ as the variable and moves the
+expansion point instead: training is written as a chain of expansions, each
+about the current state and each valid within its own radius, whose
+composition is exact. The chain gives three kinds of statement. Identities
+that hold at every time for any network in a broad class (\S\ref{ssec:chain-identities});
+structure theorems for what gradient flow does to the weights and the kernel
+at each stage, which is where the low-rank ``spikes'' and the targeted growth
+of the kernel come from (\S\ref{ssec:chain-spikes}--\ref{ssec:chain-richness});
+and applications in which an open question becomes a computation with the
+chain or a theorem about its leading orders (\S\ref{ssec:chain-apps}). The
+last two subsections state why the late stage cannot be predicted from the
+initialisation without carrying the state forward, in a form that is a
+theorem rather than an impression (\S\ref{ssec:chain-impossible}), and what a
+statistical description can and cannot promise (\S\ref{ssec:chain-statistical}).
+
+\subsection{Setting and exact identities}
+\label{ssec:chain-identities}
+
+\paragraph{Model class.} $N_\theta$ is any composition of \emph{parameter-linear
+blocks} $z_\ell = W_\ell a_\ell$, where $a_\ell$ is whatever the block receives
+(dense, convolution, attention projections, normalisation gains), and
+\emph{parameter-free maps} between them (pointwise activations, softmax,
+normalisation), differentiable almost everywhere in $\theta$. ReLU qualifies.
+Training is gradient flow on the squared loss, or any update of the
+data-indexed outer-product form below (GD, SGD on a subset of the data,
+momentum through its integral); Adam is treated in \S\ref{ssec:chain-apps}.
+Write $\Psi(t)=J(\theta(t))\in\mathbb R^{N\times P}$ for the Jacobian on the $n$
+data points ($N=n\,n_y$), $K=\Psi\Psi^{\!\top}/n$, $\delta_\ell^c(x)=\partial
+\hat Y_c(x)/\partial z_\ell$ for the backprop signal into block $\ell$, and
+$U(t)=\int_0^t E$ for the integrated residual.
+
+\begin{proposition}[Four identities]
+\label{prop:chain-identities}
+For every $t$ at which $N_\theta$ is differentiable:
+\begin{enumerate}
+\item[(a)] $\dot E=-K(t)E$; hence $\tfrac{d}{dt}\|E\|^2=-2\langle E,KE\rangle$
+and $E(T)=\mathrm{T}\!\exp\!\big(-\!\int_0^T K\big)E(0)$.
+\item[(b)] $K=\frac1n\sum_\ell A_\ell\odot D_\ell$, with $A_\ell[i,j]=a_\ell(x_i)\!\cdot\!a_\ell(x_j)+1$
+the Gram of the block's inputs and
+$D_\ell[(i,c),(j,d)]=\sum_q\delta^c_{\ell,q}(x_i)\,\delta^d_{\ell,q}(x_j)$ the Gram
+of its backprop signals.
+\item[(c)] $W_\ell(t)-W_\ell(0)=-\frac1n\int_0^t\sum_i\sum_c\delta_\ell^c(x_i)\,E_c(x_i)\,a_\ell(x_i)^{\!\top}$:
+the change of every block is a sum of outer products indexed by the data, its
+row space lies in the span of the block's inputs on the data, and every block is
+driven by the same residual.
+\item[(d)] For a unit $q$ of block $\ell$ with preactivation $z_q$ and incoming
+backward signal $m_q=W_{\ell+1}^{\!\top}\delta_{\ell+1}$,
+\[
+\dot z_q=\dot W_\ell a_\ell+W_\ell\,\dot a_\ell,\qquad
+\dot m_q=\dot W_{\ell+1}^{\!\top}\delta_{\ell+1}+W_{\ell+1}^{\!\top}\dot\delta_{\ell+1}.
+\]
+The first terms are given by (c) (the \emph{coherent} part); the second carry
+the motion of the neighbouring blocks through the current weights (the
+\emph{propagation} part). Together with (a) and (b) this is a closed system on
+the data.
+\end{enumerate}
+\end{proposition}
+\begin{proof}
+(a) is the chain rule for $\theta'=-\frac1nJ^{\!\top}E$. (b): $\partial\hat
+Y_c(x)/\partial W_\ell[q,p]=\delta^c_{\ell,q}(x)\,a_{\ell,p}(x)$. (c): integrate
+the gradient. (d): differentiate the definitions.
+\end{proof}
+
+\begin{remark}
+Everything in this section is a consequence of
+Proposition~\ref{prop:chain-identities}. In particular the propagation part of
+(d) is the only place where the initialisation enters other than through the
+unit statistics; omitting it (as any model built from the kernel alone must)
+was measured to cost $11$--$28\%$ of the unit displacements early and a factor
+$2$ in the late error on the reference problem [n=200].
+\end{remark}
+
+\subsection{The stage identity and the chain}
+\label{ssec:chain-stage}
+
+Fix stage boundaries $0=t_0<t_1<\dots<t_S=T$ and write
+$\delta\Psi_s=\Psi(t_s)-\Psi(t_{s-1})$.
+
+\begin{proposition}[Stage identity]
+\label{prop:stage}
+$K(t_s)-K(t_{s-1})=\mathrm{Cross}_s+Q_s$ with
+$Q_s=\delta\Psi_s\delta\Psi_s^{\!\top}/n\succeq0$ and
+$\mathrm{Cross}_s=(\Psi\delta\Psi_s^{\!\top}+\delta\Psi_s\Psi^{\!\top})/n$,
+$\Psi=\Psi(t_{s-1})$. For a unit vector $v$, the quadratic form changes by
+$\frac1n\big[2\langle\Psi^{\!\top}v,\delta\Psi_s^{\!\top}v\rangle+\|\delta\Psi_s^{\!\top}v\|^2\big]$,
+which is positive whenever $\|\delta\Psi_s^{\!\top}v\|>2\|\Psi^{\!\top}v\|=2\sqrt{n\lambda_v}$.
+\end{proposition}
+
+\begin{theorem}[Feature-sum identity and bracket at $T$]
+\label{thm:bracket}
+$\Psi_T=\Psi_0+\sum_s\delta\Psi_s$, so for every unit $v$, with
+$D_v=\sum_s\delta\Psi_s^{\!\top}v$ and $\ell_v=\|\Psi_0^{\!\top}v\|$,
+\[
+\tfrac1n\big(\|D_v\|-\ell_v\big)_+^2\;\le\;v^{\!\top}K_Tv\;\le\;\tfrac1n\big(\|D_v\|+\ell_v\big)^2 .
+\]
+$D_v$ splits exactly into coherent and propagation parts by
+Proposition~\ref{prop:chain-identities}(d). On the directions the residual has
+driven, $\ell_v$ is negligible and the lower bound is the value: measured
+$0.90$--$1.00$ of $v^{\!\top}K_Tv$ for every rank $\ge60$ on the reference
+problem [n=200]. Where $J$ is $C^1$ along the path,
+$|\lambda_k(K_T)-\lambda_k(K_0)|\le\int_0^T C(s)\|E(s)\|\,ds$ with
+$C=\frac2{n^2}\|\Psi\|_2^2\|\Psi'\|_2$ (Weyl), so every lifted eigenvalue at $T$
+is bracketed between two functionals of the residual history.
+\end{theorem}
+
+\begin{theorem}[Stage error and the chain]
+\label{thm:chain}
+Where $J$ is $C^2$ along the path,
+$\delta\Psi_s=\alpha_s\dot\Psi(t_{s-1})+R_s$ with
+$\|R_s\|\le\frac{\alpha_s^2}2\sup\|\ddot\Psi\|$; choosing
+$\alpha_s\|\ddot\Psi\|\le\varepsilon\|\dot\Psi\|$ makes each stage's first-order
+increment accurate to relative $\varepsilon$, and the composition of the
+stages is the exact trajectory. The quantity $\|\ddot\Psi\|/\|\dot\Psi\|$ is the
+inverse of the stage length over which the linearisation at the current state
+is trustworthy; its norm along the descent direction is $H_2$.
+\end{theorem}
+
+\subsection{What a stage does to the weights: the spike theorem}
+\label{ssec:chain-spikes}
+
+For a hidden block whose outgoing weights are $W_{\ell+1}$, write
+$S[i,q]=\sigma'(z_q(x_i))$ for the local derivative of the map following the
+block, $M[i,q]$ for the backprop coefficient contracted with the drive (for the
+last hidden block $M=U\,W_{\mathrm{out}}$, of rank $\le n_y$), and $A$ for the
+block's inputs on the data. By Proposition~\ref{prop:chain-identities}(c),
+$\Delta W=-\frac1n(S\odot M)^{\!\top}A$.
+
+\begin{theorem}[Core and bulk]
+\label{thm:spike}
+\begin{enumerate}
+\item[(a)] (\emph{at initialisation}) Split $S=h_0+(S-h_0)$ with $h_0$ the mean of
+$\sigma'$ over the data. Then $\Delta W=\Delta W^{\mathrm{core}}+\Delta W^{\mathrm{bulk}}$ with
+$\Delta W^{\mathrm{core}}=-\frac{h_0}nM^{\!\top}A$ of rank $\le n_y$, its left
+singular space spanned by the rows of $W_{\mathrm{out}}$ and its right singular
+space by $A^{\!\top}U$. If the block's input weights are independent of
+$W_{\ell+1}$ (true at $\theta_0$), the expected bulk-to-core energy ratio is
+$\rho=\mathrm{Var}(\sigma'(z))/\mathbb E[\sigma'(z)]^2$ at the preactivation scale.
+The output block has rank $\le n_y$ and the input block rank $\le d_{\mathrm{in}}+1$ exactly.
+\item[(b)] (\emph{any time, no independence}) For any rank-$r$ approximation
+$S_r$ of $S$ with remainder $\tilde S$,
+$\mathrm{rank}\big((S_r\odot M)^{\!\top}A\big)\le n_y r$ and
+$\|(\tilde S\odot M)^{\!\top}A\|_F\le\|\tilde S\|_{\max}\|M\|_F\|A\|_2/n$. Since
+$Z=A\,W_\ell^{\!\top}+b$, the numerical rank of $S=\sigma'(Z)$ is controlled by the
+spectrum of the block's input Gram and by the Hermite coefficients of
+$\sigma'$ at the current preactivation scale, both quantities the chain
+carries; for deeper blocks the bound composes multiplicatively down the stack.
+\end{enumerate}
+\end{theorem}
+\begin{proof}
+(a) Expand $\sigma'$; the core is $h_0M$; the bulk's expected energy factorises
+by independence of $S_{iq}$ and $M_{iq}$. (b) $\mathrm{rank}(X\odot Y)\le
+\mathrm{rank}X\cdot\mathrm{rank}Y$, the entrywise Frobenius bound, the
+column-space inclusion for $Z$, and the Hermite expansion.
+\end{proof}
+
+
+\subsection{The richness expansion, its radius, and the chain as its resummation}
+\label{ssec:chain-richness}
+
+Let $\epsilon$ be any parameter that multiplies the weight velocity at fixed
+residual dynamics in a suitable time: the inverse output scale $1/s$ with
+$\tau=s^2t$ for centred outputs $\hat Y=s(N_\theta-N_{\theta_0})$; the Euler step
+$\Delta$ of \S\ref{ssec:chain-apps}; a $\mu$P-type multiplier; an inverse-width
+factor. Then
+\[
+\frac{dE}{d\tau}=-K(\theta)E,\qquad\frac{d\theta}{d\tau}=-\frac{\epsilon}{n}J(\theta)^{\!\top}E .
+\]
+
+\begin{theorem}[All-orders richness expansion]
+\label{thm:richness}
+For analytic parameter-free maps and each fixed $\tau$ there is $R(\tau)>0$ such
+that every analytic observable of the state is a convergent power series in
+$\epsilon$ for $|\epsilon|<R(\tau)$; in particular
+\[
+\frac{v^{\!\top}K(\tau)v}{v^{\!\top}K(0)v}-1=\sum_{k\ge1}a_k(\tau)\,\epsilon^k ,
+\]
+with coefficients determined recursively from $\theta_0$ and the lazy
+trajectory alone: $a_0$ is kernel regression with $K(\theta_0)$,
+$\theta^{(1)}(\tau)=-\frac1nJ_0^{\!\top}U_{\mathrm{lazy}}(\tau)$,
+$a_1=2\langle\Psi_0^{\!\top}v,J'[\theta^{(1)}]^{\!\top}v\rangle/(n\lambda_v)$, and $a_k$
+involves derivatives of $J$ at $\theta_0$ up to order $k$ along lower-order
+displacements and the lower-order residual corrections (linear inhomogeneous
+equations, variation of constants in the eigenbasis of $K_0$). No quantity along
+a trained path enters at any order.
+\end{theorem}
+
+\begin{theorem}[Radius, and the chain as resummation]
+\label{thm:radius}
+$R(\tau)$ is bounded below by the stage criterion of Theorem~\ref{thm:chain}
+applied at $\theta_0$, and along a direction $v$ the series is valid while
+$\|\delta\Psi^{\!\top}v\|<\|\Psi_0^{\!\top}v\|$ (Proposition~\ref{prop:stage}). Where
+this fails the lift along $v$ is of order one and no finite or infinite number
+of terms of the series about $\theta_0$ represents it. Re-expanding at each
+stage boundary (Theorem~\ref{thm:chain}) continues the series past $R(\tau)$
+by moving the expansion point along the path; within $R(\tau)$ the two agree,
+beyond it only the chain is defined.
+\end{theorem}
+\begin{proof}
+Analytic dependence of ODE solutions on parameters; the recursion is the Taylor
+expansion of the vector field in $\epsilon$; the radius statement is
+Proposition~20 at the expansion point $\theta_0$ together with
+Proposition~\ref{prop:stage}.
+\end{proof}
+
+
+\subsection{Applications}
+\label{ssec:chain-apps}
+
+\paragraph{Euler versus direct.} Let $y_D=\Phi_\Delta(x)$ and
+$y_E=(\Phi_\Delta(x)-x)/\Delta$ be the direct and the Euler target, trained from
+the same $\theta_0$ with centred outputs, and write the direct residual on the
+increment as $E_D=\Delta\tilde E$.
+\begin{theorem}
+\label{thm:euler}
+$\tilde E$ and $E_E$ obey the same residual equation with their own kernels,
+start from the same value, and the weight velocities satisfy
+$\dot\theta_D=-\frac\Delta nJ^{\!\top}\tilde E$ against
+$\dot\theta_E=-\frac1nJ^{\!\top}E_E$: the direct problem is the Euler problem with
+the richness parameter multiplied by $\Delta$ (Theorem~\ref{thm:richness}
+evaluated at a smaller argument). Hence (i) direct's stage lifts on the
+increment are $\Delta^2$ times Euler's at equal normalised residual; (ii) as
+$\Delta\to0$ at fixed budget the direct network is in the lazy regime on the
+increment, its normalised error converges to the frozen-kernel error of the
+increment target, and the held-rough bound of Section~\ref{sec:held-rough}
+becomes tight for it; (iii) Euler's error is the full feature-learning error,
+below that bound by the feature-learning gain, which grows with the budget
+and with the increment's roughness. The direct network additionally spends a
+$\Delta$-independent early drive on the identity component of its target.
+\end{theorem}
+The static argument of the previous sections (``the increment is a smoother
+target'') is the frozen-kernel shadow of this: dividing by $\Delta$ multiplies the
+drive by $1/\Delta$ and the lifts by $1/\Delta^2$, so Euler trains rich on the
+increment while direct trains lazy on it. Statement (ii) is exact; (iii) is
+conditional on the rate comparison below.
+
+\paragraph{Progressive sharpening, the initial reduction phase, and the edge of stability.}
+By Proposition~\ref{prop:stage},
+$\dot\lambda_1=v_1^{\!\top}(\mathrm{Cross}+Q)v_1$ per stage with $Q\succeq0$. Along
+the residual the cross term at $t=0$ equals $-\frac{2\alpha}{n^2}\langle
+E,N''_{\theta}[g,g]\rangle$ with $g=J^{\!\top}E$, exactly, and it is negative on
+$90$--$91\%$ of the eigen-directions for the raw residual $E=\hat Y_0-Y$ and on
+$48$--$55\%$ (no systematic sign) for the centred residual $-Y$ [n=200]: the
+initial sharpness-\emph{reduction} phase reported in the warmup literature is
+the network unlearning its own initial function and is absent for centred
+initialisations. Once learning has accumulated, the coherent part of the cross
+term is the inner product of the accumulated core above with the stage core
+below through the shared drive, positive while the drive keeps its direction
+(measured positive on $80$--$100\%$ of modes from $t\approx1$ on): progressive
+sharpening, faster with depth by composition ($5\times,11\times,20\times,86\times$
+top gain at depths $2,3,6,6$ [n=200]). Taking GD steps as stages, above the
+stability threshold the top component of the residual alternates in sign, the
+stage cores along it alternate, their cross terms with the accumulated core
+are negative at the core level, and $\lambda_1$ decreases until the step is
+stable again: sharpening and self-stabilisation are the two signs of one term.
+What is not proved is the sign of the init-feature part of the cross term
+after the transient (Lemma~\ref{lem:sign} below).
+
+\paragraph{Adam.} For $\dot\theta=-P(t)\nabla L$ with $P$ diagonal positive, (a)
+of Proposition~\ref{prop:chain-identities} holds with $K_P=\Psi P\Psi^{\!\top}/n$,
+(c) with the outer products multiplied entrywise by $P_\ell$, and
+Proposition~\ref{prop:stage} and Theorem~\ref{thm:bracket} verbatim with
+$P^{1/2}$-weighted features. The spike statement needs one more fact: $P$ is
+built from the gradient block itself, so $P\odot G$ is a normalised sign
+pattern of a rank-$\le n_y$ matrix, and the same mean-plus-fluctuation
+argument as Theorem~\ref{thm:spike} gives its core fraction as the squared first
+Hermite coefficient of the normaliser under the entry distribution of $G$:
+$2/\pi$ for Gaussian-like entries, $1$ for coordinate-aligned (sparse) singular
+vectors, with the time-averaged second moment lowering it further (measured
+$0.68$--$0.81$, $0.95$--$1.00$, $0.52$ respectively on synthetic blocks). This
+is the rotation-dependent property that distinguishes Adam from SGD.
+
+\paragraph{Validation.} With $J_{\mathrm{val}}$ the Jacobian on validation
+points, $\dot{\hat Y}_{\mathrm{val}}=-K_{vt}E$ with
+$K_{vt}=J_{\mathrm{val}}J^{\!\top}/n$, exactly, so
+$-\frac d{dt}\frac12\|E_{\mathrm{val}}\|^2=E_{\mathrm{val}}^{\!\top}K_{vt}(0)E+
+E_{\mathrm{val}}^{\!\top}[K_{vt}(t)-K_{vt}(0)]E$: a lazy-transfer part and a
+feature-learning-transfer part. The coherent part of the lift on validation
+points is the training stage core transported by the cross activation Gram;
+under equal unit statistics on the two samples the whole chain applies with
+that substitution. Measured [n=200]: early both parts positive and the
+validation rate $70$--$110\%$ of the training rate; late the lazy part
+negative (the frozen kernel maps a residual living in sample-specific rough
+modes into directions that increase validation error, the static held-rough
+mechanism seen as a sign) while the lifted part stays positive. At the sample
+sizes of interest, where training and validation agree, the sign pattern is a
+prediction to be checked rather than a result.
+
+\paragraph{Delayed feature learning (``grokking'').} The mechanism is
+Theorems~\ref{thm:spike}--\ref{thm:bracket}: the residual drives a positive
+lift along the directions it has visited, so a direction too slow for the
+initial kernel to fit within the budget is fit later through the lift. The
+onset is Theorem~\ref{thm:richness} with $\epsilon=1/s$: an init-computable
+series, verified to $0$--$16\%$ in its range, with a proved radius; the delay
+to a small lift is its inversion, and because $a_1$ changes sign no universal
+exponent in $s$ exists, which accounts for the disagreement among reported
+scalings. The event itself, a lift of order one or more along a misaligned
+direction, lies outside $R(\tau)$ by construction and is a chain computation;
+by \S\ref{ssec:chain-impossible} it is not predictable from the
+initialisation in any other way. Rigorous timings in the literature (weight
+decay, modular arithmetic, two-layer mean field) are special cases evaluated
+inside their own radii.
+
+\paragraph{The error at $T$, term by term.} Write $K(t)=K_0+\Delta(t)$ with
+$\Delta$ the accumulated stage increments. The residual equation has the exact
+Dyson form
+\[
+E(T)=\sum_{m\ge0}(-1)^m\!\!\int_{T>u_1>\dots>u_m>0}\!\! e^{-K_0(T-u_1)}\Delta(u_1)\,e^{-K_0(u_1-u_2)}\cdots\Delta(u_m)\,e^{-K_0u_m}E_0,
+\]
+absolutely convergent for bounded $\Delta$ (the $m$-th term is bounded by
+$(\int\|\Delta\|)^m/m!\,\|E_0\|$), so the series is the solution, not an
+approximation. Every term is a product of lazy propagators and increments, and
+every increment is built from the stage cores of Theorem~\ref{thm:spike}, so
+$E(T)$ lies in the span generated by the lazy flow of $E_0$ and the stage
+targets. The first-order term paired with the lazy solution is
+$-\int_0^T\langle E_{\mathrm{lazy}}(2T-u),\Delta(u)E_{\mathrm{lazy}}(u)\rangle\,du$,
+whose sign is fixed by two properties at each $u$: $\Delta(u)\succeq0$ on the
+relevant subspace (the sign lemma below) and the alignment of
+$E_{\mathrm{lazy}}(u)$ with $E_{\mathrm{lazy}}(2T-u)$ in the modes $\Delta$ touches
+(persistence; automatic in a fixed basis). Under both, every odd term reduces
+the energy and the even terms are controlled by the preceding odd ones, so
+$\|E(T)\|^2\le\|E_{\mathrm{lazy}}(T)\|^2-2\int_0^T\langle
+E_{\mathrm{lazy}}(2T-u),\Delta(u)E_{\mathrm{lazy}}(u)\rangle du+O(\|\Delta\|^2)$,
+with the fixed-basis case resumming exactly to the mode-wise bound of
+Section~\ref{sec:held-rough}. The expansion thus identifies the sign lemma and
+persistence as the complete set of hypotheses, order by order, and shows there
+is no third.
+
+\paragraph{What the data say about the two hypotheses.} On the reference run
+the sign condition holds on the entire support of the late residual, because
+every direction carrying it satisfies the feature-change inequality of
+Theorem~\ref{thm:bracket} [n=200]; what fails is persistence in the initial
+basis: the subspace carrying the residual at $t=44$ is only $55\%$ retained at
+$t=428$, the accumulated increment on those modes being $10^2$--$10^3$ times the
+initial gaps. Persistence is therefore false there, not merely unproved, and
+the error statement must be organised in the instantaneous eigenframe, where
+the residual's rank profile moves slowly (the front of
+Section~\ref{sec:held-rough}) even though its direction does not; the
+fixed-basis bounds are then the adiabatic limit and the rotation enters as a
+named remainder, coupling over current gap, per stage. That derivation is the
+remaining step.
+
+\paragraph{The moving-frame identity.} With $K(t)=V\Lambda V^{\!\top}$ and
+$c=V^{\!\top}E$ the residual in the instantaneous eigenframe,
+$\dot c=-\Lambda c-Ac$ with $A=V^{\!\top}\dot V$ antisymmetric, so
+$\frac d{dt}\|c\|^2=-2c^{\!\top}\Lambda c$ exactly: rotation redistributes energy
+among the current modes and does not change the norm. If the sorted
+eigenvalues are nondecreasing from $t_0$ on, which follows from the stage
+increments being positive on the relevant subspace (discharged by
+Theorem~\ref{thm:bracket} on the support of the late residual), then at every
+$t$ the descent rate is at least the frozen-kernel rate evaluated on the
+\emph{current} rank profile, with no hypothesis on eigenvector persistence.
+What a closed comparison with the lazy trajectory then needs is the evolution
+of the rank profile, i.e.\ the moving cutoff of
+Section~\ref{sec:held-rough}: in the moving frame persistence is a statement
+about where the residual sits, not which way it points, and the fixed-basis
+bounds are the case $A=0$.
+
+\paragraph{The cutoff bound.} Fix the index set $u=\{k:\lambda_k(T)T<1\}$ of
+modes still unfit at $T$, with cutoff rank $k^*=\min u^c$, and transport it
+along the eigenvector flow by continuity (through crossings, which are
+massive here: sorted rank is not an invariant label), $P(t)=V(t)\Pi_uV(t)^{\!\top}$. With $E_u=PE$, $E_f=(I-P)E$
+and the cross-front rotation rate $\rho=\max_{k\in u,j\notin u}|A_{kj}|$,
+\[
+\tfrac d{dt}\|E_u\|^2=-2E_u^{\!\top}KE_u+L,\qquad \tfrac d{dt}\|E_f\|^2=-2E_f^{\!\top}KE_f-L,\qquad |L|\le2\rho\|E_u\|\|E_f\|,
+\]
+the leakage $L$ being the only coupling between the two subspaces. Hence, with
+$\lambda_u,\lambda_f$ the extreme eigenvalues of $K$ on them,
+\[
+\|\Pi_uc(t_0)\|\,e^{-\int_{t_0}^T\lambda_u}-\!\int_{t_0}^T\!\rho\|E_f\|\;\le\;\|E(T)\|,\qquad
+\|E(T)\|^2\le\|\Pi_uc(t_0)\|^2+2\!\int_{t_0}^T\!\rho\|E_u\|\|E_f\|+\|E_f(T)\|^2,
+\]
+with $\|E_f(T)\|\le\|(I-\Pi_u)c(t_0)\|e^{-\int\lambda_f}+\int\rho\|E_u\|$. At $t_0=0$,
+$\Pi_uc(0)$ is the energy of the initial error on the init-time eigenvectors
+that evolve into the unfit set at $T$ (not the energy above sorted rank $k^*$
+at $t=0$, which mislabels the modes by an order of magnitude here), the cutoff
+being set by the \emph{lifted} spectrum at $T$; computing it requires the
+continuously tracked eigenvectors, which the chain carries. Rotation enters only through
+the leakage, which is weighted by the fit residual and therefore decays:
+rotation among unfit modes, where Corollary~(iii) above places most of it,
+moves energy within $P$ and costs nothing. No persistence hypothesis appears;
+monotonicity of the sorted spectrum (Weyl, from the discharged sign condition)
+is the only input. The cutoff rank is bracketed two-sidedly by
+Theorem~\ref{thm:bracket} through the accumulated feature change, $\rho$ is the
+per-stage coupling over current gap across $k^*$, and the static held-rough
+floor of Section~\ref{sec:held-rough} is the case in which the cutoff is read
+from the frozen spectrum: the lift moves the cutoff up in rank, and that is the
+whole effect of feature learning on the error, in one scalar. For a direction
+$v$, the time it leaves $u$ solves $\lambda_v(T_v)T_v=1$ and is bracketed by
+$(\|D_v(t)\|\mp\ell_v)^2t/n=1$: the delayed-feature-learning event as an exact
+crossing condition with a two-sided bracket from the accumulated drive and a
+sharpness set by $\rho$ at the crossing.
+
+\paragraph{The rate comparison, and the one lemma it rests on.}
+\begin{lemma}[Sign of the cross term; status: derived for the core part, measured for the rest]
+\label{lem:sign}
+$v^{\!\top}\mathrm{Cross}_sv=\frac2n\big[\langle\Psi_0^{\!\top}v,\delta\Psi_s^{\!\top}v\rangle+\sum_{r<s}\langle\delta\Psi_r^{\!\top}v,\delta\Psi_s^{\!\top}v\rangle\big]$.
+The second term's core-core part is nonnegative while the integrated residual
+keeps its direction (shared drive); the first term is measured negative at
+$t=0$ for raw residuals and sign-free for centred ones, positive after the
+transient, and is not derived.
+\end{lemma}
+If the lemma holds from $t_0$ on, then $\dot L(t)\le-\langle E,K(t_0)E\rangle$ for
+$t\ge t_0$: feature learning never slows the descent below what the kernel at
+$t_0$ would produce on the current residual. A closed-form bound on
+$\|E(T)\|$ needs in addition a persistence condition on the residual
+direction, because $K(t)\succeq K(t_0)$ does not control mode-wise decay when
+the eigenvectors rotate, and they rotate by about half in the relevant band by
+mid-training [n=200].
+
+As a theoretical object the chain is exact: infinitely many expansion points, each
+to all orders, is the flow itself, and everything above uses only that. How a
+truncation at one stage reaches $T$ (the error accounting that makes every
+reduced version of the chain a controlled approximation), and the numerical
+verifications of the identities and of the leading orders, are collected in
+Appendix~\ref{app:chain}.
+
+\paragraph{Term-wise corollaries.} Once the right series is used, several
+statements become unconditional. (i) Direct is the richness series at argument
+$\Delta\epsilon$, so its $k$-th lift term is $\Delta^k$ times Euler's: the lift
+comparison holds order by order inside the radius with no sign lemma.
+(ii) By the variational principle $\lambda_{\max}(K_0+\Delta)\ge\lambda_1+v_1^{\!\top}\Delta v_1$
+and $\lambda_{\min}(K_0+\Delta)\le\lambda_{\min}+v_{\min}^{\!\top}\Delta v_{\min}$ for any
+symmetric $\Delta$, so the totality of the higher-order terms pushes the top
+eigenvalue up and the bottom down, exactly and with no convergence question
+(the Rayleigh--Schr\"odinger series itself converges for $\|\Delta\|$ below half
+the eigenvalue's gap, which the chain's stages satisfy for the top and only at
+fine resolution for the tail); its second-order term
+$\sum_{k>1}|v_1^{\!\top}\Delta v_k|^2/(\lambda_1-\lambda_k)\ge0$ is the leading piece: progressive sharpening of the
+top mode has an unconditional second-order component, and the deep tail an
+unconditional second-order depression, which is the measured early decrease of
+the kernel along init-tail directions before the first-order lift overtakes it.
+(iii) Mode $k$ rotates by $\sum_{j\ne k}(v_j^{\!\top}\Delta v_k)/(\lambda_k-\lambda_j)\,v_j$,
+coupling over gap; with an init spectrum $\sim k^{-a}$ the relative gap is
+$\sim a/k$, so the rotation grows with rank, i.e.\ with roughness: the
+fixed-basis assumption fails exactly where the roughness theory places the
+action, and $|\text{coupling}|/|\text{gap}|$ is a computable criterion for when a
+direction keeps its identity. (iv) Two initialisations with the same unit
+statistics differ in every Dyson term only through the propagation part of the
+stage features, so the spread of $E(T)$ over initialisations is bounded by the
+propagator times the accumulated propagation mismatch: the irreducible
+uncertainty of any statistical description is an explicit, measurable,
+width-dependent quantity, and whether the statistical chain becomes exact at
+large width is the question whether that quantity shrinks with width.
+
+\subsection{Consequences for the held rough error}
+\label{ssec:chain-heldrough}
+
+The results above replace the closure of Section~\ref{sec:held-rough} and
+sharpen its exact part. (i) Proposition~\ref{prop:rough-energy} is the energy
+identity projected on a fixed $P$; the cutoff bound is the same identity with
+$P$ transported along the eigenvector flow, the static off-diagonal leak
+becoming the cross-front rotation, and the fixed-$P$ statements are its $A=0$
+reading. (ii) Proposition~15(b) is the Hellmann--Feynman lift bound; its
+worst-case integral $\Sigma(s)=\sigma_0+as$ is replaced by the two-sided
+trajectory bracket of Theorem~\ref{thm:bracket} on every eigenvalue of
+$PKP$. (iii) The efficient-supply closure of the earlier draft must be dropped: along training the
+Rayleigh quotient of the kernel on the rough residual is not a fixed fraction
+of $\sigma_R^2$ but decays, $c(t)\approx\lambda_{\mathrm{eff}}(t)/\sigma_R(t)^2\to0$,
+because the lift raises the top of the rough subspace while the residual moves
+to its slowest directions, the front [n=200: $c=0.02$--$0.09$ at $t=0$,
+$0.001$--$0.005$ late, with $\sigma_R^2$ lifted $6$--$50\times$]. The two-sided band
+built on it is replaced by the cutoff bound, whose only remainder is the
+leakage. (iv) The error is not held in any fixed roughness seminorm: the kernel
+lifts the Laplacian-rough directions and fits them, the whole residual becomes
+Laplacian-rough while decaying, and what is held is the energy on the modes
+still unfit in the \emph{current} basis. Roughness must be measured against
+the lifted kernel, which is what the moving frame does. (v) The a~priori
+cutoff of Definition~\ref{def:cutoff} becomes the transported cutoff read from
+the lifted spectrum; Proposition~\ref{prop:cutoff-floor} remains a valid
+a~priori floor. (vi) Proposition~20 is the radius theorem at a single
+expansion point and the chain is its continuation. (vii) The reduced model of
+ignition is subsumed by the richness expansion and the crossing condition and
+can be cut.
+
+\subsection{Why the late stage is not predictable from the initialisation}
+\label{ssec:chain-impossible}
+
+\begin{proposition}[Determinism; no chaos]
+\label{prop:nochaos}
+For analytic $N_\theta$ the gradient-flow trajectory is real-analytic in $t$, so
+the history on any interval determines $E(T)$. The loss is a strict Lyapunov
+function, so there are no recurrent sets and no sustained exponential
+separation of nearby trajectories; what remains is finite-time stretching
+along transiently negative-curvature directions and algebraic amplification
+through the lift. [n=200: over the full run a $10^{-7}$ relative perturbation of $\theta_0$ grows
+by a factor $6$ (random direction) and $21$ (tail-feature direction), while a
+top-feature perturbation is contracted $16\times$ during the fit of the top mode
+and regrows to $5\times$ through the lift; the induced residual perturbation
+grows by two to three orders of magnitude and ends at $10^{-6}$ relative. The
+growth is algebraic throughout, roughly $t^{0.2\text{--}0.4}$ after $t\approx10$,
+with no exponential phase in $3.5$ decades of time.]
+\end{proposition}
+
+So the obstruction is conditioning, and it has three parts, each a theorem.
+
+\begin{theorem}[Hidden state]
+\label{thm:hidden}
+Let $A$ and $\Delta$ be the input activations and the outgoing backprop
+signals of a hidden-hidden block on the data at $\theta_0$. For every
+$N=UV^{\!\top}$ with $U^{\!\top}\Delta=0$ and $V^{\!\top}A=0$ (such $N$ exist whenever the
+widths exceed the ranks, e.g.\ $H>n\,n_y$, and have any norm), the
+initialisation $\theta_0+N$ has the same unit states, output, residual, loss,
+gradient and kernel on the data, and differs only in the propagation part of
+Proposition~\ref{prop:chain-identities}(d). Hence $E(T)$ is not a function of
+$(K_0,E_0,Y)$, nor of any finite number of their time derivatives at $0$ when
+the widths allow the corresponding null spaces. [Verified: with
+$\|N\|_F=\|W\|_F$ the states agree to $5\cdot10^{-15}$ and the kernel increments
+after one step differ by $1\%$.]
+\end{theorem}
+
+\begin{proposition}[Visibility]
+\label{prop:visibility}
+Let $B$ be the modes of $K(t_0)$ carrying a fraction $\phi$ of $\|E(T)\|^2$. Their
+share of the loss-decrease rate at $t_0$ is at most
+$\max_B\lambda_k(t_0)/\lambda_{\mathrm{eff}}(t_0)$, and in the fixed-basis
+solution their components are constant on $[0,t_0]$ to relative order
+$\lambda_k(t_0)t_0$. [n=200: median $1.4\cdot10^{-6}$ at $t_0=0.01T$ and
+$10^{-2}$ at $t_0=0.1T$; share of the rate $8\cdot10^{-7}$ and $7\cdot10^{-4}$.]
+\end{proposition}
+
+\begin{proposition}[Amplification]
+\label{prop:amplification}
+The same modes are later lifted by the gain of
+Theorem~\ref{thm:bracket} (measured $10^2$--$10^4$), coherently across blocks,
+quadratically in the accumulated drive, and $E_k(T)\sim\exp(-\!\int\lambda_k)$ is
+exponentially sensitive to the lifted eigenvalue. In the fixed-basis model the
+sensitivity of $\log|E_k(T)|$ to a mode's growth exponent is
+$2\Lambda_k(T)\log(T/t_0)$ with $\Lambda_k(T)\approx1$ for the modes that
+matter.
+\end{proposition}
+
+\begin{corollary}[The conditioning statement]
+\label{cor:conditioning}
+To predict $E(T)$ to relative precision $\varepsilon$ from the history up to
+$t_0$ the tail components must be known to relative precision of order
+$\varepsilon\,\lambda_k(t_0)t_0$ divided by the amplification, i.e.\ about
+$10^{-7}$ at $t_0=0.01T$ for $\varepsilon=0.1$ [n=200]: five orders of magnitude
+below the initialisation-to-initialisation variation of the early history
+($2\cdot10^{-2}$) and below single precision. The late state is a smooth,
+deterministic function of the early state whose relevant derivatives are
+enormous exactly in the directions that are unobservable early.
+\end{corollary}
+
+The three parts have a common root: the drive is the residual, the residual
+lives in the slow modes of the current kernel, and the slow modes are both the
+ones that have not moved yet (invisible) and the ones feature learning
+targets (amplified). Feature learning is the mechanism by which the network
+amplifies precisely the information that no early observable contains, and
+that information is seeded by the initialisation through
+Theorem~\ref{thm:hidden}. This is why every early predictor we tried (frozen
+kernel, gain-law extrapolation, residual front, the loss itself) orders
+designs within $1.1\times$ at chance and within $1.3\times$ at $65$--$76\%$, why
+seed pairs that agree to $2\%$ for the first tenth of training end $15\%$
+apart, and why the only object that reproduces the late error is the
+trajectory carried forward [n=200].
+
+\subsection{What a statistical description can promise}
+\label{ssec:chain-statistical}
+
+The impossibility above is a statement about one network. A statistical
+description does not predict one network; it predicts the distribution over
+initialisations, and by Theorem~\ref{thm:hidden} that is the correct object,
+because the quantity that defeats prediction is the draw of the hidden state.
+Three consequences follow, two of them proved and one to be measured.
+
+\emph{The irreducible uncertainty of any statistical prediction for a single
+run is the spread of the late error over initialisations}, $15\%$ median here
+[n=200]. A design comparison finer than that spread is not well posed for one
+run of each design, whatever the method; it is well posed for the expected
+error, which is a statistic.
+
+\emph{The coherent chain is the statistical approximation}: replace the
+network's own units by draws from the unit distribution and the propagation
+part by its average, and Propositions~\ref{prop:chain-identities}(b,c) and
+Theorem~\ref{thm:spike}(a) close on the data. On the one case run to
+convergence [H=96, depth 2, n=200] it reproduced the structure, the gain law
+and the ordering of designs, with a $2\times$ bias in the late error and a
+$4$--$5\times$ excess in the tail gain traced to the averaged propagation term and
+to the transfer of the ensemble's lift; at depth~3 the bias was larger
+($5\times$ in the tail gain). It was not run at larger width. Whether the
+bias and the seed spread decrease with width, as the propagation term being
+a finite-width fluctuation suggests, or persist with depth, as the depth-3
+result warns, is the single most consequential unmeasured quantity in this
+work, and it decides the question in the next paragraph.
+
+\emph{The diagnostic that is well posed is the expected late-stage ability of an
+architecture.} If the spread over initialisations shrinks with width and the
+coherent chain converges to the exact one in that limit, then ranking
+architectures by their expected late error is both meaningful and computable
+without the particular initialisation, and the finite-width exponent of the
+convergence is the error bar. Everything in this section is set up for that
+measurement: the exact chain for the per-initialisation truth, the coherent
+chain for the expectation, and the seed spread for the floor. The ranker
+built from the identities (lazy error, $H_2$, top eigenvalue, output scale)
+reached a $1.3\times$ resolution out of sample [n=200], which is the expected
+accuracy of a one-Jacobian statistic and should be read as a lower bound on
+what the expected-error ranking can do.
+
+\subsection{Scope and what to measure}
+\label{ssec:chain-scope}
+
+Every number in this section comes from $n=200$ training points on the
+Lorenz-63 one-step map, at which the training set is nearly fit within the
+budget, the residual-adapted late phase is short, the depth-$6$--$8$ ``floor'' is a
+sample-size artefact, and the negative lazy-transfer sign in the validation
+split is overfitting of a $200$-point sample. The theorems carry $n$ as a symbol
+and are unaffected; the verifications, bulk ratios, exponents, signs, transfer
+fractions and the ranker's fits are all $n=200$ statements and are to be redone
+at a sample size that leaves a genuine late stage before any is quoted. The
+exact chain does not scale to large $n$ (one $N\times N$ eigendecomposition per
+stage); the ground-truth runs do, so the redo is training-only, and it should
+include, at that $n$: the seed spread of the late error against width and
+depth; the gap between the own-initialisation and the other-initialisation
+chain against width and depth; the cross-term sign and the spike bound along
+the trajectory; the validation split; and the Euler-versus-direct comparison
+at several $\Delta$ from a shared initialisation.
+
+\paragraph{Hyperparameter transfer (negative result, n=200).} A sweep over widths
+$48$--$384$ and output scales $0.25$--$2$ at fixed budget $3000/s^2$ did not
+bracket a training-error optimum (the richest scale was best at every width and
+depth) and the feature-to-lazy ratio of the descent rate did not collapse across
+widths under either the standard or the $\mu$P-like labelling; at fixed scale it
+grew with width. On training error at fixed budget, richness has no cost here,
+so the transfer question needs a criterion with an optimum (test error or a
+stability constraint) and is left open.

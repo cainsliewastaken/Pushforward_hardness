@@ -1,0 +1,23 @@
+# paper/overleaf: the current paper sections (2026-10-12)
+
+Overleaf project: https://www.overleaf.com/project/6ab704f85ea5c8567e1108c9
+
+These are the files uploaded to Overleaf; they are the current version of the theory
+(the chained expansion with its infinite-series proofs).
+
+- `held_rough_error_lean.tex`  : the "held rough error" section with the cuts applied
+                                 (closure assumption, two-sided band, reduced ignition model removed; see PAPER_OUTLINE.md)
+- `chain_section.tex`          : "Training through time: the chained expansion and the limits of prediction"
+- `chain_appendix.tex`         : truncation / error propagation and the n = 200 verifications
+- `held_rough_error_original.tex` : the section as received, for diff
+- `lean_sections_preview.pdf`  : pdflatex build of the three files together (texlive/2024), no errors, no undefined references
+- `PAPER_OUTLINE.md`           : what to keep / replace / cut, and what is open before submission
+
+In the Overleaf main file: replace `\input{held_rough_error.tex}` by `\input{held_rough_error_lean.tex}`;
+add `\input{chain_section.tex}` right after it; add `\input{chain_appendix.tex}` after `\appendix`.
+Theorem environments needed (amsthm): theorem, proposition, corollary, lemma, definition, assumption, remark.
+`chain_section.tex` references only these labels of the held-rough section: sec:held-rough, prop:rough-energy,
+def:cutoff, prop:cutoff-floor.
+
+Context: `../notes/THEORY.md` (all statements with proofs and status labels; sections 8-20 are the chain),
+`../notes/WRITEUP.md` (experimental record; every experiment is n = 200 and must be redone before quoting numbers).

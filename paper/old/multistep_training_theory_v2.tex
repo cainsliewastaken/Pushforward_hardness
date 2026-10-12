@@ -1,0 +1,528 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm,mathtools,bm}
+\usepackage{booktabs}
+\usepackage[colorlinks=true,linkcolor=blue,citecolor=blue]{hyperref}
+
+\newtheorem{theorem}{Theorem}
+\newtheorem{lemma}{Lemma}
+\newtheorem{proposition}{Proposition}
+\newtheorem{corollary}{Corollary}
+\theoremstyle{definition}
+\newtheorem{definition}{Definition}
+\newtheorem{assumption}{Assumption}
+\theoremstyle{remark}
+\newtheorem{remark}{Remark}
+
+% macros of multistep_rollout_kernel.tex
+\newcommand{\uu}{\mathbf{u}}
+\newcommand{\ee}{\mathbf{e}}
+\newcommand{\G}{\mathbf{G}}
+\newcommand{\Gt}{\tilde{\mathbf{G}}}
+\newcommand{\I}{\mathbf{I}}
+\newcommand{\Hop}{\mathbf{H}}
+\newcommand{\eps}{\bm{\epsilon}}
+\newcommand{\Rgh}{\mathcal{R}}
+\newcommand{\dt}{\Delta t}
+\newcommand{\LL}{\mathcal{L}}
+\newcommand{\KK}{\mathcal{K}}
+% this note
+\newcommand{\Pp}{\mathbf P}
+\newcommand{\Ph}{\hat{\mathbf P}}
+\newcommand{\LLh}{\hat{\mathcal{L}}}
+\newcommand{\Phih}{\hat\Phi}
+\newcommand{\Psih}{\hat\Psi}
+\newcommand{\etab}{\bm{\eta}}
+\newcommand{\Nn}{\mathcal N_\theta}
+
+\title{Multistep training of learned steppers:\\ an expansion to all orders about the true trajectory}
+\author{Draft (notation of the rollout-kernel note)}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Multistep (unrolled) training of a learned one-step map is analysed by expanding the rollout about the true trajectory and keeping every order.
+The rollout error, the rollout features and the gradient of the multistep loss are written as explicit series in the one-step errors, with coefficients that are derivatives of the learned map along the true trajectory.
+For any update rule, the exact error at any set of horizons changes at a rate that is the inner product of its gradient with the parameter update; under gradient flow on a window loss this is an inner product of two gradients, and every order of it is explicit.
+If the network is analytic on complex balls around the true states and the first-order errors are small enough relative to the radius (an admissibility condition), the series converge, every order and the remainder after any order are bounded, and, given certified analyticity constants (not yet computed), the sign of the rate can be certified.
+Separately, without any expansion: training on a window does not change the method, so the local-complexity lower bound of the roughness theory applies during multistep training, and because the rollout error controls the injected error, it also bounds the window-averaged root-mean-square rollout error from below.
+All results are at one training time.
+\end{abstract}
+
+\section{What this note is for}\label{sec:purpose}
+
+The roughness theory considers a learned one-step map written as a method: a known part plus a network slot.
+Its central result bounds the injected (one-step) error from below by the local complexity of the method (the roughness, on the training inputs, of the target the known part leaves for the network) minus the roughness of what the network currently supplies, $c_p\Nn$, and a leak term set by the training kernel, all divided by the norm constant of the seminorm; the bound holds at every training time and for any update rule, and is informative only when what the network supplies is smoother than its target.
+The theory also describes what a single training step can reach: exactly as a bound on the error after the step actually taken, or for every step of a given length through a maximum over a parameter ball, and otherwise to first order in the step length.
+
+Multistep training penalizes rollout errors rather than one-step errors.
+This note asks what that changes, and keeps every order of the one-step error throughout: no statement below rests on a truncation of the expansion in the one-step errors, which appears only as a partial sum of a series whose remainder is bounded.
+The few statements that are first order in the length of a parameter step say so.
+The approach is the error expansion of the eigenanalysis paper, carried to all orders, together with the factorization of the rollout features of the rollout-kernel note.
+All quantities are defined from the data (the true trajectories) and the network; several constants used in the bounds (radii of analyticity and sizes on complex balls) are only estimated, as stated where they appear.
+
+\section{The framework in brief}\label{sec:framework}
+
+\paragraph{Setting.}
+A learned one-step map $\Gt(\uu;\theta)$ (Euler, $\uu+\dt\,\Hop$, or direct) is trained on a window loss $L_w=\sum_q w_q\tfrac12\|\ee(t_q)\|^2$ over $p$ steps.
+Everything is expressed along the \emph{true} trajectory: the one-step errors $\eps_i$, the Jacobians $J_i$ and propagators $\Pp(t_q,t_i)$ of the learned map, and its parameter derivatives $\Phi_i$.
+These do not depend on the rollout error, so expansions in the one-step errors have fixed coefficients.
+
+\paragraph{Proved.}
+\begin{enumerate}
+\item \emph{Expansions to all orders} (Sections~\ref{sec:error}--\ref{sec:grad}). The rollout error, the rollout features and the gradient of $L_w$ are series in $\eps$ with every term explicit. They converge to the exact quantities under the analyticity conditions of Section~\ref{sec:analytic}; without them they are formal.
+\item \emph{Exact rates} (Section~\ref{sec:rates}). For any update rule, the exact error at any horizons $v$ changes at the rate $\dot V_v=\langle g_v,\hat g\rangle$; under gradient flow on $L_w$ this is $-\langle g_v,g_w\rangle$. Every order of this rate is explicit.
+\item \emph{Convergence, remainder and certified signs} (Sections~\ref{sec:analytic}--\ref{sec:bounds}). If the network is analytic on complex balls of radius $r$ around the true states and an admissibility condition holds, the series converge, every order decays geometrically, the remainder after any order is bounded explicitly, and the sign of the rate can be certified, given certified values of the analyticity constants (not yet computed).
+\item \emph{Bounds on the higher-order part} (Section~\ref{sec:bounds}). The exact difference between the error and its first term, and between the gradient and its first term, are bounded to all orders; under uniform constants this gives a window of controlled nonlinearity. That window controls the size of the higher orders; it is not a window in which training is guaranteed to help.
+\item \emph{Local-complexity floor} (Section~\ref{sec:floor}). The roughness theory's lower bound on the injected error holds at every time during multistep training, and $\|\eps\|\le(1+\ell)\|\ee\|$ (without expansion; $\ell$ the supremum of $\|\nabla\Gt\|$ on the segments joining true and predicted states) carries it to the window-averaged root-mean-square rollout error. For a direct model the data term of the bound, at least $\Rgh(\mathrm{id})-C_\Rgh M_1\dt$, does not vanish as $\dt\to0$; the bound is positive only while $\Rgh(\Gt)+\sigma_\Rgh\Upsilon^{1/2}<\Rgh(\mathrm{id})-C_\Rgh M_1\dt$, and $\Rgh(\mathrm{id})$ is small under the manifold high-pass.
+\end{enumerate}
+
+\paragraph{Properties of the network, not of the system.}
+The growth of the propagators, the radius $r$, the sizes on complex balls and the Lipschitz constant $\ell$ are properties of the trained network.
+They approximate properties of the system only to the extent that the network approximates the flow map and its derivatives.
+
+\paragraph{Not proved.}
+How far a rollout window can usefully be extended is not determined by these results: they certify, at one training time, that training on a window decreases the error at chosen horizons whenever the certified sign is positive, and they cannot prove the converse.
+The growth of the Gauss--Newton part of the loss curvature with the window is proved only as an upper bound (rollout-kernel note); its observed exponential growth is measured.
+The concentration of the gradient on a few starts is measured.
+
+\paragraph{Gaps.}
+\begin{enumerate}
+\item \emph{What training reaches.} All results are about one training time; nothing integrates over a run.
+\item \emph{Minibatches.} A minibatch step inserts a random sampling matrix between the kernel and the error, $\dot\ee=-\Psih\Psih^\top SW\ee$ in continuous time; no statement is made about the random product. For a discrete step $\Delta\theta$ the exact change is $\langle\bar g_v,\Pi^{-1/2}\Delta\theta\rangle$ with $\bar g_v$ averaged along the step; Lemma~\ref{lem:rates} is its continuous-time form.
+\item \emph{Adaptive optimizers.} The same holds with Adam's actual step; there is no closed form linking Adam's direction to the current gradient.
+\item \emph{Beyond the radius.} Where a start's error exceeds the radius of analyticity, the series need not converge; the exact identities (Lemma~\ref{lem:recursion}, Lemma~\ref{lem:rates}, Section~\ref{sec:floor}) still hold.
+\item \emph{A floor at a fixed horizon.} No local-complexity floor is known for the error at a fixed horizon in terms of the roughness of the flow map over that horizon.
+\end{enumerate}
+
+\section{Setting and notation}\label{sec:setting}
+
+The learned one-step map is $\Gt(\uu;\theta)$ with a smooth activation; for forward Euler $\Gt(\uu)=\uu+\dt\,\Hop(\uu;\theta)$, for a direct model $\Gt$ is the network itself.
+The data are noise-free samples of true trajectories at spacing $\dt$.
+Training rollouts start from $n$ true states and have $p$ steps.
+For each start (index $k$, suppressed where it is not needed):
+\begin{itemize}
+\item true states $\uu_T(t_i)$, predicted states $\uu_p(t_0)=\uu_T(t_0)$, $\uu_p(t_{i+1})=\Gt(\uu_p(t_i))$;
+\item rollout errors $\ee(t_i)=\uu_T(t_i)-\uu_p(t_i)$, $\ee(t_0)=0$;
+\item one-step errors at the true states, $\eps_i=\uu_T(t_{i+1})-\Gt(\uu_T(t_i))$, $i=0,\dots,p-1$; for Euler models $\eps_i=\dt\,\etab_i$;
+\item Jacobians of the learned map along the \emph{true} trajectory, $J_i=\nabla\Gt(\uu_T(t_i))$, and propagators $\Pp(t_q,t_i)=J_{q-1}\cdots J_{i+1}$, $\Pp(t_{i+1},t_i)=\I$;
+\item the same along the \emph{predicted} trajectory, $\hat J_i=\nabla\Gt(\uu_p(t_i))$, $\Ph(t_q,t_i)=\hat J_{q-1}\cdots\hat J_{i+1}$;
+\item parameter derivatives $\Phi_i=\nabla_\theta\Gt(\uu_T(t_i))\Pi^{1/2}$ at the true states and $\Phih_i=\nabla_\theta\Gt(\uu_p(t_i))\Pi^{1/2}$ at the predicted states, with $\Pi$ a fixed diagonal preconditioner with positive entries.
+\end{itemize}
+Stacking over starts and steps, $\LL$ maps injections $z=(z_i)_{i<p}$ to $(\LL z)_q=\sum_{i<q}\Pp(t_q,t_i)z_i$; $\LLh$ is the same with $\Ph$.
+The multistep loss is $L_w=\tfrac12\,\ee^\top W\ee$, where $W$ contains weights $w_q\ge0$ and the average $1/n$ over starts ($w_q=1/p$ for the time-averaged loss).
+The rollout features are $\Psih=\partial_\theta\uu_p\,\Pi^{1/2}$, and by the features lemma of the rollout-kernel note $\Psih=\LLh\Phih$ exactly; along the true trajectory write $\Psi=\LL\Phi$.
+The rescaled parameter velocity is $\hat g=\Pi^{-1/2}\dot\theta$; for a loss $X$ write $g_X=\Pi^{1/2}\nabla_\theta X$, so gradient flow on $L_w$ is $\hat g=-g_w$ with $g_w=-\Psih^\top W\ee$.
+The rollout-kernel note puts the factor $1/n$ in its kernel; here it is in $W$.
+
+\begin{remark}[Hats]
+In the rollout-kernel note $\Phi$ and $\LL$ are evaluated along the predicted trajectory; here those carry a hat, and unhatted quantities are evaluated along the true trajectory, whose coefficients do not depend on the error.
+\end{remark}
+
+\section{The rollout error to all orders}\label{sec:error}
+
+\begin{lemma}[Error recursion]\label{lem:recursion}
+Exactly, $\ee(t_{i+1})=J_i\ee(t_i)+\eps_i+N_i(\ee(t_i))$ with $N_i(x)=\Gt(\uu_T(t_i))-\Gt(\uu_T(t_i)-x)-J_ix$.
+If $\Gt$ is analytic and $|\ee(t_i)|$ is within the radius of convergence of its Taylor series at $\uu_T(t_i)$ in the direction of $\ee(t_i)$, then its Taylor series converges to $N_i$:
+\begin{equation}\label{eq:recursion}
+N_i(\ee(t_i))=\sum_{k\ge2}\frac{(-1)^{k+1}}{k!}\,\nabla^k\Gt\big(\uu_T(t_i)\big)\big[\ee(t_i)^{\otimes k}\big].
+\end{equation}
+\end{lemma}
+
+\begin{proof}
+$\ee(t_{i+1})=\uu_T(t_{i+1})-\Gt(\uu_p(t_i))=\eps_i+\Gt(\uu_T(t_i))-\Gt(\uu_T(t_i)-\ee(t_i))$; expand the last term about $\uu_T(t_i)$.
+\end{proof}
+
+\begin{definition}[Orders of the error]\label{def:orders}
+$\ee^{(1)}=\LL\eps$ and, for $m\ge2$,
+\begin{equation}\label{eq:orders}
+\ee^{(m)}(t_q)=\sum_{i<q}\Pp(t_q,t_i)\sum_{k=2}^{m}\frac{(-1)^{k+1}}{k!}\sum_{\substack{m_1+\dots+m_k=m\\ m_l\ge1}}\nabla^k\Gt\big(\uu_T(t_i)\big)\big[\ee^{(m_1)}(t_i),\dots,\ee^{(m_k)}(t_i)\big].
+\end{equation}
+\end{definition}
+
+$\ee^{(m)}$ is a homogeneous polynomial of degree $m$ in $\eps$ whose coefficients are derivatives of $\Gt$ along the true trajectory; for example $\ee^{(2)}(t_q)=-\tfrac12\sum_{i<q}\Pp(t_q,t_i)\nabla^2\Gt(\uu_T(t_i))[\ee^{(1)}(t_i),\ee^{(1)}(t_i)]$.
+Inserting $\ee=\sum_m\ee^{(m)}$ into Lemma~\ref{lem:recursion} and collecting terms of equal degree reproduces \eqref{eq:orders}, so $\sum_m\ee^{(m)}$ is the formal power series of the error in the one-step errors.
+Theorem~\ref{thm:convergence} proves that it converges to $\ee$ under explicit conditions; until then the identity $\ee=\sum_m\ee^{(m)}$ is formal.
+
+\begin{remark}[Radius of convergence]\label{rem:radius}
+A network with SiLU (or tanh) activation is analytic on the real line but has complex singularities.
+For the width-256 Lorenz-63 models the one-variable radius of $\zeta\mapsto\Gt(\uu+\zeta\mathbf n)$ was estimated along real directions $\mathbf n$ at held-out states (Taylor coefficients from samples on complex circles): median $9$--$13$ state units, minimum $4.3$ over the sample.
+This is an upper bound for the radius $r$ of Assumption~\ref{ass:analytic} below, which requires holomorphy on a full complex ball, and a sampled minimum is not a certified value.
+\end{remark}
+
+\section{The training gradient to all orders}\label{sec:grad}
+
+\paragraph{Exact form.}
+$\partial_\theta\ee=-\Psih\,\Pi^{-1/2}$, so $g_w=-\Psih^\top W\ee$ exactly, with $\Psih=\LLh\Phih$.
+
+\paragraph{Expansion of the predicted-trajectory quantities.}
+Since $\Phih_i=\nabla_\theta\Gt(\uu_T(t_i)-\ee(t_i))\Pi^{1/2}$ and $\hat J_i=\nabla\Gt(\uu_T(t_i)-\ee(t_i))$, expanding about the true states and inserting the orders of the error gives formal series $\Phih_i=\sum_{j\ge0}\Phi^{(j)}_i$, $\hat J_i=\sum_{j\ge0}J^{(j)}_i$ with $\Phi^{(0)}=\Phi$, $J^{(0)}=J$ and, for $j\ge1$,
+\begin{align}
+\Phi^{(j)}_i&=\sum_{k=1}^{j}\frac{(-1)^k}{k!}\sum_{\substack{m_1+\dots+m_k=j\\ m_l\ge1}}\nabla_\uu^k\nabla_\theta\Gt\big(\uu_T(t_i)\big)\big[\ee^{(m_1)}(t_i),\dots,\ee^{(m_k)}(t_i)\big]\,\Pi^{1/2},\label{eq:Phij}\\
+J^{(j)}_i&=\sum_{k=1}^{j}\frac{(-1)^k}{k!}\sum_{\substack{m_1+\dots+m_k=j\\ m_l\ge1}}\nabla^{k+1}\Gt\big(\uu_T(t_i)\big)\big[\ee^{(m_1)}(t_i),\dots,\ee^{(m_k)}(t_i),\,\cdot\,\big].\label{eq:Jj}
+\end{align}
+Products of Jacobians expand by distributing the orders over the factors,
+\[
+\Pp^{(j)}(t_q,t_i)=\sum_{\substack{j_{i+1}+\dots+j_{q-1}=j\\ j_l\ge0}}J^{(j_{q-1})}_{q-1}\cdots J^{(j_{i+1})}_{i+1},\qquad (\LL^{(j)}z)_q=\sum_{i<q}\Pp^{(j)}(t_q,t_i)\,z_i ,
+\]
+with the empty product for $q=i+1$ giving $\Pp^{(0)}=\I$ and $\Pp^{(j)}=0$ for $j\ge1$,
+and, since $\Psih=\LLh\Phih$,
+\begin{equation}\label{eq:Psij}
+\Psih=\sum_{j\ge0}\Psi^{(j)},\qquad \Psi^{(j)}=\sum_{a+b=j}\LL^{(a)}\Phi^{(b)},\qquad \Psi^{(0)}=\Psi .
+\end{equation}
+
+\paragraph{The gradient by order.}
+Collecting terms of total degree in $\eps$ in $g_w=-\Psih^\top W\ee$,
+\begin{equation}\label{eq:gradorders}
+g_w=\sum_{m\ge1}\nabla^{(m)}_w,\qquad \nabla^{(m)}_w=-\sum_{j=0}^{m-1}\big(\Psi^{(j)}\big)^\top W\,\ee^{(m-j)},
+\end{equation}
+again formal until Theorem~\ref{thm:convergence}.
+The term of degree one is $\nabla^{(1)}_w=-\Phi^\top\LL^\top W\LL\eps$; the term of degree two is $-\Psi^\top W\ee^{(2)}-(\LL\Phi^{(1)}+\LL^{(1)}\Phi)^\top W\ee^{(1)}$, with $\Phi^{(1)}_i=-\nabla_\uu\nabla_\theta\Gt(\uu_T(t_i))[\ee^{(1)}(t_i)]\Pi^{1/2}$.
+
+\paragraph{Where the change of the learned Jacobian enters.}
+The mixed derivatives $\nabla_\uu^k\nabla_\theta\Gt$ (how a parameter change alters the learned map away from the true states, and hence its Jacobian) appear only through $\Phi^{(j)}$, $j\ge1$, and therefore only in $\nabla^{(m)}_w$ with $m\ge2$.
+By symmetry of mixed partial derivatives, $\Phi^{(1)}_i\delta\theta=-\big(\partial_\theta J_i\,\delta\theta\big)\ee^{(1)}(t_i)$ for a parameter change $\delta\theta$ (with $\Pi^{1/2}$ absorbed): these are the terms through which the gradient takes into account how the propagation of errors depends on the parameters.
+
+\section{Exact rates at any horizon}\label{sec:rates}
+
+Let $v=(v_q)$ be nonnegative weights on horizons $t_q$, $q=1,\dots,\bar p$, where the rollout is extended to $\bar p\ge p$ steps so that it covers the evaluation horizons ($w_q=0$ for $q>p$), and
+\[
+V_v=\tfrac12\,\ee^\top W_v\,\ee=\tfrac1n\sum_k\sum_q v_q\,\tfrac12|\ee_k(t_q)|^2 ,
+\]
+the exact error at those horizons; a single horizon $t_{q'}$ is $v_q=\delta_{qq'}$.
+Then $g_v=-\Psih^\top W_v\ee$.
+
+\begin{lemma}[Exact rates]\label{lem:rates}
+For any update rule with rescaled parameter velocity $\hat g$, $\dot V_v=\langle g_v,\hat g\rangle$.
+Under gradient flow on $L_w$,
+\begin{equation}\label{eq:tradeoff}
+\dot V_v=-\langle g_v,g_w\rangle=-\big(W_v\ee\big)^\top\Psih\Psih^\top\big(W\ee\big).
+\end{equation}
+\end{lemma}
+
+\begin{proof}
+$\dot V_v=\nabla_\theta V_v^\top\dot\theta=(\Pi^{1/2}\nabla_\theta V_v)^\top(\Pi^{-1/2}\dot\theta)$.
+\end{proof}
+
+No expansion is involved.
+Training on window $w$ decreases the error at horizons $v$ at this instant if and only if $\langle g_v,g_w\rangle>0$; for $v=w$ the rate is $-|g_w|^2\le0$, so the content is in horizons other than the window's own loss.
+
+\begin{proposition}[Every order of the rate]\label{prop:rateorders}
+As formal series, $\dot V_v=-\sum_{M\ge2}R^{(M)}$ with
+\begin{equation}\label{eq:RM}
+R^{(M)}=\sum_{\substack{a+j+l+b=M\\ a,b\ge1;\ j,l\ge0}}\big(W_v\ee^{(a)}\big)^\top\Psi^{(j)}\big(\Psi^{(l)}\big)^\top\big(W\ee^{(b)}\big),
+\end{equation}
+homogeneous of degree $M$ in $\eps$; for instance $R^{(2)}=\langle\nabla^{(1)}_v,\nabla^{(1)}_w\rangle$.
+If the hypothesis of Theorem~\ref{thm:convergence} holds for all starts, some $\rho>1$ is admissible (the admissible set is open), and by Theorem~\ref{thm:tradeoffbound} the series converges to $\dot V_v$ and the remainder after any order is bounded.
+\end{proposition}
+
+\begin{proof}
+Insert the series for $\ee$ and $\Psih$ into \eqref{eq:tradeoff} and collect terms of degree $M$; there are no terms with $a=0$ or $b=0$ because $\ee$ has no degree-zero part.
+\end{proof}
+
+\section{Analyticity, convergence and the remainder}\label{sec:analytic}
+
+\begin{assumption}[Analytic extension]\label{ass:analytic}
+There is $r>0$ such that for every true state $\uu_i:=\uu_T(t_i)$ of the rollout the maps
+\[
+g_i(z)=\Gt(\uu_i+z)-\Gt(\uu_i)-z,\qquad h_i(z)=\nabla_\theta\Gt(\uu_i+z)\,\Pi^{1/2}
+\]
+extend holomorphically to $\{z\in\mathbb C^d:|z|<r\}$ ($|\cdot|$ the Hermitian norm), with
+\[
+D_i=\sup_{|z|<r}|g_i(z)|,\qquad D_i'=\sup_{|z|<r}\|\nabla g_i(z)-\nabla g_i(0)\|,\qquad F_i=\sup_{|z|<r}\|h_i(z)-h_i(0)\|
+\]
+finite.
+For forward Euler $g_i(z)=\dt\,(\Hop(\uu_i+z)-\Hop(\uu_i))$, so $D_i=\dt\,D_{H,i}$ and $D_i'=\dt\,D'_{H,i}$.
+\end{assumption}
+
+The constants blow up as $r$ approaches the true radius of holomorphy, so $r$ must be taken strictly inside it.
+Operator norms of real matrices are the same over $\mathbb R$ and $\mathbb C$.
+The Taylor coefficients of order $k\ge2$ of $\Gt$ at $\uu_i$ are those of $g_i$, since the two differ by an affine map.
+Write $\varphi(s)=s^2/(1-s)$ and $\psi(s)=s/(1-s)$ for $0\le s<1$; both are increasing.
+
+\begin{lemma}[Cauchy estimates]\label{lem:cauchy}
+Under Assumption~\ref{ass:analytic}, for $x\in\mathbb C^d$ with $|x|<r$:
+\begin{align}
+\Big|\tfrac1{k!}\nabla^k\Gt(\uu_i)[x^{\otimes k}]\Big|&\le D_i\,(|x|/r)^k\quad(k\ge2),\qquad
+|N_i(x)|\le D_i\,\varphi(|x|/r),\label{eq:cauchyN}\\
+\big\|\nabla\Gt(\uu_i-x)-J_i\big\|&\le D_i'\,\psi(|x|/r),\qquad
+\big\|\nabla_\theta\Gt(\uu_i-x)\Pi^{1/2}-\Phi_i\big\|\le F_i\,\psi(|x|/r),\label{eq:cauchyJ}
+\end{align}
+with $N_i$ continued holomorphically, and for $k\ge2$ and $x_1,\dots,x_k\in\mathbb R^d$
+\begin{equation}\label{eq:cauchymulti}
+\Big|\tfrac1{k!}\nabla^k\Gt(\uu_i)[x_1,\dots,x_k]\Big|\le\frac{D_i}{r^k}\prod_j|x_j| .
+\end{equation}
+\end{lemma}
+
+\begin{proof}
+For a unit vector $v\in\mathbb C^d$, $\zeta\mapsto g_i(\zeta v)$ is holomorphic on $|\zeta|<r$ and bounded by $D_i$; Cauchy's estimate on $|\zeta|=\rho<r$ and $\rho\to r$ give the first bound.
+$N_i(x)=-\sum_{k\ge2}\tfrac1{k!}\nabla^kg_i(0)[(-x)^{\otimes k}]$, and summing gives the second.
+The bounds \eqref{eq:cauchyJ} are the same argument for the matrix- and operator-valued maps $\nabla g_i(z)-\nabla g_i(0)$ and $h_i(z)-h_i(0)$, whose Taylor series start at order one.
+For \eqref{eq:cauchymulti}: for a unit $w\in\mathbb R^d$, $\langle w,\tfrac1{k!}\nabla^k\Gt(\uu_i)[\cdot]\rangle$ is a symmetric $k$-linear form on $\mathbb R^d$, whose norm equals the supremum of its diagonal on the unit sphere (Banach's theorem on symmetric multilinear forms on Hilbert spaces); the first bound controls the diagonal; take the supremum over $w$.
+\end{proof}
+
+\begin{theorem}[The higher-order part of the error]\label{thm:allorders}
+Under Assumption~\ref{ass:analytic}, for each start define recursively $a_0=0$ and, while the arguments of $\varphi$ are below one,
+\[
+a_q=\sum_{i<q}\|\Pp(t_q,t_i)\|\,D_i\,\varphi\Big(\frac{|\ee^{(1)}(t_i)|+a_i}{r}\Big).
+\]
+If $|\ee^{(1)}(t_i)|+a_i<r$ for all $i<q$, then $|\ee(t_i)-\ee^{(1)}(t_i)|\le a_i$ for all $i\le q$.
+\end{theorem}
+
+\begin{proof}
+By Lemma~\ref{lem:recursion}, $\bm\delta=\ee-\ee^{(1)}$ satisfies $\bm\delta(t_{i+1})=J_i\bm\delta(t_i)+N_i(\ee(t_i))$, $\bm\delta(t_0)=0$, so $\bm\delta(t_q)=\sum_{i<q}\Pp(t_q,t_i)N_i(\ee(t_i))$.
+If $|\bm\delta(t_i)|\le a_i$ for $i<q$, then $|\ee(t_i)|<r$, \eqref{eq:cauchyN} applies, and summing gives $|\bm\delta(t_q)|\le a_q$; induction on $q$.
+\end{proof}
+
+This bounds the exact $\ee-\ee^{(1)}$; it does not use the series.
+
+\begin{theorem}[Convergence of the error series]\label{thm:convergence}
+Under Assumption~\ref{ass:analytic} and the hypothesis of Theorem~\ref{thm:allorders} for all $q\le\bar p$, the series $\sum_m\ee^{(m)}(t_q)$ converges absolutely to $\ee(t_q)$, with $\sum_{m\ge2}|\ee^{(m)}(t_q)|\le a_q$.
+\end{theorem}
+
+\begin{proof}
+Let $B^{(1)}_i=|\ee^{(1)}(t_i)|$ and, for $m\ge2$, $B^{(m)}_q=\sum_{i<q}\|\Pp(t_q,t_i)\|D_i\sum_{k=2}^mr^{-k}\sum_{m_1+\dots+m_k=m,\ m_l\ge1}\prod_lB^{(m_l)}_i$.
+By \eqref{eq:orders}, \eqref{eq:cauchymulti} and induction on $m$, $|\ee^{(m)}(t_q)|\le B^{(m)}_q$.
+Let $A^{\le M}_q=\sum_{m=2}^MB^{(m)}_q$. Every product in $B^{(m)}_q$ with $m\le M$ involves only orders below $m$, and $\sum_{k\ge2}(\beta/r)^k=\varphi(\beta/r)$ for $\beta<r$, so $A^{\le M}_q\le\sum_{i<q}\|\Pp(t_q,t_i)\|D_i\varphi\big((B^{(1)}_i+A^{\le M-1}_i)/r\big)$; induction on $M$ and $q$ gives $A^{\le M}_q\le a_q$ for all $M$.
+Hence $\sum_m|\ee^{(m)}(t_q)|\le|\ee^{(1)}(t_q)|+a_q$, which is below $r$ for $q<\bar p$.
+With this absolute convergence, \eqref{eq:cauchymulti} lets the series $N_i(\sum_m\ee^{(m)})=\sum_k\frac{(-1)^{k+1}}{k!}\nabla^k\Gt[(\sum_m\ee^{(m)})^{\otimes k}]$ be regrouped by degree, so $\sum_m\ee^{(m)}$ satisfies the exact recursion of Lemma~\ref{lem:recursion} with the same initial value; the recursion has a unique solution, which is $\ee$.
+\end{proof}
+
+\paragraph{Scaling the one-step errors.}
+For the features and the rate, scale the one-step errors at a fixed training time: for $s\in\mathbb C$ let $\ee(s)$ solve $\ee(s)(t_{i+1})=s\eps_i+\Gt(\uu_T(t_i))-\Gt(\uu_T(t_i)-\ee(s)(t_i))$, $\ee(s)(t_0)=0$, with $\Gt$ continued holomorphically, and define $\Psih(s)=\LLh(s)\Phih(s)$ with $\hat J_i(s)=\nabla\Gt(\uu_T(t_i)-\ee(s)(t_i))$ and $\Phih_i(s)=\nabla_\theta\Gt(\uu_T(t_i)-\ee(s)(t_i))\Pi^{1/2}$.
+At $s=1$ these are the actual error and rollout features.
+For $\rho>0$ let $a_{k,q}(\rho)$ be the sequence of Theorem~\ref{thm:allorders} computed with $|\ee^{(1)}_k|$ replaced by $\rho|\ee^{(1)}_k|$, and call $\rho$ \emph{admissible} if $\rho|\ee^{(1)}_k(t_i)|+a_{k,i}(\rho)<r$ for all starts $k$ and steps $i<\bar p$; the set of admissible $\rho$ is open.
+Write $\bar e_{k,q}=\rho|\ee^{(1)}_k(t_q)|+a_{k,q}(\rho)$.
+
+\begin{theorem}[Convergence and remainder of the rate]\label{thm:tradeoffbound}
+Under Assumption~\ref{ass:analytic}, let $\rho>1$ be admissible. Then:
+\begin{enumerate}
+\item $s\mapsto\ee(s)$, $\Psih(s)$ and $R(s)=(W_v\ee(s))^\top\Psih(s)\Psih(s)^\top(W\ee(s))$ are holomorphic on a disc containing $|s|\le\rho$; their Taylor coefficients at $s=0$ are $\ee^{(m)}$, $\Psi^{(j)}$ and $R^{(M)}$, and their Taylor series converge at $s=1$ to $\ee$, $\Psih$ and $-\dot V_v$.
+\item $|\ee^{(m)}_k(t_q)|\le\bar e_{k,q}\,\rho^{-m}$ for every $m\ge1$: every order decays geometrically.
+\item With $B(\rho)\ge\sup_{|s|=\rho}|R(s)|$, for every $N\ge2$
+\begin{equation}\label{eq:tradeoffremainder}
+\Big|\dot V_v+\sum_{M=2}^{N}R^{(M)}\Big|\le\frac{B(\rho)\,\rho^{-N}}{\rho-1}.
+\end{equation}
+A computable choice is $B(\rho)=\Big(\frac1n\sum_k\sum_qv_q\,\bar e_{k,q}\bar\Psi_{k,q}\Big)\Big(\frac1n\sum_k\sum_qw_q\,\bar e_{k,q}\bar\Psi_{k,q}\Big)$, the product of the two separately averaged factors, with $\bar\Psi_{k,q}=\sum_{i<q}\overline P_{k}(t_q,t_i)\big(\|\Phi_{k,i}\|+F_{k,i}\psi(\bar e_{k,i}/r)\big)$ and $\overline P_k(t_q,t_i)$ any bound on $\|\Ph_k(s)(t_q,t_i)\|$ over $|s|\le\rho$, for example the Grönwall bound \eqref{eq:gronwall} with $s_j$ replaced by $\bar e_{k,j}/r$ (the same telescoping holds for complex $s$, with $\|\hat J_j(s)-J_j\|\le D'_j\psi(\bar e_{k,j}/r)$).
+\item In particular $V_v$ decreases at this instant if $\sum_{M=2}^NR^{(M)}>B(\rho)\rho^{-N}/(\rho-1)$ for some $N$. Since also $|R^{(M)}|\le B(\rho)\rho^{-M}$, the criterion with a given $N$ can hold only if $\rho^{N-1}>2$; with $N=2$ this needs $\rho>2$.
+\end{enumerate}
+\end{theorem}
+
+\begin{proof}
+The Cauchy estimates hold for complex arguments, so the proof of Theorem~\ref{thm:allorders} applies to the injections $s\eps$ for $|s|\le\rho$, giving $|\ee_k(s)(t_q)|\le\bar e_{k,q}<r$; the recursion is then a finite composition of holomorphic maps, so $\ee(s)$, $\hat J_i(s)=\I+\nabla g_i(-\ee(s)(t_i))$, $\Phih_i(s)=h_i(-\ee(s)(t_i))$, $\Psih(s)$ and the bilinear (not Hermitian) form $R(s)$ are holomorphic; admissibility of some $\rho'>\rho$ (openness) gives holomorphy on a disc containing $|s|\le\rho$.
+Near $s=0$, $\ee(s)=O(s)$, so collecting powers of $s$ in the recursion and in the products is legitimate and reproduces \eqref{eq:orders}, \eqref{eq:Phij}--\eqref{eq:Psij} and \eqref{eq:RM}; by uniqueness of Taylor coefficients these are the coefficients.
+A function holomorphic on a disc of radius above one has a Taylor series converging at $s=1$.
+Cauchy's estimate on $|s|=\rho$ gives $|\ee^{(m)}|\le\bar e\rho^{-m}$ and $|R^{(M)}|\le B(\rho)\rho^{-M}$; summing over $M>N$ gives \eqref{eq:tradeoffremainder}.
+For $B(\rho)$: $|(W_v\ee)^\top\Psih\Psih^\top(W\ee)|\le|\Psih^\top W_v\ee|\,|\Psih^\top W\ee|$, and each factor is bounded by the triangle inequality over starts and horizons with $\|\Phih_{k,i}(s)\|\le\|\Phi_{k,i}\|+F_{k,i}\psi(\bar e_{k,i}/r)$; the kernel couples starts, so the two factors are averaged separately.
+\end{proof}
+
+The same argument applies to the gradient: under the hypotheses of Theorem~\ref{thm:tradeoffbound}, $g_w(s)=-\Psih(s)^\top W\ee(s)$ is holomorphic on a disc of radius above one with Taylor coefficients $\nabla^{(m)}_w$, so the series \eqref{eq:gradorders} converges to $g_w$.
+
+\section{Bounds on the higher-order part}\label{sec:bounds}
+
+\paragraph{The gradient.}
+\begin{theorem}[Bound on $g_w-\nabla^{(1)}_w$]\label{thm:gradbound}
+Under the hypothesis of Theorem~\ref{thm:allorders} for every start $k$, let $s_{k,i}=(|\ee^{(1)}_k(t_i)|+a_{k,i})/r$ and
+\[
+\Delta_{k,q}=\sum_{i<q}\Big(\|\Ph_k(t_q,t_i)\|\,F_{k,i}\,\psi(s_{k,i})+\|\Phi_{k,i}\|\sum_{i<j<q}\|\Ph_k(t_q,t_j)\|\,D'_{k,j}\,\psi(s_{k,j})\,\|\Pp_k(t_j,t_i)\|\Big).
+\]
+Then
+\begin{equation}\label{eq:gradbound}
+\big|g_w-\nabla^{(1)}_w\big|\le\frac1n\sum_{k}\sum_{q}w_q\Big(\|\Psih_{k,q}\|\,a_{k,q}+\Delta_{k,q}\,|\ee^{(1)}_k(t_q)|\Big).
+\end{equation}
+\end{theorem}
+
+\begin{proof}
+Exactly, $g_w-\nabla^{(1)}_w=-\Psih^\top W\ee+\Psi^\top W\ee^{(1)}=-\Psih^\top W\bm\delta-(\Psih-\Psi)^\top W\ee^{(1)}$ with $\bm\delta=\ee-\ee^{(1)}$.
+Per start and horizon, $\Psih_{k,q}-\Psi_{k,q}=\sum_{i<q}\big(\Ph(t_q,t_i)(\Phih_i-\Phi_i)+(\Ph(t_q,t_i)-\Pp(t_q,t_i))\Phi_i\big)$ and the product telescopes exactly, $\Ph(t_q,t_i)-\Pp(t_q,t_i)=\sum_{i<j<q}\Ph(t_q,t_j)(\hat J_j-J_j)\Pp(t_j,t_i)$.
+Bound $\|\Phih_i-\Phi_i\|$ and $\|\hat J_j-J_j\|$ by \eqref{eq:cauchyJ} with $|\ee(t_i)|\le s_ir$, $|\bm\delta_k(t_q)|$ by $a_{k,q}$, and use the triangle inequality ($w_q\ge0$).
+\end{proof}
+
+\begin{corollary}[Certified sign of the rate]\label{cor:sign}
+Let $b_v$, $b_w$ be the right sides of \eqref{eq:gradbound} for the losses $V_v$ and $L_w$. Then $V_v$ decreases at this instant under gradient flow on $L_w$ if
+\[
+\langle\nabla^{(1)}_v,\nabla^{(1)}_w\rangle>|\nabla^{(1)}_v|\,b_w+b_v\,|\nabla^{(1)}_w|+b_vb_w .
+\]
+\end{corollary}
+
+\begin{proof}
+Write $g_v=\nabla^{(1)}_v+\bm\delta_v$, $g_w=\nabla^{(1)}_w+\bm\delta_w$ with $|\bm\delta_v|\le b_v$, $|\bm\delta_w|\le b_w$, expand $\langle g_v,g_w\rangle$ and use Lemma~\ref{lem:rates}.
+\end{proof}
+
+This certificate uses the leading term of the exact rate and a bound on everything else; it needs only the hypothesis of Theorem~\ref{thm:allorders}, not $\rho>2$.
+The quantities $\|\Ph\|$ and $\|\Psih\|$ are evaluated along the predicted trajectory.
+An a~priori bound follows from the reverse telescoping $\Ph(t_q,t_i)=\Pp(t_q,t_i)+\sum_{i<j<q}\Pp(t_q,t_j)(\hat J_j-J_j)\Ph(t_j,t_i)$ and the discrete Grönwall inequality: if $\|\Pp(t_j,t_i)\|\le Ce^{\Lambda(t_j-t_i)}$ for all $i<j$, then
+\begin{equation}\label{eq:gronwall}
+\|\Ph(t_q,t_i)\|\le Ce^{\Lambda(t_q-t_i)}\prod_{i<j<q}\big(1+C\,D'_j\psi(s_j)\big),
+\end{equation}
+and $\|\Psih_{k,q}\|\le\sum_{i<q}\|\Ph_k(t_q,t_i)\|(\|\Phi_{k,i}\|+F_{k,i}\psi(s_{k,i}))$.
+
+\paragraph{A window of controlled nonlinearity.}
+\begin{corollary}[Forward Euler, uniform constants]\label{cor:closed}
+Suppose that for all starts $\|\Pp(t_j,t_i)\|\le C e^{\Lambda(t_j-t_i)}$ for $i<j$ ($C\ge1$, $\Lambda>0$), $|\etab_i|\le\bar\eta$ and $D_{H,i}\le D_H$, with $t_0=0$ for every start.
+Let $\hat E(t)=C\bar\eta\,e^{\Lambda\dt}e^{\Lambda t}/\Lambda$ and $\kappa_r=8CD_H/(r^2\Lambda)$.
+If $\hat E(\tau)\le\min(r/4,1/\kappa_r)$, then for every $t_q\le\tau$
+\[
+|\ee^{(1)}(t_q)|\le\hat E(t_q),\qquad |\ee(t_q)-\ee^{(1)}(t_q)|\le\kappa_r\,\hat E(t_q)^2\le\hat E(t_q).
+\]
+This holds up to
+\[
+\tau_{\rm nl}=\frac1\Lambda\ln\frac{\Lambda\,\min(r/4,\,1/\kappa_r)}{C\bar\eta\,e^{\Lambda\dt}} .
+\]
+\end{corollary}
+
+\begin{proof}
+$|\ee^{(1)}(t_q)|\le C\bar\eta\dt\sum_{i<q}e^{\Lambda(t_q-t_i)}\le C\bar\eta e^{\Lambda t_q}\dt/(1-e^{-\Lambda\dt})\le\hat E(t_q)$, using $1-e^{-x}\ge xe^{-x}$.
+Show $a_q\le\kappa_r\hat E(t_q)^2\le\hat E(t_q)$ by induction: if $a_i\le\hat E(t_i)$ for $i<q$, then $(|\ee^{(1)}(t_i)|+a_i)/r\le2\hat E(t_i)/r\le1/2$, where $\varphi(s)\le2s^2$, so $a_q\le\frac{8CD_H}{r^2}\dt\sum_{i<q}e^{\Lambda(t_q-t_i)}\hat E(t_i)^2\le\kappa_r\hat E(t_q)^2$, using $\dt\sum_{i<q}e^{\Lambda t_i}\le e^{\Lambda t_q}/\Lambda$; and $\kappa_r\hat E(t_q)\le1$. Then apply Theorem~\ref{thm:allorders}.
+\end{proof}
+
+$\tau_{\rm nl}$ bounds the window over which the higher orders of the error stay below the first-order envelope $\hat E$; it says nothing about whether training on the window helps, which is the sign of $\langle g_v,g_w\rangle$ (Corollary~\ref{cor:sign}).
+$C$, $\Lambda$, $\bar\eta$, $D_H$ and $r$ are properties of the trained network and must hold uniformly over starts and pairs of steps, so they are set by the strongest transient growth.
+The factor $e^{\Lambda\dt}$ can equivalently be absorbed into $C$. If the argument of the logarithm is below one, $\tau_{\rm nl}$ is negative and the corollary gives no window.
+For a direct model the same proof holds with $\bar\eta=\max_i|\eps_i|/\dt$ and $D_H$ replaced by $\max_iD_i/\dt$; whether $\max_iD_i$ is of order $\dt$ depends on the complex extension of the model's one-step map and is not implied by a small one-step error, and $C$, $\Lambda$ are not tied to $\dt$ either, since the learned Jacobian need not be close to the identity.
+
+\paragraph{What these bounds cannot do.}
+\begin{enumerate}
+\item \emph{A converse.} A~priori norm bounds can certify that training on a window decreases the error at chosen horizons; they cannot prove that it fails to, because that needs control of cancellations in $\langle g_v,g_w\rangle$. The exact rate is computable a~posteriori, so failure can be checked numerically for a given network.
+\item \emph{Tightness.} The triangle inequality is used at every step, so cancellations that reduce the error are invisible, and uniform constants are set by the worst start. No numerical comparison of \eqref{eq:gradbound} with the exact difference has been made.
+\item \emph{Constants.} $r$, $D_i$, $D_i'$, $F_i$ are suprema over complex balls. None has been certified; the measured radius of Remark~\ref{rem:radius} is an upper bound on $r$. Certified values are possible by propagating through the layers that each SiLU unit stays holomorphic while the imaginary part of its pre-activation stays below $\pi-\delta$ in absolute value.
+\end{enumerate}
+
+\section{The local-complexity floor under multistep training}\label{sec:floor}
+
+This section uses no expansion.
+
+\paragraph{The roughness theory.}
+The roughness theory concerns an affine method with exact lower slots, $G=Q_h+c_p\,\Nn$, where $Q_h$ is a known part, $\Nn$ the network slot and $c_p$ its slot weight; for an Euler model $Q_h=\mathrm{id}$, $c_p=\dt$, $\Nn=\Hop$, and for a direct model $Q_h=0$, $c_p=1$, $\Nn=\Gt$ (both have exact lower slots trivially).
+The target of the network, in state units, is $U=S_h-Q_h$ with $S_h$ the true flow map over $h=\dt$ (written $\Phi_h$ in the roughness paper).
+Its local complexity is $\Rgh(U)$ for a seminorm $\Rgh$ on sampled functions at the training inputs, fixed by the inputs alone (the main choice is the manifold high-pass; the proofs do not need that it is fixed by the inputs), with norm constant $C_\Rgh$.
+The floor below needs only such a seminorm. The regularity of the roughness paper's Assumption~1 (the inputs lie on a compact invariant set $\mathcal A$ of the flow on which the time derivatives $x^{(k)}$ are bounded, $M_k=\sup_{\mathcal A}|x^{(k)}|$, and Lipschitz) is used only in Corollary~\ref{cor:directrollout} and the remark on the Euler target.
+The injected error at the training inputs is $E=G-S_h=c_p\Nn-U$; for noise-free samples at spacing $\dt$, $E$ at $\uu_T(t_i)$ is $-\eps_i$.
+Let $\Psi_{\mathcal N}=\nabla_\theta\Nn\,\Pi^{1/2}$ at the training inputs, $K=\frac1{n_{\rm in}}\Psi_{\mathcal N}\Psi_{\mathcal N}^\top$ the training kernel ($n_{\rm in}$ the number of inputs) with eigenvalues $\lambda_i$ and eigenvectors $v_i$, $\sigma_\Rgh$ its peak feature roughness, $E_\gamma=\gamma(K+\gamma I)^{-1}E$ the residual at scale $\gamma$ and $\Upsilon(\gamma)=\sum_i\lambda_i\hat e_i^2/(\lambda_i+\gamma)^2$ its step size, $\hat e_i=\langle v_i,E\rangle$.
+The roughness paper's theorem that local complexity bounds the injected error from below states
+\begin{equation}\label{eq:floor}
+\|E_\gamma\|\ \ge\ \frac1{C_\Rgh}\Big(\Rgh(U)-\Rgh(c_p\Nn)-\sigma_\Rgh\,\Upsilon(\gamma)^{1/2}\Big)\qquad\text{for every }\gamma>0,
+\end{equation}
+at every time during training, for any labels and any update rule.
+It is informative only while $\Rgh(c_p\Nn)+\sigma_\Rgh\Upsilon(\gamma)^{1/2}<\Rgh(U)$; when what the network supplies is as rough as its target the right side is nonpositive and the bound is vacuous.
+
+\paragraph{Multistep training does not change the method.}
+Training on a window loss changes how the parameters move, not the form of the step map: the known part, slot weight, network slot and target are those of one-step training.
+For a window, take as training inputs its true states $\uu_T(t_i)$, all starts, $i<p$; this set, and with it $\Rgh$, $C_\Rgh$ and $\Rgh(U)$, changes with the window.
+
+\begin{proposition}[The floor holds during multistep training]\label{prop:floorms}
+At every time during training on a window loss, with the window's true states as inputs, the injected error satisfies \eqref{eq:floor}, with $K$, $\sigma_\Rgh$ and $\Rgh(c_p\Nn)$ those of the network at that time.
+For a fixed set of inputs, $\Rgh(U)$ does not depend on the loss used for training.
+\end{proposition}
+
+\begin{proof}
+The roughness paper's theorem is an inequality between quantities at one training time and holds for any update rule, in particular for the updates of multistep training.
+\end{proof}
+
+Here $K$ is the one-step kernel of the network slot at the inputs, not the kernel that drives multistep training ($\Psih\Psih^\top W$); under multistep training $E$ does not evolve by $-KE$, so $E_\gamma$ and the leak term act only as a spectral filter, without the roughness paper's reading as what gradient flow removes quickly.
+
+\paragraph{From injected error to rollout error.}
+For start $k$ and $i<p$ let $\ell_{k,i}=\sup\|\nabla\Gt\|$ over the segment joining $\uu_T(t_i)$ and $\uu_p(t_i)$, and $\ell=\max_{k,i}\ell_{k,i}$; $\ell$ is a~posteriori, and the segments can leave $\mathcal A$.
+
+\begin{lemma}[Rollout error controls injected error]\label{lem:inverse}
+For every start and $i<p$,
+\[
+\eps_i=\ee(t_{i+1})-\big(\Gt(\uu_T(t_i))-\Gt(\uu_p(t_i))\big),\qquad |\eps_i|\le|\ee(t_{i+1})|+\ell_{k,i}\,|\ee(t_i)| .
+\]
+With $\|\ee\|^2=\frac1{np}\sum_k\sum_{q=1}^p|\ee_k(t_q)|^2$ and $\|\eps\|^2=\frac1{np}\sum_k\sum_{i<p}|\eps_{k,i}|^2$,
+\begin{equation}\label{eq:inverse}
+\|\eps\|\le(1+\ell)\,\|\ee\| ,
+\end{equation}
+and for the time-averaged loss ($w_q=1/p$), $L_w=\tfrac12\|\ee\|^2\ge\tfrac12\|\eps\|^2/(1+\ell)^2$.
+\end{lemma}
+
+\begin{proof}
+$\ee(t_{i+1})=\eps_i+\Gt(\uu_T(t_i))-\Gt(\uu_p(t_i))$, and the mean value inequality bounds the difference by $\ell_{k,i}|\ee(t_i)|$.
+By Cauchy--Schwarz, $(a+\ell b)^2\le(1+\ell)(a^2+\ell b^2)$; summing over $i<p$ with $\ee(t_0)=0$, $\sum_{i<p}|\eps_i|^2\le(1+\ell)\big(\sum_{q=1}^p|\ee(t_q)|^2+\ell\sum_{i=1}^{p-1}|\ee(t_i)|^2\big)\le(1+\ell)^2\sum_{q=1}^p|\ee(t_q)|^2$.
+\end{proof}
+
+\begin{theorem}[Local-complexity floor for the rollout error]\label{thm:rolloutfloor}
+At every time during training, for any loss and any update rule, with all quantities of \eqref{eq:floor} built on the window's true states and the same normalization, the window-averaged root-mean-square rollout error satisfies
+\begin{equation}\label{eq:rolloutfloor}
+\|\ee\|\ \ge\ \frac{\|E\|}{1+\ell}\ \ge\ \frac{1}{(1+\ell)\,C_\Rgh}\Big(\Rgh(U)-\Rgh(c_p\Nn)-\sigma_\Rgh\,\Upsilon(\gamma)^{1/2}\Big)\qquad\text{for every }\gamma>0,
+\end{equation}
+and $\|\ee\|\ge\big(\Rgh(U)-\Rgh(c_p\Nn)\big)/\big((1+\ell)C_\Rgh\big)$.
+\end{theorem}
+
+\begin{proof}
+$\|E\|=\|\eps\|$, Lemma~\ref{lem:inverse}, $\|E\|\ge\|E_\gamma\|$ (the weights $\gamma/(\lambda_i+\gamma)$ are at most one) and \eqref{eq:floor}; the last bound is $\|E\|\ge\Rgh(E)/C_\Rgh\ge(\Rgh(U)-\Rgh(c_p\Nn))/C_\Rgh$.
+\end{proof}
+
+For Euler models $\ell\le1+\dt\sup\|\nabla\Hop\|$ over the segments; the factor $1+\ell$ is close to $2$ when $\dt\|\nabla\Hop\|\ll1$ there.
+
+\begin{corollary}[Direct models]\label{cor:directrollout}
+For a direct model, by the roughness paper's local complexity of the direct step, $\Rgh(U)\ge\Rgh(\mathrm{id})-C_\Rgh M_1h$, so at every time during any training
+\[
+\|\ee\|\ \ge\ \frac{1}{(1+\ell)\,C_\Rgh}\Big(\Rgh(\mathrm{id})-C_\Rgh M_1h-\Rgh(\Gt)-\sigma_\Rgh\,\Upsilon(\gamma)^{1/2}\Big).
+\]
+The data term $\Rgh(\mathrm{id})-C_\Rgh M_1h$ does not vanish as $h=\dt\to0$, whereas the local complexity of the Euler target is $h\,\Rgh(f)+O(h^2)$ (with constant $C_\Rgh M_2/2$).
+The bound is positive only while $\Rgh(\Gt)+\sigma_\Rgh\Upsilon(\gamma)^{1/2}<\Rgh(\mathrm{id})-C_\Rgh M_1h$, which in particular needs $C_\Rgh M_1h<\Rgh(\mathrm{id})$; under the manifold high-pass $\Rgh(\mathrm{id})$ is small, and an accurate direct model has $\Rgh(\Gt)\approx\Rgh(\mathrm{id})$, so the bound is then vacuous.
+\end{corollary}
+
+What can move the floor is the network's output roughness, its kernel at the inputs ($\sigma_\Rgh$, $\Upsilon$), the factor $1+\ell$ and the choice of inputs; the local complexity of the target is fixed by the inputs and the method.
+
+\paragraph{The kernel-level results.}
+The roughness paper's rates at one training time (continuous time) and its bound for every step of length at most $s$ use only a linear map from parameter steps to sampled functions; with the rollout features $\Psih$, the rollout error $\ee$, the inner product $\langle a,b\rangle_w=\frac1n\sum_{k,q}w_qa_{k,q}\cdot b_{k,q}$ (restricted to horizons with $w_q>0$) and seminorms on functions of start and horizon, they hold exactly for multistep training; in the every-step bound the maxima over the parameter ball are of the rollout features $\Psih(\theta')$, which include the change of the predicted trajectory.
+With the rollout features averaged along the step actually taken, $\min_{|g'|\le s}\|\ee-\bar\Psi g'\|_w$ is an exact lower bound on the error after that step (first statement of the one-step-training theorem of the rollout-kernel note).
+As statements about the best of all steps of length $s$, the smallest error after one step, its slow-part formula, attainment by a rank-one functional and the Krylov series hold exactly only through the every-step bound, and otherwise only to first order in $s$, with no bounded remainder; rollout features can change quickly with the parameters at long windows.
+None of these involves the target $U$ or its local complexity.
+
+\section{The curvature of the multistep loss}\label{sec:curvature}
+
+The Hessian of $L_w$ in rescaled coordinates is exactly $\Psih^\top W\Psih-\sum_{k,q}(W\ee)_{k,q}\cdot\Pi^{1/2}\partial_\theta^2\uu_{p,k}(t_q)\Pi^{1/2}$.
+Its Gauss--Newton part $\Psih^\top W\Psih$ has the nonzero eigenvalues of $\Psih\Psih^\top W$, the rollout kernel of the rollout-kernel note.
+That note proves an upper bound on the largest eigenvalue of this Gauss--Newton part (its rate theorem): for Euler models, at horizon $\tau_q$ the endpoint kernel has largest eigenvalue at most $e^{2|\mu|\dt}\varphi_\mu(\tau_q)^2\max_is_i^2$, with $\varphi_\mu(\tau)=(e^{\mu\tau}-1)/\mu$, $s_i^2$ the largest one-step rates of $\Hop$, and $\mu$ a bound on $\mu_{\log}(\nabla\Hop)+\tfrac{\dt}{2}\|\nabla\Hop\|^2$ at every visited predicted state ($\mu_{\log}$ the logarithmic norm); for the window loss the bound is the $w_q$-weighted sum of these.
+It also proves that, at fixed parameters and start and under existence and smoothness of the learned ODE and its sensitivity equation, the rollout kernel of an Euler model converges as $\dt\to0$ at fixed horizon; for direct models only the upper bound, which grows with the number of steps, is available.
+The growth of the Gauss--Newton curvature with the window is therefore a property of the learned network at the training starts; its exponential growth on Lorenz-63 and the $\dt^{-2}$ growth for direct models are measured (Section~\ref{sec:numerics}).
+Near a minimum, linearized gradient descent is stable only for steps below $2$ over the largest Hessian eigenvalue; choosing the step length from the local quadratic model along the update direction is a heuristic.
+
+\section{Lorenz-63 measurements}\label{sec:numerics}
+
+These are measurements on one system (Euler and direct models, $\dt\le0.08$, MLP $3\times256$ SiLU unless stated, 3 seeds); they illustrate but do not support the proofs above.
+\begin{itemize}
+\item The exact identities (features lemma, error recursion and its orders, the exact effect of a parameter step) hold to $10^{-11}$--$10^{-12}$.
+\item The Gauss--Newton curvature at the start of fine-tuning (for separately trained models, so the fixed-parameter limit theorem does not predict this) is the same function of the window for all $\dt$ for Euler models ($\approx2.6\times10^3$, $10^5$, $4\times10^7$, $6.5\times10^9$ for windows $0.32,0.64,1.28,2.56$) and grows like $\dt^{-2}$ for direct models. With a fixed learning rate windows $\ge1.28$ fail to train; with a step size matched to the curvature windows up to $2.56$ train.
+\item The size of the gradient's higher-order part, $|g_w-\nabla^{(1)}_w|/|\nabla^{(1)}_w|$ (Euler, $\dt=0.08$, widths 64--512, 1024 held-out starts), is about $10^{-4}$ for windows $\le0.32$, $10^{-3}$ at $0.64$ and $0.01$--$0.18$ between $0.96$ and $1.44$; it jumps between $1.52$ and $1.60$ in every model.
+Removing the $1\%$ of starts with the largest first-order error (10 starts) brings it below $0.2$, and removing $5\%$ below $0.05$, up to $2.48$: a few percent of the starts carry most of the higher-order part of the gradient beyond about $1.5$.
+One to five starts leave the estimated (not certified, and taken at held-out rather than the rollout's true states) radius of Remark~\ref{rem:radius} at windows coinciding with the jump (one seed per model).
+\item During plain gradient descent from trained models, the sign of the exact rate of Lemma~\ref{lem:rates}, evaluated on held-out starts, agrees with the sign of the measured change of the error at horizons up to $1.92$ in about $80$--$98\%$ of ten-step intervals; the accumulated size is not predicted (the steps are not small).
+\item Measured by the root-mean-square over starts, windows $1.28$--$2.56$ give the lowest errors at their own horizons; measured by the median or 90th percentile, short windows ($0.32$--$0.64$) are best at every horizon up to $2.56$. The root-mean-square is about $3$--$5$ times the median at horizon $0.64$ and about $20$ times at $1.28$, at every width from 64 to 512, consistent with a heavy tail of the error over starts.
+\end{itemize}
+
+\section{Status and open questions}\label{sec:status}
+
+\begin{center}
+\small
+\begin{tabular}{p{0.45\textwidth}p{0.47\textwidth}}
+\toprule
+Statement & Status \\
+\midrule
+Error recursion (Lemma~\ref{lem:recursion}), exact rates (Lemma~\ref{lem:rates}) & exact; the rates under gradient flow with fixed $\Pi$, or with the actual update direction \\
+Orders of the error, features and gradient (Definition~\ref{def:orders}, \eqref{eq:Phij}--\eqref{eq:gradorders}), every order of the rate (Proposition~\ref{prop:rateorders}) & explicit formal series \\
+Convergence of the error series (Theorem~\ref{thm:convergence}) & proved under Assumption~\ref{ass:analytic} and the hypothesis of Theorem~\ref{thm:allorders}; uses Banach's theorem on symmetric forms \\
+Convergence and remainder of the rate, geometric decay of the orders (Theorem~\ref{thm:tradeoffbound}) & proved under Assumption~\ref{ass:analytic} for admissible $\rho>1$; the $N=2$ criterion needs $\rho>2$ \\
+Bounds on $\ee-\ee^{(1)}$ and $g_w-\nabla^{(1)}_w$, certified sign (Theorems~\ref{thm:allorders}, \ref{thm:gradbound}, Corollary~\ref{cor:sign}) & proved under Assumption~\ref{ass:analytic} and the hypothesis of Theorem~\ref{thm:allorders}; checkable only with certified constants \\
+Window of controlled nonlinearity $\tau_{\rm nl}$ (Corollary~\ref{cor:closed}) & proved under uniform constants of the trained network; controls the size of the higher orders, not descent \\
+Floor during multistep training, rollout floor (Proposition~\ref{prop:floorms}, Lemma~\ref{lem:inverse}, Theorem~\ref{thm:rolloutfloor}) & proved without expansion under the roughness paper's hypotheses, inputs the window's true states, $\ell$ a~posteriori \\
+Direct models (Corollary~\ref{cor:directrollout}) & proved under the roughness paper's Assumption~1; data term at least $\Rgh(\mathrm{id})-C_\Rgh M_1\dt$, not vanishing as $\dt\to0$; vacuous unless the output is smoother than the identity and $C_\Rgh M_1\dt<\Rgh(\mathrm{id})$ \\
+Kernel-level results for rollouts & rates and the every-step bound exact; with step-averaged features an exact bound on the step taken; best-step value, slow part and Krylov otherwise first order in the step, no remainder bound \\
+Upper bound on the Gauss--Newton part of the curvature & proved in the rollout-kernel note; exponential growth and the direct $\dt^{-2}$ growth measured \\
+How far a window can usefully be extended & not determined: certificates only, no converse \\
+Concentration of the gradient on a few starts & measured \\
+Floor at a fixed horizon from the roughness of $S_\tau$ & open \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\paragraph{Open questions.}
+What training reaches over a run; the effect of the random sampling matrix of minibatches; adaptive optimizers beyond the instantaneous rate; a description of starts whose error exceeds the radius; and a local-complexity floor at a fixed horizon.
+Evaluating $r$, $D_i$, $D_i'$, $F_i$ for trained networks would make Corollary~\ref{cor:sign} a checkable certificate.
+
+\end{document}
