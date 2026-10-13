@@ -1493,3 +1493,76 @@ the chain to control the transverse integral as a vector (its cancellation), not
 the stage targets rotate the residual, i.e. the leakage of section 19 seen from the residual. Listed as A5.
 Status of the sentence "feature learning beats the lazy bound at T": FALSE in general (counterexample), TRUE on the testbed
 in 36/36 runs, EXPLAINED by e^{-A} to 10-30 %, CERTIFIED by (c') in 16/36, and not proved unconditionally.
+
+## 23. The transverse term cannot hurt when the lift is along the residual: a proof, and where it stops (2026-10-12)
+
+The question of section 22 was whether the transverse integral in Theorem 51 can be shown to be harmless. The direct route
+(bounding its norm) fails, because its smallness is a cancellation. The route below avoids it: it never looks at the
+transverse term, and proves the lazy comparison to all orders from one structural property of the increments, which is
+the targeting of the chain in its sharpest form. The counterexample of section 22 shows the property cannot be weakened to
+positivity, and section 23.3 says how far it can be weakened.
+
+LEMMA A (a lift along a direction never slows that direction, to all orders).  Let K be symmetric positive semidefinite,
+e a unit vector, P = e e^T, and F(q) = <e, e^{-tau (K + q P)} e> for tau >= 0. Then F is nonincreasing in q >= 0:
+      F'(q) = -tau int_0^1 <e, e^{-tau (1-s)(K+qP)} P e^{-tau s (K+qP)} e> ds = -tau int_0^1 g(1-s) g(s) ds <= 0,
+      g(s) = <e, e^{-tau s (K+qP)} e> > 0.
+Proof. The derivative of the matrix exponential, d/dq e^{-tau(K+qP)} = -tau int_0^1 e^{-tau(1-s)(K+qP)} P e^{-tau s(K+qP)} ds;
+with P = e e^T the integrand's quadratic form on e factorises into g(1-s) g(s), and g > 0 because e^{-c(K+qP)} is positive
+definite.  []
+Remark. For a lift along a direction u != e the same formula gives F'(q) = -tau int_0^1 <x_{1-s}, u> <u, x_s> ds with
+x_s = e^{-tau s (K+qP)} e, which is NOT sign-definite: in the counterexample of section 22 (u at 45 degrees to e) the
+overlap <u, x_s> changes sign along s and the lift raises F. So "along the residual" is the sharp hypothesis.
+
+THEOREM 52 (the lazy comparison under lifts along the residual; exact, all orders, no persistence).  Let E' = -K(t) E
+with K(t) = K_0 + sum_{s : t_s <= t} q_s e_s e_s^T, q_s >= 0, e_s = E(t_s)/||E(t_s)||: at each stage time the kernel is lifted
+by a nonnegative multiple of the projector onto the CURRENT residual direction (the continuous form K' = q(t) e(t) e(t)^T
+is the limit). Then for every T and every t_0 <= T,
+      ||E(T)||  <=  || e^{-K(t_0)(T - t_0)} E(t_0) ||  <=  ||E_lazy(T)|| = ||e^{-K_0 T} E_0||.
+Proof. Peel the lifts from the last one back. With K_S = K(t_S) = K_{S-1} + q_S e_S e_S^T and e_S the residual direction at
+t_S, Lemma A gives ||e^{-K_S (T - t_S)} E(t_S)|| <= ||e^{-K_{S-1}(T - t_S)} E(t_S)||. On [t_{S-1}, t_S] the kernel is K_{S-1}, so
+E(t_S) = e^{-K_{S-1}(t_S - t_{S-1})} E(t_{S-1}) and the exponents add: the right side equals ||e^{-K_{S-1}(T - t_{S-1})} E(t_{S-1})||.
+Now K_{S-1} = K_{S-2} + q_{S-1} e_{S-1} e_{S-1}^T with e_{S-1} the residual direction at t_{S-1}: Lemma A again. Induct down
+to t_0 (first inequality) and to 0 (second).  []
+What the theorem does. It is Proposition 6's conclusion (the frozen kernel from any time is an upper bound on the error)
+WITHOUT the fixed-basis hypothesis, and it is "feature learning beats the lazy bound at T" with no persistence
+hypothesis. The transverse term of Theorem 51 is NOT zero in this model (a lift created along e_s acts transversally on
+the later residual E(t), t > t_s, which has rotated), so the theorem is precisely the statement that the transverse term
+cannot hurt: each lift is accounted for at its own creation time, where it was along the residual, and Lemma A covers its
+effect on the whole future, to all orders, including the rotation it induces. This is the cancellation of section 22,
+proved by never writing the integral.
+
+23.1 Relation to the chain. The stage identity gives K(t_s) - K(t_{s-1}) = Cross_s + Q_s with Q_s = dPsi_s dPsi_s^T / n. In
+the first-order (zeroth-Hermite) picture of section 8, the lift of a hidden block is Q_l ~ sigma_w^2 Sigma'_l (.) v_U v_U^T
+with v_U = A_{l-1} U the Gram-smoothed integrated residual; at zeroth Hermite order (Sigma' ~ h_0 1 1^T) this is rank one
+per output along u_s = A U(t_s). So the chain's stage lift is, at leading order, a rank-one lift along a SMOOTHED version
+of the integrated residual, not along E(t_s) itself. Theorem 52 applies verbatim when the smoothing is trivial (A ~ I on
+the residual's support, U ~ E), and otherwise the question is the sign of the overlap in Lemma A's remark:
+
+PROPOSITION 53 (lift along a direction u helps whenever its overlap with the evolving residual keeps its sign).  With
+K_q = K + q u u^T, F(q) = <e, e^{-tau K_q} e> is nonincreasing in q on any interval of q on which <u, e^{-c K_q} e> >= 0
+for all c in [0, tau]. (Immediate from the derivative formula.) In particular, if u = M e for a symmetric positive
+semidefinite M that commutes with K_q, then <u, e^{-cK_q} e> = <e, M e^{-cK_q} e> = sum_k m_k e^{-c lambda_k} e_k^2 >= 0 and the
+lift helps for every tau; approximately commuting M (M and K ordered by the same eigenbasis) gives the same up to the
+commutator. For the chain, M is the Gram smoothing A_{l-1} (times the integration from E to U), and K is built from the
+Grams by Theorem 2, so the hypothesis is that the Gram and the kernel order directions the same way — which is where the
+measured rank-to-roughness regularity (F2 of WRITEUP) would enter the proof, not as a bridge to an input-space notion of
+roughness but as the commutation needed here. Not proved; the sign of <u_s, e^{-cK} e_s> is a measurement (below).
+
+23.2 What the proof does NOT cover. (i) The cross term Cross_s of the stage identity, which is not of the form q u u^T and is
+indefinite; after the transient it is measured positive on 80-100 % of modes (section 8), and its core-core part is
+derived positive (Lemma 15), so one expects it to help, but Lemma A does not apply to it: an extension needs the sign
+structure of Cross_s on the residual's future, which is open. (ii) Lifts of OTHER directions at the same stage (the part R
+of the increment supported on e^perp): a positive R can rotate a slow eigenvector toward e (the counterexample is of this
+kind once decomposed), so even PSD increments that do not touch the residual are not provably harmless in general;
+Proposition 53's sign condition is what controls them. (iii) The bulk of Theorem 11 and the propagation term of Theorem 4,
+which make the stage lift higher rank than the core; each extra rank-one component is a direction u with its own sign
+condition. So the theorem proves the mechanism and locates the remainder in three named places, all per stage, all
+checkable along a run.
+
+23.3 Measurement [n = 200, sweepA, chain/targeted_lift.py]: appended below. Three quantities per run: (a) the pure-targeted
+surrogate — integrate E~' = -K~ E~ with K~(t) = K_0 + sum_s q_s e_s e_s^T, q_s = <e_s, (K(t_s) - K(t_{s-1})) e_s> measured
+from consecutive snapshots: by Theorem 52 ||E~(T)|| <= ||E_lazy(T)||; how close ||E~(T)|| is to the real ||E(T)|| says how
+much of the real gain is the along-residual lift; (b) the per-stage transverse fraction AT CREATION, ||(Delta_s - q_s e_s
+e_s^T) e_s|| / q_s (the quantity tau of section 22 measured when the lift is made, not later); (c) Proposition 53's sign
+condition for the principal direction u_s of the stage increment: min over c in [0, T - t_s] of <u_s, e^{-c K(t_s)} e_s> /
+<u_s, e_s>.
