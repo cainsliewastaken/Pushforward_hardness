@@ -1308,7 +1308,41 @@ Findings.
    only down to 2 x rem when the raw step exceeded 2 x rem, i.e. ran at an effective 0.2; restored to exact semantics in
    d1a6b96. Affected: the scale_alloc rem rows (reported above as "ran at 0.2") and the scale_flops rem rows started in that
    window (flagged by git hash in scale_flops_summary.py); the gnls rows are unaffected.
-9. Equal wall-clock comparison is not meaningful at w >= 2048 here: AdamW finishes 5000 steps in 40-70 s, before any
+9. EQUAL-FLOP STUDY (job 59725019, 1 node, 30 min; optimizer/scale_jobs_flops.py, scale_flops_summary.py; runs/scale_flops/,
+   tables in summary/tables.txt). 108 runs, all finished. Budget = AdamW x 20000 steps at each width; each method's step
+   count = budget / its analytic FLOPs per step (item 6); evals every 1 % of the run; best of its lr grid; one seed.
+   Validation MSE at the budget, with optimizer-state bytes per parameter in brackets (w = 4096 values):
+   | method (state/P)            | rough 1024 | 2048 | 4096 | smooth 1024 | 2048 | 4096 |
+   | AdamW (2.0)                  | 0.317 | 0.337 | 0.2455 | 5.1e-4 | 2.8e-4 | 1.56e-4 |
+   | Muon (1.1; fp32 NS count)    | 0.479 | 0.534 | 0.576 | 5.1e-3 | 1.1e-2 | 2.3e-2 |
+   | KronQ b256 + compress, gnls (1.96) | 0.120 | 0.114 | 0.104 | 4.1e-4 | 3.4e-4 | 7.3e-4 |
+   | KronQ b256 + compress, rem (1.96)  | 0.119 | 0.111* | 0.1065 | 3.9e-4 | 1.85e-4* | 4.1e-4 |
+   | KronQ b256 + compress, gnls + gmask (1.96) | 0.120 | 0.115 | 0.110 | 4.0e-4 | 3.3e-4 | 6.1e-4 |
+   | KronQ b256, gnls (4.46)      | 0.119 | 0.113 | 0.098 | 3.8e-4 | 3.4e-4 | 8.5e-4 |
+   | SOAP b256 (2.46)             | 0.120 | 0.114 | 0.0945 | 2.3e-4 | 1.7e-4 | 1.37e-4 |
+   | KronQ b1024 gnls (5.8)       | 0.123 | 0.121 | 0.119 | 6.2e-4 | 6.4e-4 | 6.4e-4 |
+   | SOAP full (9.1)              | 0.136 | 0.202 | 0.539 | 6.7e-4 | 1.8e-3 | 2.9e-2 |
+   | KronQ full (11.1)            | 0.122 | 0.180 | 0.414 | 6.0e-4 | 1.2e-3 | 3.4e-3 |
+   (* rows that ran under the undo-to-0.2 budget code, item 8.) Steps at w = 4096: AdamW 20000, SOAP b256 4344, KronQ b256
+   rem 4050 / gnls 3387, b1024 1207, full 319, Muon 139.
+   Findings at equal FLOPs.
+   (a) Rough target: every blocked Kronecker method beats AdamW by 2.3-3.0x at every width; the Adam-memory KronQ (1.96
+       state/P) is at 0.104-0.107 at w = 4096 vs AdamW 0.2455 (2.35x) and is within 10 % of SOAP b256 (0.0945, 2.46 state/P);
+       at widths 1024-2048 they tie. Full factors are out of the race per FLOP from w = 2048 (too few steps).
+   (b) Smooth target: SOAP b256 is best at every width (2.2x, 1.6x, 1.14x over AdamW). The Adam-memory KronQ beats AdamW by
+       1.25x at 1024, ties at 2048, and LOSES at 4096 (gnls 4.6x worse, rem 2.6x worse); AdamW at 20000 steps reaches 1.56e-4
+       there. The uncompressed b256 (4.46) is no better than the compressed one: the loss is not the compression.
+   (c) Against the criterion (advantage at Adam's memory, now at equal FLOPs): met on the rough target (2.35x over AdamW,
+       ~SOAP), NOT met on the smooth target at w = 4096. The sign push's edge over SOAP's rotated-Adam rule at equal steps
+       (item 1: 1.3x at w = 256) is gone at equal FLOPs; SOAP b256 is the better method per FLOP here at 25 % more memory.
+   (d) Stability: KronQ at lr 3e-3 with the output budget still collapses on rough at w >= 2048 (budget 0.2 does not
+       protect at that lr); with the line search it trains (2048: 0.114 at 3e-3). The gradient mask adds nothing.
+   (e) Muon's analytic fp32 Newton-Schulz count (60 w^3) leaves it 139 steps at w = 4096; with a bf16 count it would get
+       ~1000 and still trail (its 5000-step value, 0.264, is above KronQ's 1000-step value). AdamW's best lr is the grid
+       edge (3e-4) at w >= 2048: 1e-4 might improve it on the smooth target.
+   Caveats: one seed; analytic FLOPs (the harness's blocked rotations are a Python loop: wall times are 3-5x the FLOP ratio);
+   rem rows mixed semantics; no weight decay / warmup / schedule tuning for the baselines.
+10. Equal wall-clock comparison is not meaningful at w >= 2048 here: AdamW finishes 5000 steps in 40-70 s, before any
    other method reaches its first evaluation, and the shared GPUs make the wall times unreliable. At w <= 512, at AdamW's
    wall budget, KronQ b1024 / SOAP reach 1.5-3x lower error than AdamW on the rough target.
 Caveats: one seed; baselines untuned (3 fixed lrs, no schedule, beta2 = 0.99); 5000 steps; see THEORY.md 21(d).

@@ -128,17 +128,20 @@ scale. At width 4096 the variant at Adam's memory (b256 + compress, 2.0 state/P)
 rough target and is 32x worse than full KronQ on the smooth one; every memory reduction's cost grows with width; the usable
 lr shrinks with width (3e-3 fails everywhere >= 1024, only 1e-3 works at 4096 and only for full / b1024); and SOAP with
 blocks of 256 (2.5 state/P) is the best method at 4096 on the rough target (0.083 vs KronQ full 0.108) with SOAP full best
-on the smooth one (4.5e-5 vs 1.2e-4). KronQ's lead over SOAP at widths 256-2048 reverses at 4096. DIAGNOSED AND FIXED (jobs 59723886, 59724517, 59724760; REPORT 61 items 4-6): the Kronecker curvature model misprices the
-coherent sign step by d_eff(delta) d_eff(a) (measured 30-380x in the square layer at w = 4096 with blocks of 256), the
-per-mode GN cap cannot see it, the second hidden layer saturates within 250 steps and the network ends as the mean
-predictor. Fixed by pricing the step on the batch: a budget on the output change (--rem) or a per-layer exact-GN line
-search (--gnls). With either, the Adam-memory variant (b256 + compressed state, 1.96 state/P) reaches 0.107 / 0.081 on
-the rough target at w = 4096 (full KronQ 0.108, SOAP b256 0.083): criterion met at equal steps on the rough target.
-Smooth target: 3.0e-4 (rem) / 7.3e-4 (gnls) vs SOAP b256 1.1e-4, full 1.2e-4: not met; the constant 0.1 is wrong there
-and gnls is blind to loss-invisible drift. At equal FLOPs (REPORT 61 item 6, coarse): Kronecker methods beat AdamW
-2-3.5x on rough at widths 1024-4096 and lose 3-4x on smooth at 4096. NEXT (needs a yes): the equal-FLOP study proper
-(REPORT 61 item 6, last sentence), and a budget rule without a per-target constant (combine gnls with a gradient-energy
-mask, or set rem from the measured remainder ridge).
+on the smooth one (4.5e-5 vs 1.2e-4). KronQ's lead over SOAP at widths 256-2048 reverses at 4096. DIAGNOSED, FIXED, AND RE-MEASURED AT EQUAL FLOPS (jobs 59723886, 59724517, 59724760, 59725179, 59725019; REPORT 61 items
+4-9; KRONQ_STEP_NOTE.md). The width-4096 failure was the Kronecker model mispricing the coherent sign step (30-380x in the
+square layer); fixed by pricing the step on the batch (--rem 0.2 or --gnls). VERDICT at equal FLOPs (AdamW x 20000 steps),
+one seed: on the ROUGH target the Adam-memory KronQ (b256 + compressed state, 1.96 state/P) beats AdamW 2.3-3x at widths
+1024-4096 and is within 10 % of SOAP b256 (2.46 state/P): criterion met. On the SMOOTH target it beats AdamW only at
+w = 1024, ties at 2048 and loses 2.6-4.6x at 4096, where SOAP b256 is best: criterion NOT met. SOAP with blocks is the
+better method per FLOP overall at 25 % more memory than Adam; the sign push's per-step edge over SOAP does not survive
+the FLOP accounting. Also established: keep the lr decay (a constant output-change controller is worse); budget 0.2 not
+0.1; the derived per-mode allocation was not actually tested (weight-space budget never bound; it ran as Newton/T_rem
+and lost); learned u profiles rise toward slow modes and peak before the slowest decile.
+NEXT, if the line continues (needs a yes): (i) a seed and lr-grid repeat of the w = 4096 cells (AdamW at 1e-4; KronQ
+gnls at 3e-3 with budget 0.2); (ii) a SOAP with bf16 moments as the fair Adam-memory opponent; (iii) the derived
+allocation with R = the measured weight-space Taylor radius; (iv) why the Adam-memory KronQ loses on smooth at 4096
+(the gnls runs' q_true/q_K and the per-layer alpha are logged in runs/scale_flops).
 CAVEAT on the baselines: three fixed lrs, no warmup / schedule / weight decay, beta2 = 0.99 for AdamW, the same lr grid at
 every width. The study decides whether the memory reductions cost accuracy at large width (they do); it does NOT decide
 "beats tuned AdamW / Muon / SOAP" by the standard of section 7 (THEORY.md 21(d)).
