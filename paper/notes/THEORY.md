@@ -1601,3 +1601,80 @@ much of the real gain is the along-residual lift; (b) the per-stage transverse f
 e_s^T) e_s|| / q_s (the quantity tau of section 22 measured when the lift is made, not later); (c) Proposition 53's sign
 condition for the principal direction u_s of the stage increment: min over c in [0, T - t_s] of <u_s, e^{-c K(t_s)} e_s> /
 <u_s, e_s>.
+
+## 24. Sharpening and the edge of stability by induction over stages (written 2026-10-12, after the user's request)
+
+The request: show that in the stage expansion every term sharpens, then induct. The literal form is false, and the
+reason is itself a result: along the current top eigenvector the FIRST-order term of each stage is the cross term, whose
+sign is the sharpness-reduction phase (negative at t = 0 for a raw residual, section 12.1). What is true, and proved below,
+is that EVERY OTHER term, to all orders in the stage and including the rotation of the eigenvector, is nonnegative, so
+the induction goes through with one scalar hypothesis per stage, and that at the edge of stability the odd-order terms
+cancel over a period while the leading even term is the self-stabilisation.
+
+Notation. v_1(t) the top eigenvector of K(t); for a FIXED unit v put phi_v(theta) = v^T K(theta) v = (1/n) ||Psi(theta)^T v||^2,
+the kernel form along v as a function of the parameters; g_v = Psi^T v / n its parameter gradient (|g_v|^2 = phi_v),
+S(v) = nabla_theta g_v the Hessian of the function theta -> <v, f(theta)>, T(v) its third derivative tensor.
+
+THEOREM 54 (sharpening by induction; exact, all orders).  For stages t_0 < t_1 < ... < t_S = T with v_1 = v_1(t_{s-1}),
+      lambda_1(t_s)  >=  phi_{v_1}(theta(t_s))  =  lambda_1(t_{s-1}) + (2/n) <Psi_{s-1}^T v_1, dPsi_s^T v_1> + (1/n) ||dPsi_s^T v_1||^2 ,
+i.e. the top eigenvalue after the stage is at least the frozen-eigenvector form after the stage, which equals the top
+eigenvalue before the stage plus the cross term plus Q, both along v_1. Hence, telescoping,
+      lambda_1(T)  >=  lambda_1(t_0) + sum_s [ phi_{v_1(t_{s-1})}(theta(t_s)) - phi_{v_1(t_{s-1})}(theta(t_{s-1})) ] ,
+and lambda_1 is nondecreasing across every stage in which the frozen-eigenvector form does not decrease along the stage,
+      phi_{v_1}(theta(t_s)) >= phi_{v_1}(theta(t_{s-1}))   <=>   2 <Psi^T v_1, dPsi_s^T v_1> + ||dPsi_s^T v_1||^2 >= 0 ,
+which holds whenever the cross term along v_1 is nonnegative, and also whenever ||dPsi_s^T v_1|| >= 2 ||Psi_{s-1}^T v_1||.
+Expanding dPsi_s in the stage displacement d = theta(t_s) - theta(t_{s-1}), the bracket is the Taylor series of
+phi_{v_1}(theta + d) - phi_{v_1}(theta):
+      nabla phi . d  +  (1/2) d^T nabla^2 phi d  + ... ,   nabla phi = 2 S(v_1) g_{v_1},   d^T nabla^2 phi d = 2 |S(v_1) d|^2 + 2 <g_{v_1}, T(v_1)[d, d]>,
+so: the first-order term is 2 <g_{v_1}, S(v_1) d> (under gradient flow d ~ -alpha g_E: lambda_1' = -2 g_{v_1}^T S(v_1) g_E, the
+Hellmann-Feynman rate, Prop. 5); the |S(v_1) d|^2 part of the second order is Q >= 0; the part <g_{v_1}, T(v_1)[d,d]> and all
+higher orders have no fixed sign; and the difference lambda_1(t_s) - phi_{v_1}(theta(t_s)) >= 0 is the eigenvector rotation
+(the second-order Rayleigh-Schrodinger term sum_{k>1} |v_1^T dK v_k|^2/(lambda_1 - lambda_k) at leading order, Cor. 38), which
+needs no convergence (variational principle, Cor. 47(b)).
+Proof. lambda_max(K(t_s)) = max_v v^T K(t_s) v >= v_1^T K(t_s) v_1 = phi_{v_1}(theta(t_s)); the stage identity (section 8) gives
+the decomposition of phi_{v_1}(theta(t_s)) - phi_{v_1}(theta(t_{s-1})); the Taylor form is the expansion of ||Psi(theta+d)^T v||^2;
+the induction is the sum of the per-stage inequalities with the top eigenvector re-chosen at every stage.  []
+What this proves and what it leaves. "Progressive sharpening" is: lambda_1 nondecreasing from t_0 on. Theorem 54 reduces it
+exactly to the per-stage sign of the frozen-eigenvector change, and in the continuum limit (alpha -> 0, where Q and the
+rotation are O(alpha^2)) to the sign of ONE scalar, the Hellmann-Feynman rate lambda_1' = 2 g_1 . g_1' = -2 g_1^T S(v_1) g_E: the
+Hessian of the top-mode function contracted with its own gradient and the loss gradient. Everything else in the expansion
+is nonnegative at every order. The sign of that scalar is NOT derived: after the transient its core-core part is positive
+under the first-order spike structure (Lemma 15(a): the accumulated core and the stage core share the drive), its
+init-feature part is measured (negative on 90-97 % of modes at t = 0 for the raw residual, crossing zero at t ~ 0.3-1,
+positive on 80-100 % after; section 8 and 12.1), and the statement "reduction then sharpening" is this one scalar changing
+sign, with the mechanism of the sign change (unlearning f_0, then coherence) established by the raw-vs-centred contrast.
+So the theorem is sharp about where the physics sits: in g_1^T S(v_1) g_E, and nowhere else.
+
+THEOREM 55 (edge of stability: the period-2 expansion; exact).  Take gradient-descent steps as stages, theta_{k+1} = theta_k +
+d_k, and suppose the iterates oscillate with period 2 in the top mode up to a slow drift: d_k = delta_k + (-1)^k d with |delta_k|,
+and the change of d over a period, small against |d|. Over one period (two steps), with v_1 = v_1(theta_k) frozen,
+      lambda_1(theta_{k+2}) - lambda_1(theta_k)  >=  [ phi_{v_1}(theta_{k+2}) - phi_{v_1}(theta_k) ]  -  rot_k ,   rot_k >= 0 the rotation gain of the first step,
+and the Taylor expansion of the bracket in (delta, d) has the structure
+      odd orders in d:   cancel between the two steps (they enter with opposite signs),
+      even orders in d:  add:   d^T nabla^2 phi d + O(|d|^4) = 2 |S(v_1) d|^2 + 2 <g_1, T(v_1)[d, d]> + O(|d|^4),
+      drift:             2 nabla phi . delta + O(|delta|^2, |delta| |d|^2).
+Upper bound (for the decrease): if ||K(theta_{k+1}) - K(theta_k)|| < gap_k / 2 with gap_k = lambda_1 - lambda_2 at theta_k, the
+Rayleigh-Schrodinger series converges (Kato) and
+      lambda_1(theta_{k+1})  <=  phi_{v_1}(theta_{k+1}) + 2 ||(K_{k+1} - K_k) v_1||^2 / gap_k ,
+so over a period
+      lambda_1(theta_{k+2}) - lambda_1(theta_k)  <=  2 nabla phi . delta  +  2 |S(v_1) d|^2 + 2 <g_1, T(v_1)[d,d]>  +  4 max_j ||dK_j v_1||^2 / gap  +  O(|d|^4, |delta|^2).
+Consequently the sharpness DECREASES over a period (self-stabilisation) whenever
+      <g_1, T(v_1)[d, d]>  <  - |S(v_1) d|^2 - nabla phi . delta - 2 max ||dK v_1||^2 / gap - O(|d|^4):
+the third derivative of the top-mode function along the oscillation, projected on the top-mode gradient, must be
+negative enough to beat the second-order lift Q = |S(v_1) d|^2, the drift term, and the rotation. Proof. Theorem 54 for
+the lower bound; for the upper bound, second-order perturbation theory with the remainder bounded by Kato's estimate
+when the increment is below half the gap; the odd/even bookkeeping is the substitution d_k = delta_k +/- d into the Taylor
+series of phi_{v_1}, a function of theta only (v_1 frozen), whose odd-order terms in d change sign with the step.  []
+What this proves and what it leaves. The edge-of-stability sentence of the chain section ("sharpening and
+self-stabilisation are the two signs of one term") is replaced by an exact statement: at first order in the step the
+cross term alternates and cancels over a period; the net change per period is the even-order part of the frozen-form
+expansion plus the rotation gain, with the leading even term 2|S(v_1)d|^2 + 2<g_1, T(v_1)[d,d]>; the first part is Q (lift,
+positive), the second is the third derivative of the network along the top mode (Damian-Nichani-Lee's
+self-stabilisation term in kernel language), and the decrease happens iff the second wins. Because the top gap is
+large on these spectra (lambda_2/lambda_1 ~ 1/30 at init), the rotation term is small and the two-sided statement is tight
+for the top mode specifically. The sign of <g_1, T(v_1)[d,d]> at the edge is NOT derived; it is one Hessian-vector-type
+product per step (a forward-over-forward-over-forward jvp along d) and is listed in EXPERIMENTS.md as A6 for the
+numerics/eos runs. Caveat on the hypothesis: the period-2 form d_k = delta_k + (-1)^k d is the linearised picture at the
+edge; the amplitude |d| grows while eta lambda_1 > 2 and shrinks after, so "small change of d over a period" holds near
+the turning points and the O(|d|^4) and drift terms carry the rest; the statement is exact as an inequality for any
+two steps once d is defined as half the difference of the two steps.

@@ -38,6 +38,16 @@ A5. The transverse fraction of the lift (Theorem 51, THEORY 22) and the hypothes
     n = 200 on 2026-10-12 (chain/lazy_comparison.py; numbers in THEORY 22); to redo at large n with the chain's fine stages,
     where the integral is exact, and to bound tau from the stage targets (the one derivation that would make the lazy
     comparison unconditional).
+A6. Sharpening and the edge of stability (THEORY 24, Thms 54-55). (i) Along each run, per stage: the frozen-eigenvector
+    change phi_{v_1}(theta(t_s)) - phi_{v_1}(theta(t_{s-1})) (one Jacobian-vector product with v_1 per stage end), its first-order
+    part 2 <g_1, S(v_1) d> and the rotation gap lambda_1(t_s) - phi_{v_1}(theta(t_s)) >= 0; the sign of the first-order part along
+    the run is the single hypothesis of Thm 54 (expected: negative until t ~ 0.3-1 for raw residuals, positive after).
+    (ii) At the edge of stability (numerics/eos runs, GD with eta lambda_1 ~ 2): per step d_k, the period decomposition
+    d_k = delta_k + (-1)^k d; the three terms 2 nabla phi . delta, 2 |S(v_1) d|^2 and 2 <g_1, T(v_1)[d, d]> (the last by a nested
+    forward-over-forward-over-forward jvp along d), the rotation term 4 ||dK v_1||^2 / gap, and the measured change of
+    lambda_1 over the period against the two-sided bound of Thm 55. Decides whether self-stabilisation is the third-derivative
+    term (expected) and how tight the bound is for the top mode. Login node for (i) on saved snapshots; (ii) needs the
+    EoS runs' parameter trajectories.
 A4. Thm 36 first-order check. Same run: evaluate ||E_lazy(T)||^2 - 2 int <E_lazy(2T-u), Delta(u) E_lazy(u)> du and the
     remainder bound against ||E(T)||^2. Expected: the remainder bound is useless (D large) and the first-order term is
     sign-correct; this is a sanity check on the withdrawn all-orders claim, not a result.

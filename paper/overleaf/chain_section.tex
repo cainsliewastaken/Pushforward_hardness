@@ -267,27 +267,84 @@ drive by $1/\Delta$ and the lifts by $1/\Delta^2$, so Euler trains rich on the
 increment while direct trains lazy on it.
 
 \paragraph{Progressive sharpening, the initial reduction phase, and the edge of stability.}
-By Proposition~\ref{prop:stage},
-$\dot\lambda_1=v_1^{\!\top}(\mathrm{Cross}+Q)v_1$ per stage with $Q\succeq0$. Along
-the residual the cross term at $t=0$ equals $-\frac{2\alpha}{n^2}\langle
-E,N''_{\theta}[g,g]\rangle$ with $g=J^{\!\top}E$, exactly, and it is negative on
-$90$--$91\%$ of the eigen-directions for the raw residual $E=\hat Y_0-Y$ and on
-$48$--$55\%$ (no systematic sign) for the centred residual $-Y$ [n=200]: the
-initial sharpness-\emph{reduction} phase reported in the warmup literature is
-the network unlearning its own initial function and is absent for centred
-initialisations. Once learning has accumulated, the coherent part of the cross
-term is the inner product of the accumulated core above with the stage core
-below through the shared drive, positive while the drive keeps its direction
-(measured positive on $80$--$100\%$ of modes from $t\approx1$ on): progressive
-sharpening, faster with depth by composition ($5\times,11\times,20\times$
-top gain at depths $2,3,6$ on the $\Delta=0.5$ target and $86\times$ at depth $6$
-on $\Delta=1.0$ [n=200]). Taking GD steps as stages, above the
-stability threshold the top component of the residual alternates in sign, the
-stage cores along it alternate, their cross terms with the accumulated core
-are negative at the core level, and $\lambda_1$ decreases until the step is
-stable again: sharpening and self-stabilisation are the two signs of one term.
-What is not proved is the sign of the init-feature part of the cross term
-after the transient (Lemma~\ref{lem:sign} below).
+For a fixed unit $v$ write $\phi_v(\theta)=v^{\!\top}K(\theta)v=\frac1n\|\Psi(\theta)^{\!\top}v\|^2$,
+with parameter gradient $g_v=\Psi^{\!\top}v/n$, $S(v)=\nabla_\theta g_v$ and
+third-derivative tensor $T(v)$.
+\begin{theorem}[Sharpening by induction over stages]
+\label{thm:sharpening}
+With $v_1=v_1(t_{s-1})$ the top eigenvector at the start of a stage,
+\[
+\lambda_1(t_s)\;\ge\;\phi_{v_1}(\theta(t_s))\;=\;\lambda_1(t_{s-1})+\tfrac2n\langle\Psi_{s-1}^{\!\top}v_1,\delta\Psi_s^{\!\top}v_1\rangle+\tfrac1n\|\delta\Psi_s^{\!\top}v_1\|^2 ,
+\]
+so, telescoping, $\lambda_1(T)\ge\lambda_1(t_0)+\sum_s[\phi_{v_1(t_{s-1})}(\theta(t_s))-\phi_{v_1(t_{s-1})}(\theta(t_{s-1}))]$,
+and $\lambda_1$ is nondecreasing across every stage in which the
+frozen-eigenvector form does not decrease along the stage. In the Taylor
+expansion of that form in the stage displacement $d$, the first-order term is
+$2\langle g_{v_1},S(v_1)d\rangle$ (under gradient flow,
+$\dot\lambda_1=-2g_{v_1}^{\!\top}S(v_1)g_E$), the second order is
+$2|S(v_1)d|^2+2\langle g_{v_1},T(v_1)[d,d]\rangle$, of which the first part is
+$Q\succeq0$, and the gap $\lambda_1(t_s)-\phi_{v_1}(\theta(t_s))\ge0$ is the
+rotation of the eigenvector, nonnegative by the variational principle with no
+convergence question.
+\end{theorem}
+\begin{proof}
+$\lambda_{\max}(K(t_s))\ge v_1^{\!\top}K(t_s)v_1$; Proposition~\ref{prop:stage}
+along $v_1$; the expansion is that of $\|\Psi(\theta+d)^{\!\top}v_1\|^2$.
+\end{proof}
+The theorem places the whole sign question of sharpening in one scalar per
+stage, the first-order cross term along the current top mode; every other
+term, to all orders and including the rotation, is nonnegative. That scalar
+is the initial reduction phase and then the sharpening. At $t=0$, along the
+residual, it equals $-\frac{2\alpha}{n^2}\langle E,N''_{\theta}[g,g]\rangle$
+with $g=J^{\!\top}E$, exactly, and it is negative on $90$--$91\%$ of the
+eigen-directions for the raw residual $E=\hat Y_0-Y$ and on $48$--$55\%$ (no
+systematic sign) for the centred residual $-Y$ [n=200]: the
+sharpness-\emph{reduction} phase reported in the warmup literature is the
+network unlearning its own initial function and is absent for centred
+initialisations. Once learning has accumulated, the core-core part of the
+cross term is the inner product of the accumulated core with the stage core
+through the shared drive, positive while the drive keeps its direction, and
+the whole term is measured positive on $80$--$100\%$ of modes from
+$t\approx1$ on: progressive sharpening, faster with depth by composition
+($5\times,11\times,20\times$ top gain at depths $2,3,6$ on the $\Delta=0.5$
+target and $86\times$ at depth $6$ on $\Delta=1.0$ [n=200]). What is not
+derived is the sign of the init-feature part of that scalar after the
+transient (Lemma~\ref{lem:sign} below).
+
+\begin{theorem}[Edge of stability: the period expansion]
+\label{thm:eos}
+Take gradient-descent steps as stages, $\theta_{k+1}=\theta_k+d_k$, and
+write $d_k=\delta_k+(-1)^kd$ with $d$ half the difference of two consecutive
+steps and $\delta_k$ their mean. Over one period, with $v_1=v_1(\theta_k)$
+frozen, the odd-order terms in $d$ of the frozen-form expansion cancel
+between the two steps and the even-order terms add, so
+\[
+\lambda_1(\theta_{k+2})-\lambda_1(\theta_k)\;\ge\;2\nabla\phi_{v_1}\!\cdot\delta+2|S(v_1)d|^2+2\langle g_{v_1},T(v_1)[d,d]\rangle+O(|d|^4,|\delta|^2)-\mathrm{rot}_k,
+\]
+with $\mathrm{rot}_k\ge0$ the rotation gain, and, when the kernel increment
+of each step is below half the top gap $\lambda_1-\lambda_2$ (Kato),
+\[
+\lambda_1(\theta_{k+2})-\lambda_1(\theta_k)\;\le\;2\nabla\phi_{v_1}\!\cdot\delta+2|S(v_1)d|^2+2\langle g_{v_1},T(v_1)[d,d]\rangle+4\max_j\|\delta K_jv_1\|^2/(\lambda_1-\lambda_2)+O(|d|^4,|\delta|^2).
+\]
+Hence the sharpness decreases over a period whenever
+$\langle g_{v_1},T(v_1)[d,d]\rangle$ is negative enough to beat the lift
+$|S(v_1)d|^2$, the drift term and the rotation term.
+\end{theorem}
+\begin{proof}
+Theorem~\ref{thm:sharpening} for the lower bound; second-order perturbation
+theory with Kato's remainder for the upper bound; the odd/even bookkeeping is
+the substitution of $\delta\pm d$ into the Taylor series of $\phi_{v_1}$,
+whose odd-order terms in $d$ change sign with the step.
+\end{proof}
+At the edge, then, the first-order cross term alternates and cancels; what
+remains per period is the lift $Q$, which raises $\lambda_1$, and the third
+derivative of the top-mode function along the oscillation, projected on the
+top-mode gradient, which is the self-stabilisation term of
+Damian--Nichani--Lee in kernel language; the top gap is large on these
+spectra ($\lambda_2/\lambda_1\approx1/30$ at initialisation), so the two-sided
+statement is tight for the top mode. The sign of
+$\langle g_{v_1},T(v_1)[d,d]\rangle$ at the edge is one nested
+Jacobian-vector product per step and is a measurement, not derived here.
 
 \paragraph{Adam.} For $\dot\theta=-P(t)\nabla L$ with $P$ diagonal positive, (a)
 of Proposition~\ref{prop:chain-identities} holds with $K_P=\Psi P\Psi^{\!\top}/n$,
