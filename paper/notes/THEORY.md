@@ -1559,7 +1559,33 @@ which make the stage lift higher rank than the core; each extra rank-one compone
 condition. So the theorem proves the mechanism and locates the remainder in three named places, all per stage, all
 checkable along a run.
 
-23.3 Measurement [n = 200, sweepA, chain/targeted_lift.py]: appended below. Three quantities per run: (a) the pure-targeted
+23.3 Measurement [n = 200, sweepA, 36 runs, chain/targeted_lift.py; coarse stages = the 30 geometric snapshots, a factor
+1.3-1.5 in time each; medians with 10-90 % over runs]:
+   t        surrogate ||E~||/||E_lazy||   real ||E||/||E_lazy||
+   30       0.34 [0.08, 0.83]              0.83 [0.43, 0.93]
+   100      0.05 [0.03, 0.33]              0.56 [0.20, 0.88]
+   300      0.03 [0.02, 0.08]              0.30 [0.12, 0.76]
+   1000     0.02 [0.01, 0.04]              0.14 [0.06, 0.55]
+   3000     0.014 [0.007, 0.04]            0.11 [0.02, 0.30]
+   transverse fraction at creation: median over stages 5.5 [3.3, 8.8], 90th percentile over stages ~100;
+   Prop. 53 sign condition (principal direction of the stage increment): satisfied on 52 % of stages [31, 81];
+   stages on which the increment is NEGATIVE on the residual: 28 % [17, 38].
+What the numbers say. (i) Theorem 52's surrogate obeys the theorem (ratio < 1 in every run) and beats the lazy bound by
+far MORE than the network does: 3-10x more gain at every time. (ii) The measured stage increments are not lifts along the
+residual: their action on the residual at creation is 5x transverse to 1x along (100x at the worst stages), and on a
+quarter of the stages they lower the kernel on the residual. (iii) The sign condition of Prop. 53 holds on about half of
+the stages. Conclusion: the transverse action is essential in the real dynamics and it REDUCES the along-residual gain
+(a pure along-residual lift of the measured strength would be 3-10x better), rather than adding error beyond lazy; the
+network still beats the lazy bound in 36/36 runs (section 22) and e^{-A} tracks it to 10-30 %, so the net along-residual
+gain is the right summary, but it is the net of a large along part and a large transverse part, not a small transverse
+remainder. Caveat: the stages are coarse; within a stage of 30-50 % in time the residual rotates substantially and the
+"increment on the residual at creation" mixes the lift with that rotation. The hypothesis of Theorem 52 must be tested
+with the chain's fine stages (EXPERIMENTS.md A5) before it is called false for the network; at this resolution it is not
+satisfied.
+Status of "the transverse term cancels": PROVED under lifts along the residual (Thm 52), with the hypothesis shown sharp
+against positivity (counterexample, Lemma A's remark); NOT satisfied by the measured coarse-stage increments; the real
+mechanism is a net gain, and an unconditional proof needs the per-stage sign structure of the cross term and of the lifts
+of other directions (23.2), which is open. Three quantities per run: (a) the pure-targeted
 surrogate — integrate E~' = -K~ E~ with K~(t) = K_0 + sum_s q_s e_s e_s^T, q_s = <e_s, (K(t_s) - K(t_{s-1})) e_s> measured
 from consecutive snapshots: by Theorem 52 ||E~(T)|| <= ||E_lazy(T)||; how close ||E~(T)|| is to the real ||E(T)|| says how
 much of the real gain is the along-residual lift; (b) the per-stage transverse fraction AT CREATION, ||(Delta_s - q_s e_s

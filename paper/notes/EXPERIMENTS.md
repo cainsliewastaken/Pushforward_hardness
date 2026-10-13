@@ -28,7 +28,10 @@ A3. Per-stage sign condition as an operator (Cor. 43(ii), Cor. 50, Thm 46(a)). S
     and lambda_min of the accumulated increment on W. Outcomes: nonnegative after the transient -> (S) holds per stage on
     the residual's subspace and Thm 46(a) applies; negative on a set of stages -> record where (expected: late, lambda_1
     drift) and whether the negative part is small relative to the lift.
-A5. The transverse fraction of the lift (Theorem 51, THEORY 22). Along a run: a(t) = <E, Delta E>/||E||^2 with
+A5. The transverse fraction of the lift (Theorem 51, THEORY 22) and the hypothesis of Theorem 52 (THEORY 23) with the
+    chain's FINE stages: per stage, q_s = <e_s, Delta_s e_s>, the transverse fraction at creation, the sign condition of
+    Prop. 53 for the principal direction, and the pure-targeted surrogate; at the coarse snapshot resolution (2026-10-12,
+    chain/targeted_lift.py) the hypothesis fails (transverse 5x at creation, 28 % of stages negative on the residual). Along a run: a(t) = <E, Delta E>/||E||^2 with
     Delta = K(t) - K_0, w = Delta E - a E, tau = ||w||/(a ||E||), A(T) = int a; the exact identity for E(T), the bound (b),
     the sufficient condition (c) and the measured ||E(T)||/||E_lazy(T)||. Decides whether "feature learning beats the lazy
     bound" holds on the testbed through the targeted-lift mechanism (tau small) and what the gain e^{-A} is. Run at
