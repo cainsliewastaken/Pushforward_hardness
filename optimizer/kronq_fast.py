@@ -287,7 +287,7 @@ class KronQFast:
             return D, lam, live
         if a.alloc2:                                  # LOOKAHEAD_THEORY Thm 7: full-curvature ridge on convex modes, full-radius push on concave ones
             c = self.cres[l].float() if (self.cres is not None and self.cres[l] is not None) else torch.zeros_like(lam)
-            cur = lam + a.cfac * c; beta = a.box; unit = max(lr * self.eta[l], 1e-30) * self.T_eff
+            cur = lam + a.cfac * c; beta = a.box; unit = max(lr * self.eta[l], 1e-30) * (1.0 if a.alloc2_oneshot else self.T_eff)
             def D_of(mu):
                 conv = cur + mu > 0
                 Dc = (Cf / (cur + mu).clamp(min=1e-30) / unit).clamp(-beta, beta)

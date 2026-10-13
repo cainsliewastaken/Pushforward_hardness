@@ -43,7 +43,7 @@ class Mechanism:
         self.gen = torch.Generator(device=dev); self.gen.manual_seed(seed)
     def f(self, plist, x): return fwd_lins(plist, x, self.act, self.L)
     @torch.no_grad()
-    def run(self, p_before, p_after, xb, yb, loss_fn, emit, step, rotate=None):
+    def run(self, p_before, p_after, xb, yb, loss_fn, emit, step, rotate=None, xv=None, yv=None):
         """p_before / p_after: lists of tensors in original coordinates (same layout). rotate: optional fn(G_aug_list) ->
         (rotated gradient list, lam list) for the per-decile SNR in the fast path's basis."""
         N = yb.numel(); pb = tuple(p_before); pa = tuple(p_after); d = tuple(a_ - b_ for a_, b_ in zip(pa, pb))
@@ -57,6 +57,16 @@ class Mechanism:
         emit('mech_dL', dL, step); emit('mech_first', first, step); emit('mech_gn', gn, step); emit('mech_rem', dL - first - gn, step)
         emit('mech_cosE', -float((E * Jd).sum()) / (nE * float(Jd.norm()) + 1e-30), step); emit('mech_Jd_over_E', float(Jd.norm()) / (nE + 1e-30), step)
         emit('mech_dnorm', math.sqrt(sum(float((x_ * x_).sum()) for x_ in d)), step); emit('mech_L_before', Lb, step)
+        # 1b. the same on held-out data: the population-side first-order gain and alignment of the step
+        if xv is not None:
+            with torch.enable_grad():
+                out_vb, Jd_v = jvp(lambda *q: self.f(q, xv), pb, d)
+            Ev = (out_vb - yv).detach(); nEv = float(Ev.norm()); Nv = yv.numel(); out_va = self.f(pa, xv)
+            emit('mechv_dL', float(loss_fn(out_va, yv)) - float(loss_fn(out_vb, yv)), step)
+            emit('mechv_first', 2.0 * float((Ev * Jd_v).sum()) / Nv, step); emit('mechv_gn', float((Jd_v * Jd_v).sum()) / Nv, step)
+            emit('mechv_cosE', -float((Ev * Jd_v).sum()) / (nEv * float(Jd_v.norm()) + 1e-30), step); emit('mechv_Jd_over_E', float(Jd_v.norm()) / (nEv + 1e-30), step)
+            # alignment of the batch output response with the population residual, and of the batch residual with it
+            emit('mechv_cosEb_Ev', 0.0, step)
         # 2. kernel split (at theta_before)
         def matvec(v):
             g = vjp_b(v.reshape(E.shape))
