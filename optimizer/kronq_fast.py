@@ -151,6 +151,7 @@ class KronQFast:
         self.cres = [None] * self.L if (a.alloc2 or a.curv) else None   # residual curvature per mode c_ij = <E, f_uu> (LOOKAHEAD_THEORY Prop. 10)
         self.cres_n = [0] * self.L                                        # samples since the basis last changed: running mean, then EMA (not transportable)
         self.T_eff = 1.0
+        self.zbud = [float(x) for x in a.zbud.split(',')] if a.zbud else []
         self.scan_steps = set(int(x) for x in a.radius_scan.split(',')) if a.radius_scan else set()
         self.tracker = None
         self.acf_steps = set(int(x) for x in a.acf.split(',')) if a.acf else set(); self.acf_buf = None; self.acf_idx = None; self.acf_t0 = None
@@ -593,11 +594,12 @@ class KronQFast:
             if a.rem > 0 or self.kappa > 0:
                 f_before = out.detach()
             for l in range(L): self.Wt[l].data.sub_(lr * self.eta[l] * Dws[l])
-            if a.zbud > 0:                                   # per-layer pre-activation budget (TRUST_REGION: the layer's radius is a sphere in z-space)
+            if a.zbud:                                       # per-layer pre-activation budget (TRUST_REGION: the layer's radius is a sphere in z-space)
                 for l in range(L - 1):
                     at = self.cache['at'][l].detach(); zt = self.cache['zt'][l].detach()
                     dz = (lr * self.eta[l]) * (at @ Dws[l].T); rz = float(dz.norm() / (zt.norm() + 1e-30))
-                    if rz > a.zbud: self.Wt[l].data.add_((1.0 - a.zbud / rz) * lr * self.eta[l] * Dws[l])
+                    zb = self.zbud[min(l, len(self.zbud) - 1)]
+                    if rz > zb: self.Wt[l].data.add_((1.0 - zb / rz) * lr * self.eta[l] * Dws[l])
                     if diag_now: emit(f'zbud_rho_l{l}', rz, step)
             if a.rem > 0:
                 f_after = self.forward(xb); rho = float((f_after - f_before).norm() / ((f_before - yb).norm() + 1e-30))
