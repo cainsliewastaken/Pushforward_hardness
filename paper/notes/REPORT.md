@@ -1702,3 +1702,36 @@ Caveats: one seed; baselines untuned (3 fixed lrs, no schedule, beta2 = 0.99); 5
    slow-mode curvature (blocks, or EKFAC) for the rough target. The attribution ladder to run: full factors + EKFAC; full
    factors with bf16 state; blocks with float64 eigh; both targets (6 runs). Memory of full factors: 11 state/P (not
    Adam's); the user has set that aside for the controls.
+
+25 (this fork). APPROXIMATION CONTROLS AND BASIS TRACKING (job 59749741, 1 node, 12 min; optimizer/tracking.py, --track;
+   scale_exact.sh; runs/scale_exact/). Width 4096, both targets, 5000 steps. Reference = fast configuration (blocks of 256,
+   bf16 state, two subspace iterations, adaptive refresh floored at 5). "Exact within the Kronecker model" = full factors,
+   fp32 state, float64 eigh, adaptive refresh floored at 20, statistics every step; and the same with beta_stats 0.9.
+   | | rough | smooth |   | reference | 0.0612 | 1.41e-4 |   | exact | 0.1168 | 4.77e-5 |   | exact, beta_stats 0.9 | 0.1142 | 4.74e-5 |
+   The approximations are NOT innocuous: removing them makes the smooth result 3x BETTER (4.7e-5, the best at this width
+   and memory class so far; SOAP full 4.5e-5) and the rough result 1.9x WORSE. The statistics horizon (0.95 vs 0.9) does
+   not matter.
+   Tracking diagnostics (every 500 steps, both runs; 64 sampled modes per lambda decile, true per-layer kernel top-32 by
+   Lanczos):
+   (a) COUPLING. Sum over other sampled modes of G_kk'^2 / G_kk^2 (response shared with others): top decile 0.01-0.3, then
+       growing 10-1000x per decile to 10^3-10^6 on the slow deciles of layer 0 and 1-600 on layer 1, in BOTH bases. The
+       Kronecker basis (blocked or full) diagonalises the kernel on the top ~2 deciles only; on the slow modes, where the
+       rough residual lives, a mode's own response is a small part of what it shares with others: these are not
+       eigen-directions of anything.
+   (b) CURVATURE. True per-mode curvature / Kronecker lambda, median per decile: blocked reference 0.85-1.3 on the fast
+       deciles, up to 2.5 on the slow; FULL factors 1.0-1.6 fast and 16-390 on the slow deciles of layer 1 (the product of
+       two tiny factor eigenvalues underestimates the curvature by 10-400x). With full factors the cap g / lam is therefore
+       10-400x too loose on the slow modes: the candidate reason the full-factor sign push is worse on rough (its slow
+       pushes overshoot), to be confirmed by full factors + the subspace iteration (basis continuity) and by the cap alone.
+   (c) TRACKING OF THE TRUE TOP MODES. Energy of the true kernel's top-32 directions on the top-K Kronecker modes: blocked
+       reference 0.25-0.49 at K = 256, 0.3-1.0 at 4096, ~1 at 65536; full factors 0.85-1.00 at K = 256. The blocks lose the
+       fast modes' directions (they are spread over thousands of blocked modes), which is where the smooth target lives:
+       the 3x smooth gain of the full basis.
+   (d) MISPRICING OF THE STEP, ||J D||^2 / sum lam D^2: blocked 8-9 (layer 0) and 160-235 (layer 1) throughout; full 3 -> 0.8
+       and 116 -> 4 over the run. The blocked basis misprices the step on layer 1 by two orders of magnitude at every stage.
+   Answer to "are we capturing the changing modes": no. Either Kronecker basis captures the top ~20 % of modes and nothing
+   below; the two forms trade a 3x on smooth (fast-mode directions) against a 2x on rough (slow-mode curvature, through the
+   cap). The rough result's dependence on an approximation (blocks) that is wrong on the modes that matter is not a sound
+   footing. The control that would settle the Kronecker factorisation itself is the exact per-layer kernel basis with
+   minibatches at a width where its top ~2000 modes can be kept (1024), against the Kronecker sign push at equal steps: the
+   width-160 full-batch version of this gave 3.4x (REPORT 56-60). Not built.
