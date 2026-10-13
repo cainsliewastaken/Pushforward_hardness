@@ -144,6 +144,8 @@ class KronQFast:
         self.Dprev = [None] * self.L; self.z_tr = [None] * self.L   # eligibility traces (--horizon > 1)
         self.V2 = [torch.zeros_like(W, dtype=bf) for W in self.Wt] if a.rule == 'adam' else None
         self.lamx = [None] * self.L if a.ekfac else None
+        if a.mom_adapt and self.V2 is None: self.V2 = [torch.zeros(W.shape, device=dev, dtype=torch.bfloat16 if a.compress else torch.float32) for W in self.Wt]
+        self.Tk_log = [None] * self.L
         self.cres = [None] * self.L if (a.alloc2 or a.curv) else None   # residual curvature per mode c_ij = <E, f_uu> (LOOKAHEAD_THEORY Prop. 10)
         self.cres_n = [0] * self.L                                        # samples since the basis last changed: running mean, then EMA (not transportable)
         self.T_eff = 1.0
@@ -303,8 +305,8 @@ class KronQFast:
             self.last_gamma[l] = mu / lmax
             return D, lam, torch.ones_like(live)
         if a.rule == 'adam':
-            V2 = self.V2[l]; V2f = V2.float() * a.b2 + (g * g) * (1 - a.b2)
-            if update_state: self.V2[l] = V2f.to(V2.dtype)
+            V2 = self.V2[l]; V2f = V2.float() if a.mom_adapt else V2.float() * a.b2 + (g * g) * (1 - a.b2)
+            if update_state and not a.mom_adapt: self.V2[l] = V2f.to(V2.dtype)
             bc1 = 1 - a.b1 ** self.t_step; bc2 = 1 - a.b2 ** self.t_step
             return (Cf / bc1) / ((V2f / bc2).sqrt() + a.eps), lam, live
         w = torch.ones_like(g)
@@ -409,7 +411,13 @@ class KronQFast:
         with torch.no_grad():
             Dws = []
             for l in range(L):
-                g = Gr[l]; C = self.C[l]; C.mul_(a.b1).add_(g.to(C.dtype), alpha=1 - a.b1); Cf = C.float()
+                g = Gr[l]; C = self.C[l]
+                if a.mom_adapt:                               # per-mode window from the mode's own signal-to-noise (user, 2026-10-13)
+                    V2 = self.V2[l]; v = V2.float() * a.b2 + (g * g) * (1 - a.b2); self.V2[l] = v.to(V2.dtype)
+                    m2 = C.float() ** 2; Tk = ((v - m2).clamp(min=0) / (m2 + 1e-30)).clamp(a.mom_T_min, a.mom_T_max)
+                    bk = 1 - 1.0 / Tk; C.copy_((C.float() * bk + g * (1 - bk)).to(C.dtype)); self.Tk_log[l] = Tk
+                else: C.mul_(a.b1).add_(g.to(C.dtype), alpha=1 - a.b1)
+                Cf = C.float()
                 if a.hyper and a.rule != 'adam' and self.Dprev[l] is not None:        # kronq3h one-step / traced hypergradient on u
                     Dp = self.Dprev[l].float() if not a.dprev_bits else self.Dprev[l].float() * torch.exp(self.u[l].float())
                     if a.horizon > 1:
@@ -474,6 +482,10 @@ class KronQFast:
                                 emit(f'shape_rf_{name}_l{l}', float((f1 - f0 - Jd).norm() / (Jd.norm() + 1e-30)), step)
                                 emit(f'shape_lev_{name}_l{l}', float(Jd.norm() / (d.norm() + 1e-30)), step)
                     if a.hyper: emit(f'u_q50_l{l}', float(self.u[l].float().median()), step)
+                    if a.mom_adapt and self.Tk_log[l] is not None:
+                        Tk = self.Tk_log[l].flatten(); order = torch.argsort(lam.flatten(), descending=True); n_ = order.numel()
+                        emit(f'Tk_q50_l{l}', float(Tk.median()), step)
+                        for dec in range(10): emit(f'Tk_q50_d{dec}_l{l}', float(Tk[order[dec * n_ // 10:(dec + 1) * n_ // 10]].median()), step)
                 Dws.append(D)
             # ---- step length controllers
             g_all = 1.0

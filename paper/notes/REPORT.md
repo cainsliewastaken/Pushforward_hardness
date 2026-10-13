@@ -1544,3 +1544,30 @@ Caveats: one seed; baselines untuned (3 fixed lrs, no schedule, beta2 = 0.99); 5
    drift, not in curvature. Theory to write: the expected step and its population first-order gain under per-mode noise
    for the three rules; measurement to make: population-side alignment and gain per step (validation jvp), with the
    ridge given the budget as its length.
+22. MECHANISM MEASUREMENT 2 (job 59747389, 1 node, 27 min; scale_mech2.sh; runs/scale_mech2/): validation-side first-order
+   gain / Gauss-Newton term / actual change per step (jvp on 1024 held-out samples with the actual step), the sign push + cap
+   with uniform weights (alloc2 oneshot, which is sign on box-limited modes + completion on fast ones: NOT a distinct ridge
+   direction; a true Kronecker ridge g/(lam + gamma) scaled to the budget is still untested), and batch 1024 on rough.
+   Results: rough sign 0.0612, adam rule 0.1114, sign+cap w=1 0.0889, AdamW 0.3903; smooth 1.41e-4 / 2.16e-4 / 2.55e-4 /
+   8.61e-4. Batch 1024, 2500 steps: sign 0.0815 (vs 0.101 at step 2500 with batch 256: 1.24x per step, 2x the samples:
+   worse per FLOP), AdamW 0.449 (no gain from the batch).
+   (a) ON HELD-OUT DATA EVERY STEP IS AT ITS OWN LINE-SEARCH POINT: gn_v = |first_v| within 5-10 % for every rule at every
+       diagnostic (sign at 250: first -1.31e-2, gn +1.3e-2, actual -8e-4). The actual per-step validation change is
+       ~1 % of either term and of either sign (AdamW's sampled sum is positive while its loss falls). Training here is a
+       zero-mean oscillation of amplitude 1-5 % of the loss per step around a drift of 0.1-0.5 % per step. The output
+       budget 0.2 ||E|| on the batch is the length at which the population-side quadratic cost equals the population-side
+       linear gain: the largest step that does not raise the held-out loss, which is set by the noise (batch 1024: the
+       held-out / batch gain ratio rises from 0.3-0.4 to 0.5-0.6, so the useful budget rises with the batch). This is
+       the explanation of the budget constant.
+   (b) NOISE FITTING BY RULE: held-out first-order gain / batch first-order gain = sign 0.15-0.40, adam 0.31-0.43, sign+cap
+       w=1 0.41-0.51, AdamW 0.8-0.9. The sign push fits its batch the most and wins anyway: its held-out alignment early
+       (0.10-0.12) is above AdamW's (0.01-0.07) and its held-out output step is at the budget; AdamW's steps are "real"
+       but point along the fast part of the residual.
+   (c) The learned per-mode weights are worth 1.45x rough / 1.8x smooth over uniform weights with the same sign + cap +
+       budget (0.0612 vs 0.0889; 1.41e-4 vs 2.55e-4), as in the ablation.
+   (d) Per-mode SNR is lowest on the slow modes and the per-step batch gain is 60-85 % noise fitting; the per-mode
+       momentum window from the online SNR (--mom_adapt, implemented 2026-10-13 12:40: T_k = clip((v - m^2) / m^2, T_min,
+       T_max), beta_k = 1 - 1/T_k, v the EMA of g^2 as in Adam, transported with the other per-mode state) is the
+       derived answer to (a)-(c): longer averaging exactly where the sign is unreliable, re-set every step so a lifted
+       mode shortens its own window. To run: scale_momadapt.sh (reference vs T_max 50 / 200, with and without the
+       learned weight; 8 runs).
