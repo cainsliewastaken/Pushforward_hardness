@@ -294,6 +294,8 @@ class KronQFast:
             return (Cf / bc1) / ((V2f / bc2).sqrt() + a.eps), lam, live
         w = torch.ones_like(g)
         qq = a.q_in if (l == 0 and a.q_in != 0) else a.q                 # per-mode weight exponent; --q_in overrides it on the input layer
+        if a.qa != 0 and l < L - 1 and self.A[l].e is not None:            # TRUST_REGION: the layer's radius is a sphere in pre-activation space,
+            al = self.A[l].e; w = w * (al / float(al.max())).clamp(min=a.q_floor)[None, :] ** (0.5 * a.qa)   # i.e. ~ 1/sqrt(alpha_j) per mode
         if qq != 0: w = w * (lam / lmax).clamp(min=1e-300) ** (0.5 * qq)
         if a.hyper: w = w * torch.exp(self.u[l].float())
         sgn = torch.sign(Cf) if a.sign_floor <= 0 else Cf / (Cf.abs() + a.sign_floor * float(Cf.abs().max()) + 1e-30)
@@ -432,6 +434,16 @@ class KronQFast:
                             seg = order[dec * nm // 10:(dec + 1) * nm // 10]; k = seg[torch.argmax(g.flatten()[seg].abs())]
                             md = torch.zeros_like(g); md.view(-1)[k] = 1.0; rs_dirs[f'moded{dec}'] = md
                             if a.hyper: emit(f'u_q50_d{dec}_l{l}', float(self.u[l].float().flatten()[seg].median()), step)   # learned weight per decile
+                            if self.A[l].e is not None and self.S[l].e is not None:
+                                ii_, jj_ = int(k) // g.shape[1], int(k) % g.shape[1]
+                                emit(f'alpha_d{dec}_l{l}', float(self.A[l].e[jj_]), step); emit(f'sigma_d{dec}_l{l}', float(self.S[l].e[ii_]), step)
+                        if self.A[l].e is not None:                       # one mode per ALPHA decile (input-side eigenvalue), largest |g| in the decile
+                            aord = torch.argsort(self.A[l].e, descending=True); na = aord.numel()
+                            for dec in range(10):
+                                cols = aord[dec * na // 10:(dec + 1) * na // 10]; sub = g[:, cols].abs(); kk = int(torch.argmax(sub))
+                                ii_, jj_ = kk // sub.shape[1], int(cols[kk % sub.shape[1]])
+                                md = torch.zeros_like(g); md[ii_, jj_] = 1.0; rs_dirs[f'amoded{dec}'] = md
+                                emit(f'aalpha_d{dec}_l{l}', float(self.A[l].e[jj_]), step); emit(f'asigma_d{dec}_l{l}', float(self.S[l].e[ii_]), step)
                             emit(f'lam_q50_d{dec}_l{l}', float(lam.flatten()[seg].median()), step)
                         self._scan_yb = yb; self.radius_scan(xb, l, rs_dirs, float(lr * self.eta[l] * D.norm()), emit, step)
                     if l == (1 if L > 2 else 0):               # shape of the Taylor radius: remainder and leverage along five directions at the step's length
