@@ -21,6 +21,13 @@ trace once). --last_S identity: no S factor on the output layer. --centred: trai
 import math, torch
 from torch.func import jvp
 
+def safe_eigh(F):
+    """eigh of a (batch of) symmetric matrices with a float64 CPU fallback when cusolver fails to converge."""
+    Fs = 0.5 * (F + F.transpose(-1, -2))
+    try:
+        return torch.linalg.eigh(Fs)
+    except Exception:
+        ev, V = torch.linalg.eigh(Fs.double().cpu()); return ev.to(F.device, F.dtype), V.to(F.device, F.dtype)
 class Basis:
     """Block-diagonal orthogonal basis on one side (dim): batched full blocks + one remainder block; or none (diag mode)."""
     def __init__(self, dim, block, max_dim, dev):
@@ -64,8 +71,8 @@ class Basis:
         if self.diag: self.e = self.F.clamp(min=0).clone(); return None
         if self.F is None: return None
         if iters <= 0:
-            ev, V = torch.linalg.eigh(self.F); e = ev.clamp(min=0).reshape(-1)
-            if self.rem: evr, Vr = torch.linalg.eigh(self.Fr); e = torch.cat([e, evr.clamp(min=0)])
+            ev, V = safe_eigh(self.F); e = ev.clamp(min=0).reshape(-1)
+            if self.rem: evr, Vr = safe_eigh(self.Fr); e = torch.cat([e, evr.clamp(min=0)])
             else: Vr = None
         else:
             V = torch.eye(self.b, device=self.dev).expand(self.nf, self.b, self.b).clone()
@@ -195,7 +202,7 @@ class KronQFast:
                 if a.adapt_refresh > 0:
                     new_dec = sum(float(g.abs().sum()) for g in Gr); e = abs(new_dec - old_dec) / (new_dec + 1e-30)
                     self.refresh_cur = int(min(200, max(2, self.refresh_cur * min(2.0, max(0.5, a.adapt_refresh / max(e, 1e-12))))))
-                    if diag_now: emit('refresh_interval', self.refresh_cur, step); emit('refresh_err', e, step)
+                    if emit is not None: emit('refresh_interval', self.refresh_cur, step); emit('refresh_err', e, step)
             if tm is not None: tm['eig'] += t() - t0
         elif need_eig and step == 1:
             pass                                             # no statistics yet at step 1 (stats are accumulated this step)
@@ -271,6 +278,6 @@ class KronQFast:
                 _, Jd = jvp(lambda Wl: self.forward_with(xb, l, Wl), (W_pre,), (d,))
                 f1 = self.forward_with(xb, l, W_now)
                 rf = float((f1 - f0 - Jd).norm() / (Jd.norm() + 1e-30))
-                self.eta[l] *= min(2.0, max(0.5, (a.lr_kappa / max(rf, 1e-12)) ** 0.5))
+                self.eta[l] = min(30.0, max(1e-2, self.eta[l] * min(2.0, max(0.5, (a.lr_kappa / max(rf, 1e-12)) ** 0.5))))
                 if diag_now or step % a.eval_every < a.check_every: emit(f'rf_l{l}', rf, step); emit(f'eta_l{l}', self.eta[l], step)
         if tm is not None: tm['upd'] += t() - t0

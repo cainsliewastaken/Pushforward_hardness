@@ -1353,7 +1353,26 @@ Findings.
    (more than the saved 2x: different target normalisation and online data; AdamW's best lr is again the low grid edge),
    KronQ full is at or slightly ahead of SOAP there, and the budget costs nothing. Nothing regressed; what the scaling and
    equal-FLOP studies added is that this per-step margin shrinks per FLOP as the width grows (item 9).
-11. Equal wall-clock comparison is not meaningful at w >= 2048 here: AdamW finishes 5000 steps in 40-70 s, before any
+11. FAST KRONQ (reparametrised, all options; optimizer/kronq_fast.py, --opt kronqf; job 59726146, 1 node, 7 min;
+   runs/scale_fast/). Width 4096, Adam-memory blocks of 256 + compressed state (1.96 state/P), lr 1e-3, 5000 steps, TF32:
+   | variant | rough | smooth | wall (3 per GPU) |   old harness, same memory: rough 0.106 / smooth 1.55e-4 (rem 0.2)
+   | rem 0.2 (stats every step) | 0.0733 | 1.29e-4 | 308 s |   references: full KronQ 0.108 / 1.2e-4; SOAP b256 0.083-0.0945 / 1.1-1.37e-4
+   | ekfac + gnls | 0.0703 | 7.5e-4 | 322 s |
+   | rule adam (ks_adam) | 0.1247 | 2.2e-4 | 284 s |   (lr 1e-3 is too small for the Adam rule: 0.63 at step 250)
+   | stats every step + eig_iters 2 + adapt_refresh 0.1 + rem 0.2 | 0.0639 | 1.35e-4 | 151 s |
+   | lr_kappa 0.1 | diverged (eta unbounded -> eigh failure) | - | - |   (eta now clamped to [1e-2, 30]; eigh with float64 fallback)
+   At equal steps the Adam-memory variant is now BETTER than SOAP b256 on the rough target (0.064 vs 0.083-0.095) and tied on
+   the smooth one (1.3e-4 vs 1.1-1.4e-4), at 20 % less memory. The gain over the old harness (0.106 -> 0.064-0.073) comes
+   from statistics accumulated every step (ablation --stats_every 20 pending) and the adaptive refresh.
+   Isolated timing (one run per GPU, 600 steps): old branch 35 ms/step (eig 23, step 9, fwd/bwd 2); fast path 24 ms/step
+   (eig 14, step 4.5, fwd/bwd 2.5-3); TF32 changes little here because eigh dominates; batched QR subspace iteration is
+   SLOWER than eigh on the GPU (eig 35 ms/step) and is dropped in favour of the adaptive interval (which cut t_eig 4x over
+   5000 steps: 58 s vs 220 s). NOTE: every wall time in items 1-9 was measured with 3 runs per GPU and is ~5x inflated;
+   the isolated old blocked KronQ is 35 ms/step, AdamW ~8.
+   Per-step FLOPs of the fast path with blocks of 256 (cost model in scale_jobs_flops.py): 1.12 F0 + 0.67/stats_every
+   (MC probe) + 0.33 (rem) = 2.1 F0 at stats every step, 1.6 F0 at every 4: the equal-FLOP study (item 9) must be redone;
+   at AdamW's 20000-step budget the fast path gets 10000-13000 steps instead of 4050.
+12. Equal wall-clock comparison is not meaningful at w >= 2048 here: AdamW finishes 5000 steps in 40-70 s, before any
    other method reaches its first evaluation, and the shared GPUs make the wall times unreliable. At w <= 512, at AdamW's
    wall budget, KronQ b1024 / SOAP reach 1.5-3x lower error than AdamW on the rough target.
 Caveats: one seed; baselines untuned (3 fixed lrs, no schedule, beta2 = 0.99); 5000 steps; see THEORY.md 21(d).

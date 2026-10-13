@@ -9,12 +9,13 @@ OUT = f'{ROOT}/runs/scale_flops'; os.makedirs(OUT, exist_ok=True)
 BUDGET = int(sys.argv[1]) if len(sys.argv) > 1 else 20000
 M, NIN, NOUT = 256, 256, 256
 def P_of(w): return NIN * w + w + w * w + w + w * NOUT + NOUT
-def cost(opt, w, block=0, diag=False, rem=False, gnls=False):
+def cost(opt, w, block=0, diag=False, rem=False, gnls=False, stats_every=1, S_mode='mc'):
     """FLOPs per step in units of F0 = 6 P m (forward + backward)."""
     P = P_of(w); F0 = 6 * P * M; sq = 2 * w ** 3
     if opt == 'kronqf':                                                  # reparametrised: rotations of activations and signals in the forward/backward
         bb = block if block else w
         c = 1.0 + 2 * (2 * 2 * M * w * bb) / F0 + 0.05                       # two square layers x (a~ in forward + z~ back, and the two in backward), block-diagonal
+        if S_mode == 'mc': c += (2.0 / 3) / max(1, stats_every)                 # the MC probe backward for the S statistics
         if rem: c += 1.0 / 3
         if gnls: c += 1.3
         return c
