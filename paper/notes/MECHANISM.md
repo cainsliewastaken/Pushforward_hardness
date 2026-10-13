@@ -124,6 +124,14 @@ the budget is purely the noise limit (a damping).
 
 ## 7. What this does not explain (the open list for the paper)
 
+CLOSED (REPORT 61 item 28, 2026-10-13 14:25): item 1 below. The sign push and the fair Adam rule have the SAME per-decile
+output-energy profile (within 10 %); the Adam rule's |m| / sqrt(v) is a flat ~0.15, so its step is 2-3x shorter in
+output units on the rough target, where the budget binds only at the start; on smooth the budget binds and the rules
+tie. The sign is not a better direction; it is the simplest bounded flat-profile step that reaches the budget. The
+mechanism is (i) bounded flat-profile step in the kernel basis (Prop. 2 against GD / ridge), (ii) learned per-mode
+weight, (iii) cap, (iv) length. Remaining open: the output-space Taylor radius on rough; the late phase; and the new
+prediction that the rough reference is under-stepping (rem_rho < 0.2 for 95 % of the run).
+
 UPDATE after the open measurements (REPORT 61 item 27, 2026-10-13 14:00): Lemma 1 and assumption (S) are confirmed
 directly (tau_k flat within 1.5x over ten deciles; per-batch SNR 0.6-0.9 on every decile). Item 2 below is RESOLVED
 (budget re-set to the batch's break-even: 4x batch = 2.35x per step). Section 3's per-mode optimum is REFUTED (the

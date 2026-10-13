@@ -1697,6 +1697,32 @@ Caveats: one seed; baselines untuned (3 fixed lrs, no schedule, beta2 = 0.99); 5
        with the per-mode SNR), and the reason a flat profile wins on rough is the open question, now sharply posed.
    Status of MECHANISM.md after this: Lemma 1 and (S) confirmed; the budget-as-break-even and its batch scaling confirmed;
    Prop. 2's ranking GD < ridge-type < sign confirmed, its sign/Adam parity refuted; section 3's per-mode optimum refuted.
+28. PER-DECILE STEP PROFILE, sign push vs the fair Adam rule (job 59752816, 1 node, 9 min; --diag prof_*; scale_profile.sh;
+   runs/scale_profile/). Reproduces item 27 (rough 0.0612 vs 0.1103; smooth 1.41e-4 vs 1.62e-4). Per lambda decile at
+   steps 250 / 1000 / 2500: learned weight w, |D| / w (= |m| / sqrt(v) for the Adam rule, = 1 for the sign), and the share
+   of the step's Kronecker output energy sum lam D^2.
+   (a) SAME DIRECTION. The output-energy shares of the two rules agree within ~10 % on every decile, layer and stage
+       (e.g. rough layer 1 at 2500: sign 0.674 / 0.141 / 0.075 / 0.045 ..., Adam 0.739 / 0.132 / 0.060 / 0.031 ...), and
+       |D| / w for the Adam rule is FLAT across deciles (0.15 everywhere on rough at 2500; 0.10-0.28 earlier): the Adam
+       rule's magnitude profile is not SNR-shaped, it is a constant ~0.15 times the sign's. (The 0.15: v is a 100-step
+       average of g^2 on a shrinking residual, so sqrt(v) remembers larger past gradients.) The learned weights rise toward
+       the slow input modes under both rules (sign 0.4 -> 2.6, Adam 0.45 -> 1.6 on layer 0 at 2500).
+   (b) DIFFERENT LENGTH. The output change before the budget (rem_rho): rough, sign 0.21 at step 250 then 0.17, 0.11, 0.09,
+       0.07 ... 0.01 (the budget binds only at the start; afterwards the lr decay sets the length, BELOW the budget);
+       Adam 0.07, 0.08, 0.05, 0.04 ... 0.01: 2-3x shorter than the sign at every stage. Smooth: sign 2.6-3.8 x the budget
+       until step ~3000 (the budget binds hard), Adam 0.2-0.9 (binds mildly): the budget equalises the two lengths there
+       and the rules nearly tie (1.15x).
+   CONCLUSION (closes the open question of items 22, 27): the sign push has NO directional advantage over the bounded-
+   magnitude (Adam) rule in the same basis with the same cap and weights; the 1.8x on rough is a step-length effect
+   (the Adam rule's |m| / sqrt(v) ~ 0.15 shortens its step 2-3x in output units where the budget does not bind), and
+   where the budget binds (smooth) the two are equivalent. The mechanism of the method is therefore: (i) a bounded,
+   flat-across-modes step in the kernel's eigenbasis (output response ~ sqrt(lambda_k), between GD's lambda and the
+   ridge's flat profile: MECHANISM Prop. 2, which explains the ranking against GD / AdamW / exact ridge via Lemma 1),
+   (ii) the learned per-mode weight (2-6x toward the slow input modes on rough), (iii) the cap on the top modes, (iv) the
+   length: the budget where it binds, the lr schedule where it does not. The sign is the simplest rule that delivers
+   (i) at full length. COROLLARY and prediction: on the rough target the reference runs BELOW the budget for 95 % of the
+   run (rem_rho 0.01-0.17 < 0.2), i.e. below the break-even length; a larger base lr or slower decay should improve the
+   rough result until the budget binds throughout (the smooth target is already budget-bound). Not yet run.
 
 25 (this fork). APPROXIMATION CONTROLS AND BASIS TRACKING (job 59749741, 1 node, 12 min; optimizer/tracking.py, --track;
    scale_exact.sh; runs/scale_exact/). Width 4096, both targets: reference fast configuration (blocks 256, bf16 state, two
