@@ -128,15 +128,17 @@ scale. At width 4096 the variant at Adam's memory (b256 + compress, 2.0 state/P)
 rough target and is 32x worse than full KronQ on the smooth one; every memory reduction's cost grows with width; the usable
 lr shrinks with width (3e-3 fails everywhere >= 1024, only 1e-3 works at 4096 and only for full / b1024); and SOAP with
 blocks of 256 (2.5 state/P) is the best method at 4096 on the rough target (0.083 vs KronQ full 0.108) with SOAP full best
-on the smooth one (4.5e-5 vs 1.2e-4). KronQ's lead over SOAP at widths 256-2048 reverses at 4096. DIAGNOSED AND FIXED IN ONE VARIANT (jobs 59723886, 59724517; REPORT 61 item 4): the Kronecker curvature model misprices
-the coherent sign step by d_eff(delta) d_eff(a) (small in the full eigenbasis, large for blocks / diagonal sides), the
-per-mode GN cap cannot see it, the second hidden layer's preactivations blow up and saturate within 250 steps, and the
-network ends as the mean predictor. Not the hypergradient, not a gradient mask, not a batch-curvature cap (all tested,
-all fail). A budget on the step's output change (--rem 0.1, one extra forward) restores blocks of 256 to full-factor
-accuracy at w = 4096 (0.1065 vs 0.1077). Next (needs a yes, 1 node x 45 min, 8 runs): at w = 4096 on both targets, the
-Adam-memory variant (b256 + compress) and b64 / diagonal with --rem 0.1 and with --gnls 1 (per-layer line search against
-the exact per-sample GN curvature, cheaper); if b256 + compress reaches full-factor accuracy on both targets the
-scaling criterion is met at Adam's memory and the study's verdict is reversed.
+on the smooth one (4.5e-5 vs 1.2e-4). KronQ's lead over SOAP at widths 256-2048 reverses at 4096. DIAGNOSED AND FIXED (jobs 59723886, 59724517, 59724760; REPORT 61 items 4-6): the Kronecker curvature model misprices the
+coherent sign step by d_eff(delta) d_eff(a) (measured 30-380x in the square layer at w = 4096 with blocks of 256), the
+per-mode GN cap cannot see it, the second hidden layer saturates within 250 steps and the network ends as the mean
+predictor. Fixed by pricing the step on the batch: a budget on the output change (--rem) or a per-layer exact-GN line
+search (--gnls). With either, the Adam-memory variant (b256 + compressed state, 1.96 state/P) reaches 0.107 / 0.081 on
+the rough target at w = 4096 (full KronQ 0.108, SOAP b256 0.083): criterion met at equal steps on the rough target.
+Smooth target: 3.0e-4 (rem) / 7.3e-4 (gnls) vs SOAP b256 1.1e-4, full 1.2e-4: not met; the constant 0.1 is wrong there
+and gnls is blind to loss-invisible drift. At equal FLOPs (REPORT 61 item 6, coarse): Kronecker methods beat AdamW
+2-3.5x on rough at widths 1024-4096 and lose 3-4x on smooth at 4096. NEXT (needs a yes): the equal-FLOP study proper
+(REPORT 61 item 6, last sentence), and a budget rule without a per-target constant (combine gnls with a gradient-energy
+mask, or set rem from the measured remainder ridge).
 CAVEAT on the baselines: three fixed lrs, no warmup / schedule / weight decay, beta2 = 0.99 for AdamW, the same lr grid at
 every width. The study decides whether the memory reductions cost accuracy at large width (they do); it does NOT decide
 "beats tuned AdamW / Muon / SOAP" by the standard of section 7 (THEORY.md 21(d)).

@@ -1252,7 +1252,33 @@ Findings.
    Consequence for the scaling criterion: the failure of the memory reductions at width 4096 is a step-length failure of
    the harness, not a property of the reductions; whether b256 + compressed state (2.0 state/P, Adam's level) reaches
    full-factor accuracy on both targets with the budget is the next run (8 runs, 1 node, ~45 min).
-5. Equal wall-clock comparison is not meaningful at w >= 2048 here: AdamW finishes 5000 steps in 40-70 s, before any
+5. FIX RETEST at w = 4096, both targets (job 59724760, 1 node, 9 min; optimizer/scale_fix2.sh; runs/scale_fix2/), 5000 steps,
+   lr 1e-3, equal steps:
+   | variant (state/P) | rough | smooth |   references: full KronQ (11.1) 0.108 / 1.2e-4; SOAP b256 (2.5) 0.083 / 1.1e-4;
+   | b256 + compress, --rem 0.1 (1.96) | 0.107 | 3.0e-4 |   AdamW (2.0) 0.390 / 7.2e-4; Muon (1.1) 0.264 / 2.2e-4.
+   | b256 + compress, --gnls 1 (1.96) | 0.081 | 7.3e-4 |
+   | b64, --rem 0.1 (4.1)             | 0.107 | 4.7e-4 |
+   | diagonal sides, --rem 0.1 (4.0)  | FAIL  | 7.0e-4 |
+   Rough: the Adam-memory variant reaches full-factor accuracy with the budget and the best KronQ value of the study with the
+   line search (0.081, = SOAP b256 at 20 % less memory): the scaling criterion is met at equal steps. The line search measured
+   q_true / q_Kronecker at this width: 30-380 (square layer), 5-53 (first layer), 6-9 (output layer). Smooth: --rem 0.1 is far
+   too tight (unbudgeted output change 4-5x the residual -> the step is cut 40-50x all run); --gnls lets z_1 drift to rms 28
+   (alpha 0.4-0.8 early, 1 later: the per-sample probe prices the loss-visible part exactly and is blind to directions the
+   output layer does not read, which the global budget suppresses as a side effect). Neither constant is right for both
+   targets; the diagonal variant fails on rough whatever is done (z_1 rms 23 at step 250 with the output change at 0.1 % of
+   the residual: a loss-invisible drift) and is dropped.
+6. Equal-FLOP reading of the existing curves (analytic per-step costs in units of F0 = 6 P m: AdamW 1.0; Muon ~1 + 60 w^3/F0
+   (~140 at w = 4096); SOAP/KronQ full ~1 + 13 (2w^3)/F0 (~57); blocks of b: 1 + 24 w^2 b/F0 (b1024 ~14, b256 ~4.6, b64 ~1.9);
+   diagonal ~1.2; --rem +0.33; --gnls +1.3. NOTE the harness's blocked rotations are a Python loop, so wall time does not
+   follow these counts.) At the budget of AdamW's 5000 steps, read at the last eval within budget (every 250 steps; coarse):
+   rough w = 4096: AdamW 0.390 (5000 steps); SOAP b256 0.197 (1000); KronQ b256 + compress + rem / gnls 0.137 / 0.134 (1000);
+   rough w = 1024: AdamW 0.443; KronQ b64 0.129 (2750); KronQ b256 0.137 (1250); SOAP b256 0.173 (1250).
+   smooth w = 4096: AdamW 7.2e-4; SOAP b256 2.4e-3 (1000); KronQ b256 + compress + rem 2.9e-3 (1000): AdamW wins 3-4x.
+   smooth w = 1024: AdamW 1.2e-3; KronQ b64 9.0e-4 (2750); SOAP b256 1.8e-3 (1250): about a tie.
+   So at equal FLOPs the Kronecker methods beat AdamW 2-3.5x on the rough target at both widths and lose to it on the smooth
+   target at w = 4096. A proper equal-FLOP study needs step counts set per method from the cost model, evals every 50
+   steps, a larger budget (AdamW is still improving at 5000 steps), and a budget constant that is not hand-set per target.
+7. Equal wall-clock comparison is not meaningful at w >= 2048 here: AdamW finishes 5000 steps in 40-70 s, before any
    other method reaches its first evaluation, and the shared GPUs make the wall times unreliable. At w <= 512, at AdamW's
    wall budget, KronQ b1024 / SOAP reach 1.5-3x lower error than AdamW on the rough target.
 Caveats: one seed; baselines untuned (3 fixed lrs, no schedule, beta2 = 0.99); 5000 steps; see THEORY.md 21(d).
