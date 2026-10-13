@@ -146,6 +146,7 @@ class KronQFast:
         self.lamx = [None] * self.L if a.ekfac else None
         if a.mom_adapt and self.V2 is None: self.V2 = [torch.zeros(W.shape, device=dev, dtype=torch.bfloat16 if a.compress else torch.float32) for W in self.Wt]
         self.Tk_log = [None] * self.L; self.m2s = [None] * self.L   # smoothed de-biased signal^2 per mode (mom_adapt)
+        self.Dabs = [None] * self.L                                    # |D| of the previous step per mode (staleness limit)
         self.cres = [None] * self.L if (a.alloc2 or a.curv) else None   # residual curvature per mode c_ij = <E, f_uu> (LOOKAHEAD_THEORY Prop. 10)
         self.cres_n = [0] * self.L                                        # samples since the basis last changed: running mean, then EMA (not transportable)
         self.T_eff = 1.0
@@ -392,6 +393,7 @@ class KronQFast:
                         self.Dprev[l] = None; self.z_tr[l] = None
                     if self.V2 is not None: self.V2[l] = tr(self.V2[l].float(), True).to(self.V2[l].dtype)
                     if self.m2s[l] is not None: self.m2s[l] = tr(self.m2s[l].float(), True).to(self.m2s[l].dtype)
+                    if self.Dabs[l] is not None: self.Dabs[l] = tr(self.Dabs[l].float(), True).to(self.Dabs[l].dtype)
                     if self.lamx is not None and self.lamx[l] is not None: self.lamx[l] = tr(self.lamx[l].float(), True).to(self.lamx[l].dtype)
                     if self.cres is not None: self.cres[l] = None; self.cres_n[l] = 0   # (p_j . a)^2 has cross terms under a basis change: restart in the new basis
                     if old_ok and a.adapt_refresh > 0:              # kronq2: relative change of the first-order decrease g.D
@@ -422,7 +424,15 @@ class KronQFast:
                     if self.m2s[l] is None: self.m2s[l] = m2_inst.clamp(min=0).to(C.dtype)
                     else: self.m2s[l] = (self.m2s[l].float() * a.mom_snr_beta + m2_inst * (1 - a.mom_snr_beta)).to(C.dtype)
                     m2 = self.m2s[l].float().clamp(min=0)
-                    Tk = ((v - m2).clamp(min=0) / (m2 + 1e-30)).clamp(a.mom_T_min, a.mom_T_max)
+                    T_noise = (v - m2).clamp(min=0) / (m2 + 1e-30)                                   # batches needed for SNR 1 on this mode
+                    # staleness, online: the mode's gradient changes by |d_k| lam_k / |g_k| per step (step over completion length)
+                    # in the per-mode model, and the layer's basis is valid for ~ its adaptive refresh period
+                    if self.Dabs[l] is not None and self.S[l].e is not None and self.A[l].e is not None:
+                        lam_ = self.S[l].e[:, None] * self.A[l].e[None, :] * (2.0 / self.nout)
+                        rho = (self.Dabs[l].float() * lr * self.eta[l] * lam_ / (g.abs() + 1e-30)).clamp(min=1e-6)
+                        T_stale = torch.minimum(1.0 / rho, torch.full_like(rho, float(max(2, 2 * self.period[l]))))
+                    else: T_stale = torch.full_like(g, float(max(2, 2 * self.period[l])))
+                    Tk = torch.minimum(T_noise, T_stale).clamp(a.mom_T_min, a.mom_T_max)
                     bk = 1 - 1.0 / Tk; C.copy_((C.float() * bk + g * (1 - bk)).to(C.dtype)); self.Tk_log[l] = Tk
                 else: C.mul_(a.b1).add_(g.to(C.dtype), alpha=1 - a.b1)
                 Cf = C.float()
@@ -442,6 +452,7 @@ class KronQFast:
                     if a.hyper_shape: un = un - un.mean()
                     self.u[l] = un.clamp(-a.u_clamp, a.u_clamp).to(self.u[l].dtype)
                 D, lam, live = self.direction(l, g, Cf, lr)
+                if a.mom_adapt: self.Dabs[l] = D.abs().to(torch.bfloat16 if a.compress else torch.float32)
                 if a.hyper and a.rule != 'adam': self.Dprev[l] = (D.to(self.u[l].dtype) if not a.dprev_bits else torch.sign(D).to(torch.int8))
                 if a.gnls:                                   # exact-GN line search along D on the batch
                     at = self.cache['at'][l].detach(); dz = self.cache['zt'][l]
