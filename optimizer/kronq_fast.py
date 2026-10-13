@@ -369,7 +369,7 @@ class KronQFast:
                     self.acf_buf = None; self.acf_idx = None
         # loss gradients at the cached intermediates, snapshotted BEFORE the probe backward: a retained .grad accumulates
         # every backward that passes through it (the probe's included, ~m ny / 2 times larger), so it cannot be read later
-        hgrad = [h.grad.clone() if h.grad is not None else None for h in self.cache['h']] if self.cres is not None else None
+        hgrad = [h.grad.clone() if h.grad is not None else None for h in self.cache['h']] if (self.cres is not None or (emit is not None and (step % a.eval_every == 0 or step == a.steps))) else None
         ztgrad = [zt.grad.clone() if zt.grad is not None else None for zt in self.cache['zt']] if a.S_mode == 'emp' else None
         diag_now = emit is not None and (step % a.eval_every == 0 or step == a.steps or step in self.scan_steps)
         # ---- statistics in the current basis
