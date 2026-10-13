@@ -129,8 +129,8 @@ rough target and is 32x worse than full KronQ on the smooth one; every memory re
 lr shrinks with width (3e-3 fails everywhere >= 1024, only 1e-3 works at 4096 and only for full / b1024); and SOAP with
 blocks of 256 (2.5 state/P) is the best method at 4096 on the rough target (0.083 vs KronQ full 0.108) with SOAP full best
 on the smooth one (4.5e-5 vs 1.2e-4). KronQ's lead over SOAP at widths 256-2048 reverses at 4096. Next (needs a yes): the
-live-mode / uncapped-null-push diagnosis and an lr of 3e-4 / 1e-4 for the blocked variants at 4096 (REPORT 61 item 4),
-~1 GPU-hour; if the reductions cannot be made to work at Adam's memory, the line stops here per the criterion.
+hypergradient-runaway diagnosis (REPORT 61 item 4: hyper off / clamped / slower, full as control, with u and step-energy
+logging) at w = 4096, ~1 GPU-node x 45 min; if the reductions cannot be made to work at Adam's memory, the line stops here per the criterion.
 CAVEAT on the baselines: three fixed lrs, no warmup / schedule / weight decay, beta2 = 0.99 for AdamW, the same lr grid at
 every width. The study decides whether the memory reductions cost accuracy at large width (they do); it does NOT decide
 "beats tuned AdamW / Muon / SOAP" by the standard of section 7 (THEORY.md 21(d)).

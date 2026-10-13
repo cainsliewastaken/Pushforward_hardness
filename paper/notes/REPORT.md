@@ -1220,13 +1220,21 @@ Findings.
    for every variant including full, on both targets; at 4096 only lr 1e-3 works and only for full and b1024. The claim
    "insensitive to the base lr over 10x" (REPORT 59, H96, n = 20000) does not hold at width; the 2-point grid has its
    optimum at the edge, so the reductions may be recoverable at lr 3e-4 or 1e-4 (not run).
-4. Mechanism (hypothesis, not measured): blocked and diagonal sides have no null modes (a 256 x 256 block of the EMA'd
-   factor is full rank, the full 4096 x 4096 factor at batch 256 is not), so 'live = lam > reltol lam_max' excludes nothing
-   and the sign push is applied, uncapped (the GN cap |Gr|/(lam lr L) is large where lam is small), on directions the full
-   basis treats as null; the number of such directions grows with width, which is the width dependence of the failure.
-   The diagonal-side variant is the extreme case (sign push in raw coordinates on the wide side) and fails first.
-   Test: log the live-mode fraction and the share of the step's parameter-space energy on modes with lam < 1e-6 lam_max,
-   full vs b256, at w = 2048-4096; try a cap relative to the gradient energy instead of per mode, and an lr of 3e-4 / 1e-4.
+4. Mechanism (hypothesis, not measured; revised after discussion): the online component at fault is most likely the
+   per-mode hypergradient, which has no step budget. u moves by beta_u = 0.01 per step in the direction of the normalised
+   one-step hypergradient; on a mode along which the step does not change the gradient (an inert direction) the sign is
+   persistent, so u climbs to the clamp 4.6 (push 100x the base lr) within ~460 steps, which is when every collapse happens
+   (steps 250-500). Nothing sums the per-mode weights: no trust region, no function-space remainder (the kronq2 per-layer
+   lr controller is NOT in scale_study.py), only the clamp and the GN cap. The effective per-entry step is lr w, not lr,
+   which is why the stability threshold sits below AdamW's and falls with width (more modes, more inert ones). Blocking
+   and diagonal sides make it worse because their Kronecker eigenvalue estimates mix directions of different true
+   curvature, so the GN cap no longer protects the inert modes; the failure order (diagonal at 2048; b64, b256,
+   compressed at 4096; full and b1024 survive) fits a loss of curvature information. The null-mode exclusion
+   (reltol 1e-10) excludes almost nothing even in the full basis and is a second-order factor.
+   Test (6 runs, w = 4096, p = 2, lr 1e-3, ~1 GPU-node x 45 min): b256 with --hyper 0, with the u clamp at +-1, with
+   beta_u 1e-3, as run; full as control; log per layer the u distribution, the step energy on the lowest decile of modes,
+   and the hidden-activation saturation fraction. Hypergradient off / clamped trains normally -> fix is a per-layer budget
+   on sum w^2 tied to the function-space remainder; still collapses -> the blocked curvature estimate is the fault.
 5. Equal wall-clock comparison is not meaningful at w >= 2048 here: AdamW finishes 5000 steps in 40-70 s, before any
    other method reaches its first evaluation, and the shared GPUs make the wall times unreliable. At w <= 512, at AdamW's
    wall budget, KronQ b1024 / SOAP reach 1.5-3x lower error than AdamW on the rough target.
