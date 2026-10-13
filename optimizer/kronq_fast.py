@@ -21,11 +21,13 @@ trace once). --last_S identity: no S factor on the output layer. --centred: trai
 import math, torch
 from torch.func import jvp
 
+EIG_DTYPE = None
 def safe_eigh(F):
     """eigh of a (batch of) symmetric matrices with a float64 CPU fallback when cusolver fails to converge."""
     Fs = 0.5 * (F + F.transpose(-1, -2))
+    if EIG_DTYPE is not None: Fs = Fs.to(EIG_DTYPE)
     try:
-        return torch.linalg.eigh(Fs)
+        ev, V = torch.linalg.eigh(Fs); return ev.to(F.dtype), V.to(F.dtype)
     except Exception:
         ev, V = torch.linalg.eigh(Fs.double().cpu()); return ev.to(F.device, F.dtype), V.to(F.device, F.dtype)
 class Basis:
@@ -120,6 +122,8 @@ class KronQFast:
         self.V2 = [torch.zeros_like(W, dtype=bf) for W in self.Wt] if a.rule == 'adam' else None
         self.lamx = [None] * self.L if a.ekfac else None
         self.eta = [1.0] * self.L; self.refresh_cur = a.refresh; self.emp_scale = [None] * self.L
+        self.period = [a.refresh] * self.L; self.next_ref = [1] * self.L; self.rf = [None] * self.L
+        global EIG_DTYPE; EIG_DTYPE = torch.float64 if a.eig_dtype == 'float64' else None
         self.cache = {}; self.last_Gr = None; self.diag_out = {}
         self.f0 = None
     def parameters(self): return self.Wt
@@ -149,11 +153,37 @@ class KronQFast:
         for arr in (self.u, self.hv, self.V2, self.lamx, self.Dprev):
             if arr is not None: tot += sum(n(t) for t in arr)
         return tot
+    def direction(self, l, g, Cf, lr, update_state=True):
+        """per-mode step direction D (in units of lr) for layer l from the rotated gradient g and momentum Cf."""
+        a = self.a; L = self.L
+        if self.S[l].e is None or self.A[l].e is None: lam = torch.ones_like(g); lmax = 1.0
+        else:
+            lam = self.S[l].e[:, None] * self.A[l].e[None, :] * (2.0 / self.nout)
+            if self.lamx is not None and self.lamx[l] is not None: lam = self.lamx[l].float() * (2.0 / self.nout)
+            lmax = float(lam.max())
+        live = lam > a.reltol * lmax
+        if a.topk > 0:
+            thr = lam.flatten().kthvalue(max(1, lam.numel() - a.topk))[0]; live = live & (lam >= thr)
+        if a.rule == 'adam':
+            V2 = self.V2[l]; V2f = V2.float() * a.b2 + (g * g) * (1 - a.b2)
+            if update_state: self.V2[l] = V2f.to(V2.dtype)
+            bc1 = 1 - a.b1 ** self.t_step; bc2 = 1 - a.b2 ** self.t_step
+            return (Cf / bc1) / ((V2f / bc2).sqrt() + a.eps), lam, live
+        w = torch.ones_like(g)
+        if a.q != 0: w = w * (lam / lmax).clamp(min=1e-300) ** (0.5 * a.q)
+        if a.hyper: w = w * torch.exp(self.u[l].float())
+        sgn = torch.sign(Cf) if a.sign_floor <= 0 else Cf / (Cf.abs() + a.sign_floor * float(Cf.abs().max()) + 1e-30)
+        D = torch.where(live, w * sgn, torch.zeros_like(g))
+        if a.cap:
+            capv = g.abs() / (lam.clamp(min=1e-30) * max(lr * self.eta[l], 1e-30) * L)
+            D = torch.sign(D) * torch.minimum(D.abs(), capv)
+        return D, lam, live
     # ---------------- one optimizer step; call after loss.backward() on forward(xb, keep=need_keep)
     def step(self, step, lr, out, xb, yb, loss_fn, tm=None, t=None, emit=None):
         a = self.a; L = self.L; dev = self.dev
         need_stats = (step - 1) % max(1, a.stats_every) == 0
-        need_eig = (step - 1) % self.refresh_cur == 0 or step == 1
+        self.t_step = step
+        due = [l for l in range(L) if step >= self.next_ref[l]]
         Gr = [W.grad for W in self.Wt]
         diag_now = emit is not None and (step % a.eval_every == 0 or step == a.steps)
         # ---- statistics in the current basis
@@ -182,12 +212,15 @@ class KronQFast:
                         if self.lamx[l] is None: self.lamx[l] = new.to(torch.bfloat16 if a.compress else torch.float32)
                         else: self.lamx[l] = (self.lamx[l].float() * a.beta_stats + new * (1 - a.beta_stats)).to(self.lamx[l].dtype)
             if tm is not None: tm['stats'] += t() - t0
-        # ---- refresh of the bases (error-controlled interval)
-        if need_eig and step > 1:
+        # ---- refresh of the bases (per-layer period; adaptive by the g.D criterion of kronq2 or the overlap criterion of kronsign)
+        if due:
             t0 = t() if t else None
             with torch.no_grad():
-                old_dec = sum(float(g.abs().sum()) for g in Gr) if a.adapt_refresh > 0 else None
-                for l in range(L):
+                for l in due:
+                    if self.S[l].F is None or self.A[l].F is None: continue
+                    old_ok = self.S[l].e is not None and self.A[l].e is not None
+                    if a.adapt_refresh > 0 and old_ok:
+                        D_old, _, _ = self.direction(l, Gr[l], self.C[l].float(), lr, update_state=False); gd_old = float((Gr[l] * D_old).sum())
                     VS = self.S[l].refresh(a.eig_iters); VA = self.A[l].refresh(a.eig_iters)
                     tr = lambda T, sq=False: self.A[l].transport(self.S[l].transport(T, VS, 'L', sq), VA, 'R', sq)
                     self.Wt[l].data = tr(self.Wt[l].data); self.C[l] = tr(self.C[l].float()).to(self.C[l].dtype)
@@ -199,58 +232,42 @@ class KronQFast:
                         self.Dprev[l] = None; self.z_tr[l] = None
                     if self.V2 is not None: self.V2[l] = tr(self.V2[l].float(), True).to(self.V2[l].dtype)
                     if self.lamx is not None and self.lamx[l] is not None: self.lamx[l] = tr(self.lamx[l].float(), True).to(self.lamx[l].dtype)
-                if a.adapt_refresh > 0:
-                    new_dec = sum(float(g.abs().sum()) for g in Gr); e = abs(new_dec - old_dec) / (new_dec + 1e-30)
-                    self.refresh_cur = int(min(200, max(2, self.refresh_cur * min(2.0, max(0.5, a.adapt_refresh / max(e, 1e-12))))))
-                    if emit is not None: emit('refresh_interval', self.refresh_cur, step); emit('refresh_err', e, step)
+                    if old_ok and a.adapt_refresh > 0:              # kronq2: relative change of the first-order decrease g.D
+                        D_new, _, _ = self.direction(l, Gr[l], self.C[l].float(), lr, update_state=False); gd_new = float((Gr[l] * D_new).sum())
+                        e = abs(gd_new - gd_old) / max(abs(gd_new), 1e-300)
+                        self.period[l] = int(min(max(self.period[l] * min(max(a.adapt_refresh / max(e, 1e-12), 0.5), 2.0), 1), 1000))
+                        if emit is not None: emit(f'refresh_err_l{l}', e, step); emit(f'refresh_period_l{l}', self.period[l], step)
+                    elif old_ok and a.eig_adapt:                    # kronsign: double the period while the basis overlap stays above 0.99
+                        ov = float(torch.diagonal(VA[0], dim1=1, dim2=2).abs().mean()) if VA is not None else 1.0
+                        if VS is not None: ov = 0.5 * (ov + float(torch.diagonal(VS[0], dim1=1, dim2=2).abs().mean()))
+                        if ov > 0.99: self.period[l] = min(2 * self.period[l], a.eig_max)
+                        elif ov < 0.9: self.period[l] = max(self.period[l] // 2, 1)
+                        if emit is not None: emit(f'refresh_period_l{l}', self.period[l], step); emit(f'refresh_overlap_l{l}', ov, step)
+                    self.next_ref[l] = step + self.period[l]
             if tm is not None: tm['eig'] += t() - t0
-        elif need_eig and step == 1:
-            pass                                             # no statistics yet at step 1 (stats are accumulated this step)
         # ---- per-layer step
         t0 = t() if t else None
         with torch.no_grad():
             Dws = []
             for l in range(L):
                 g = Gr[l]; C = self.C[l]; C.mul_(a.b1).add_(g.to(C.dtype), alpha=1 - a.b1); Cf = C.float()
-                if self.S[l].e is None or self.A[l].e is None:   # before the first refresh: plain Adam-free sign descent on the gradient
-                    lam = torch.ones_like(g); lmax = 1.0
-                else:
-                    lam = self.S[l].e[:, None] * self.A[l].e[None, :] * (2.0 / self.nout)
-                    if self.lamx is not None and self.lamx[l] is not None: lam = self.lamx[l].float() * (2.0 / self.nout)
-                    lmax = float(lam.max())
-                live = lam > a.reltol * lmax
-                if a.topk > 0:
-                    thr = lam.flatten().kthvalue(max(1, lam.numel() - a.topk))[0]; live = live & (lam >= thr)
-                if a.rule == 'adam':
-                    V2 = self.V2[l]; V2f = V2.float() * a.b2 + (g * g) * (1 - a.b2); self.V2[l] = V2f.to(V2.dtype)
-                    bc1 = 1 - a.b1 ** step; bc2 = 1 - a.b2 ** step
-                    D = (Cf / bc1) / ((V2f / bc2).sqrt() + a.eps)
-                else:
-                    if a.hyper:
-                        if self.Dprev[l] is not None:
-                            Dp = self.Dprev[l].float() if not a.dprev_bits else self.Dprev[l].float() * torch.exp(self.u[l].float())
-                            if a.horizon > 1:
-                                gam = 1 - 1.0 / a.horizon
-                                self.z_tr[l] = Dp if self.z_tr[l] is None else self.z_tr[l] * gam + Dp
-                                Dp = self.z_tr[l]
-                            hg = -lr * self.eta[l] * g * Dp
-                            if a.compress:
-                                r_, c_ = self.hv[l]; r_.mul_(0.99).add_((hg * hg).mean(1), alpha=0.01); c_.mul_(0.99).add_((hg * hg).mean(0), alpha=0.01)
-                                den = (r_[:, None] * c_[None, :] / (r_.mean() + 1e-30)).sqrt()
-                            else:
-                                self.hv[l].mul_(0.99).add_(hg * hg, alpha=0.01); den = self.hv[l].sqrt()
-                            un = self.u[l].float() - a.beta_u * hg / (den + 1e-30)
-                            if a.hyper_shape: un = un - un.mean()
-                            self.u[l] = un.clamp(-a.u_clamp, a.u_clamp).to(self.u[l].dtype)
-                        w = torch.exp(self.u[l].float())
-                    elif a.q != 0: w = (lam / lmax).clamp(min=1e-300) ** (0.5 * a.q)
-                    else: w = torch.ones_like(g)
-                    sgn = torch.sign(Cf) if a.sign_floor <= 0 else Cf / (Cf.abs() + a.sign_floor * float(Cf.abs().max()) + 1e-30)
-                    D = torch.where(live, w * sgn, torch.zeros_like(g))
-                    if a.cap:
-                        capv = g.abs() / (lam.clamp(min=1e-30) * max(lr * self.eta[l], 1e-30) * L)
-                        D = torch.sign(D) * torch.minimum(D.abs(), capv)
-                    if a.hyper: self.Dprev[l] = (D.to(self.u[l].dtype) if not a.dprev_bits else torch.sign(D).to(torch.int8))
+                if a.hyper and a.rule != 'adam' and self.Dprev[l] is not None:        # kronq3h one-step / traced hypergradient on u
+                    Dp = self.Dprev[l].float() if not a.dprev_bits else self.Dprev[l].float() * torch.exp(self.u[l].float())
+                    if a.horizon > 1:
+                        gam = 1 - 1.0 / a.horizon
+                        self.z_tr[l] = Dp if self.z_tr[l] is None else self.z_tr[l] * gam + Dp
+                        Dp = self.z_tr[l]
+                    hg = -lr * self.eta[l] * g * Dp
+                    if a.compress:
+                        r_, c_ = self.hv[l]; r_.mul_(0.99).add_((hg * hg).mean(1), alpha=0.01); c_.mul_(0.99).add_((hg * hg).mean(0), alpha=0.01)
+                        den = (r_[:, None] * c_[None, :] / (r_.mean() + 1e-30)).sqrt()
+                    else:
+                        self.hv[l].mul_(0.99).add_(hg * hg, alpha=0.01); den = self.hv[l].sqrt()
+                    un = self.u[l].float() - a.beta_u * hg / (den + 1e-30)
+                    if a.hyper_shape: un = un - un.mean()
+                    self.u[l] = un.clamp(-a.u_clamp, a.u_clamp).to(self.u[l].dtype)
+                D, lam, live = self.direction(l, g, Cf, lr)
+                if a.hyper and a.rule != 'adam': self.Dprev[l] = (D.to(self.u[l].dtype) if not a.dprev_bits else torch.sign(D).to(torch.int8))
                 if a.gnls:                                   # exact-GN line search along D on the batch
                     at = self.cache['at'][l].detach(); dz = self.cache['zt'][l]
                     sx = (gzt[l].detach() * (at @ D.T)).sum(1); q = float((sx * sx).mean()) * (2.0 / self.nout); gD = float((g * D).sum())
@@ -277,7 +294,13 @@ class KronQFast:
                 f0 = self.forward_with(xb, l, W_pre)
                 _, Jd = jvp(lambda Wl: self.forward_with(xb, l, Wl), (W_pre,), (d,))
                 f1 = self.forward_with(xb, l, W_now)
-                rf = float((f1 - f0 - Jd).norm() / (Jd.norm() + 1e-30))
-                self.eta[l] = min(30.0, max(1e-2, self.eta[l] * min(2.0, max(0.5, (a.lr_kappa / max(rf, 1e-12)) ** 0.5))))
-                if diag_now or step % a.eval_every < a.check_every: emit(f'rf_l{l}', rf, step); emit(f'eta_l{l}', self.eta[l], step)
+                lin = float(Jd.norm())
+                if lin > 0:
+                    rf = float((f1 - f0 - Jd).norm()) / lin; self.rf[l] = rf if self.rf[l] is None else 0.7 * self.rf[l] + 0.3 * rf
+                    if lr > 0.05 * a.lr and l < L - 1:                       # kronq2: hidden layers only; the output layer is linear in its weights
+                        if self.rf[l] > 1.5 * a.lr_kappa: self.eta[l] *= 0.7
+                        elif self.rf[l] < a.lr_kappa / 1.5: self.eta[l] *= 1.25
+                        self.eta[l] = min(max(self.eta[l], 1e-3), 1e3)
+                    if l == L - 2: self.eta[L - 1] = self.eta[L - 2]            # output layer follows the last hidden layer
+                    if emit is not None and (diag_now or step % a.eval_every < a.check_every): emit(f'rf_l{l}', self.rf[l], step); emit(f'eta_l{l}', self.eta[l], step)
         if tm is not None: tm['upd'] += t() - t0

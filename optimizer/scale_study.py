@@ -69,6 +69,9 @@ p.add_argument('--sign_floor', type=float, default=0.0, help='kronqf: soft sign 
 p.add_argument('--topk', type=int, default=0, help='kronqf: push only the k modes with the largest curvature per layer (0 = all live)')
 p.add_argument('--lr_kappa', type=float, default=0.0, help='kronqf: per-layer step multiplier eta_l from the measured function-space remainder, held at kappa (KronQ2 --lr_kappa)')
 p.add_argument('--check_every', type=int, default=10)
+p.add_argument('--eig_dtype', default='float32', choices=['float32', 'float64'], help='kronqf: dtype of the block eigendecompositions (float64 makes the null-mode exclusion real)')
+p.add_argument('--eig_adapt', type=int, default=0, help='kronqf: kronsign per-layer refresh period by basis overlap (x2 above 0.99 up to --eig_max, /2 below 0.9)')
+p.add_argument('--eig_max', type=int, default=80)
 p.add_argument('--dprev_bits', type=int, default=0, help='1: store the previous step as int8 signs and reconstruct its magnitude from the current push weight (hypergradient state 0.25 P instead of 0.5-1 P)')
 p.add_argument('--gnls', type=int, default=0, help='1: per-layer line search of the sign step against the EXACT per-sample GN curvature on the batch, '
                'q = (2/(m NOUT)) sum_x (gz(x)^T dW a(x))^2 (needs --bcurv-style per-sample gz; one matmul per layer); scale = min(1, g.D / (lr q))')
