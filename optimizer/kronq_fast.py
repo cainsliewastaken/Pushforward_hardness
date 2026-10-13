@@ -293,7 +293,8 @@ class KronQFast:
             bc1 = 1 - a.b1 ** self.t_step; bc2 = 1 - a.b2 ** self.t_step
             return (Cf / bc1) / ((V2f / bc2).sqrt() + a.eps), lam, live
         w = torch.ones_like(g)
-        if a.q != 0: w = w * (lam / lmax).clamp(min=1e-300) ** (0.5 * a.q)
+        qq = a.q_in if (l == 0 and a.q_in != 0) else a.q                 # per-mode weight exponent; --q_in overrides it on the input layer
+        if qq != 0: w = w * (lam / lmax).clamp(min=1e-300) ** (0.5 * qq)
         if a.hyper: w = w * torch.exp(self.u[l].float())
         sgn = torch.sign(Cf) if a.sign_floor <= 0 else Cf / (Cf.abs() + a.sign_floor * float(Cf.abs().max()) + 1e-30)
         D = torch.where(live, w * sgn, torch.zeros_like(g))

@@ -66,7 +66,12 @@ LM, lift-aware two-regime); the Adam rule losing (its normalisation is neither b
     error 0.48-0.56 rough (worse than AdamW 0.39) and 0.006-0.04 smooth (40x worse than the reference). Prediction (loses
     on rough) confirmed; the smooth prediction (competitive) was wrong because affordable M truncates the series far
     from the ridge: the Kronecker diagonal solve is a better ridge than 8 exact Krylov terms.
-  * (to do) delta_k across the spectrum: scan single modes at each lambda decile (added to --radius_scan as mode_d0..d9);
+  * (DONE, REPORT 61 item 19) delta_k across the spectrum: flat in parameter units on the hidden layer (3-6, top deciles
+    0.6-1; learned weight flat 0.97-1.0), proportional to 1 / leverage on the input layer (constant output radius 0.2-0.7 per
+    mode; learned weight rising 0.9 -> 2.9 toward slow modes, tracking the direction but not the 100x size). The box branch
+    is therefore d_k = delta sign(g_k) on the hidden layer and d_k ~ sign(g_k) / s_k (equal output change per mode, q = -1)
+    on the input layer; --q_in -1 implements the latter.
+  * (was) delta_k across the spectrum: scan single modes at each lambda decile (added to --radius_scan as mode_d0..d9);
     the box branch with a common push assumes delta_k roughly flat, which REPORT 57 found for the second derivative at
     width 160.
   * (to do) the learned weight u_ij against the measured delta_k decile by decile (Cor. 8(c) replaced by: u tracks the box).

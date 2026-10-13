@@ -1458,3 +1458,27 @@ Caveats: one seed; baselines untuned (3 fixed lrs, no schedule, beta2 = 0.99); 5
    budget, with the learned per-mode weight as the estimate of delta_k. It explains items 4-15 and 17 without lookahead,
    lift or concavity. To measure: delta_k by lambda decile (scan extended with one mode per decile), the learned weight
    against it; open: the smooth-target length (a damping), the late-run degradation, momentum and decay.
+19. DECILE SCAN (job 59729964, 1 node, 4 min; runs/scale_decile/; reference configuration, 2000 steps, scans at 100 / 500 /
+   1500, one single-mode direction per lambda decile = the mode with the largest |g| in the decile, plus the learned weight
+   and lambda medians per decile). Single-mode radius s* (parameter units) and s* x leverage (output units):
+   ROUGH, layer 1 (hidden -> hidden), step 500: s* = 0.60, 0.95, 3.9, 3.9, 1.8, 6.6, 3.2, 4.5, 5.9, 5.0 for deciles 0-9
+   while the leverage falls 5.85 -> 0.065 (90x) and lambda 2.4e-6 -> 1e-8: the box is FLAT in parameter units (3-6)
+   from decile 2 on, smaller (0.6-1) on the top deciles; the learned weight exp(u) is 0.965 ... 0.995, flat and lowest on
+   decile 0. Same at 1500 (0.8-14, flat in the middle). The uniform push is the right box step on this layer.
+   ROUGH, layer 0 (input layer), step 500: s* = 0.022, 0.19, 0.28, 0.91, 1.55, 1.3, 2.2, 2.7, 5.4, 18 (800x, rising toward
+   slow modes) while s* x lev = 16, 0.71, 0.31, 0.41, 0.45, 0.28, 0.26, 0.22, 0.30, 0.59: constant in OUTPUT units (0.2-0.7)
+   below the top decile, i.e. the per-mode radius goes as 1 / leverage, delta_k ~ 1 / s_k (the 1/sqrt(alpha_j) of
+   TRUST_REGION section 5: the input modes' variance spans the deciles). The learned weight rises 0.90, 1.20, 1.55, 1.78,
+   2.04, 2.83, 2.94, 2.72, 2.55, 2.36: the hypergradient tracks the direction of the box (larger pushes on slower input
+   modes) but by 3x where the radius grows 100x. Same at 1500 (weights 0.68 -> 3.6).
+   SMOOTH: layer 1 radii erratic across deciles (0.04-20, several at the noise floor), weights flat 1.29-1.35; layer 0
+   weights 1.06-1.2. Single-mode values with s* at the smallest grid length (lev ~ 0.01-0.05: the linear response is at
+   the fp32 noise floor) are not measurements and are left out above.
+   Alignment: single modes ~0 (|cosE| < 0.05) on both targets; sign 0.43 / step 0.34 (rough l1, step 500) as in item 17.
+   Reading. (a) The box branch of the derivation (item 18) is confirmed on the hidden layer with a flat delta_k, and the
+   learned weights are flat there: the uniform push is derived for that layer. (b) On the input layer the box is in
+   output units per mode: the box step is d_k ~ sign(g_k) / s_k, equal output change per mode, the q = -1 profile of the
+   old per-mode rule (KRONQ_STEP_NOTE: "q = -1 above the cutoff"), and the hypergradient reproduces its direction but not
+   its size. Prediction: --q_in -1 (weight (lam / lam_max)^(-1/2) on the input layer, cap and budget as now) improves the
+   rough result; the sign push today is 10-100x inside the radius on the slow input modes. To run: reference vs --q_in -1
+   vs --q_in -0.5, both targets (6 runs, one node, 15 min).
