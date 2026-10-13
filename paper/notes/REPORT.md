@@ -1760,6 +1760,23 @@ Caveats: one seed; baselines untuned (3 fixed lrs, no schedule, beta2 = 0.99); 5
    is therefore a budget on the HELD-OUT output change (one forward on a fresh batch per step, 0.33 F0), not on the batch
    output change and not on the pre-activation change. Implemented as --rem_val (budget measured on a fresh batch; the
    training-batch budget kept as well). Not yet run.
+31. HELD-OUT BUDGET (job 59756224, 1 node, 10 min; --rem_val 0.2 on a fresh batch each step, batch budget 0.2 kept;
+   scale_remval.sh; runs/scale_remval/). Rough lr 1e-3: 0.0603 (reference 0.0612; the held-out budget barely binds:
+   held-out change / residual 0.19 at 250 then 0.15 ... 0.01); smooth lr 1e-3: 1.37e-4 (reference 1.41e-4). Rough lr 2e-3
+   and 3e-3: STILL COLLAPSE to the mean (0.65 / 0.64 at step 250) with BOTH budgets holding the per-step output change at
+   <= 0.2 ||E|| on the batch and on fresh data. So the collapse is not a step-LENGTH-measurement problem either: it is the
+   VALUE of the budget. Reading (item 22's held-out decomposition): the held-out loss change of a step of relative output
+   size rho and alignment c is -2 c rho + rho^2 (times ||E||^2); it is negative only for rho < 2c, and the held-out
+   alignment early in a rough run is c ~ 0.10-0.12 (item 22), so the break-even is rho* ~ 0.2-0.24 and the budget 0.2 sits
+   AT it. With lr 1e-3 the natural step early is 0.15-0.20 (just inside: slow progress, alignment improves, the run goes);
+   with lr >= 2e-3 the natural step is above and is cut to exactly 0.2: zero or negative held-out progress per step, the
+   function degrades, the alignment falls, and the run slides to the mean. This explains 0.2 > 0.1 (0.1 is inside the
+   break-even but half the useful length), the batch-1024 result (higher alignment, higher break-even, 0.3-0.4 better),
+   and the lr sensitivity. The derived length is therefore not a constant at all: the step that minimises the held-out
+   quadratic along the direction is rho = c, i.e. the exact LINE SEARCH on the fresh batch, alpha = <E_v, -df_v> / ||df_v||^2
+   with df_v = f(theta + d) - f(theta) on the fresh batch (the same two forwards as the held-out budget; no constant).
+   Implemented as --ls_val (alpha clipped to [0, 1]). Not yet run. Prediction: lr-insensitive, >= the reference on both
+   targets, and the batch budget becomes unnecessary.
 
 25 (this fork). APPROXIMATION CONTROLS AND BASIS TRACKING (job 59749741, 1 node, 12 min; optimizer/tracking.py, --track;
    scale_exact.sh; runs/scale_exact/). Width 4096, both targets: reference fast configuration (blocks 256, bf16 state, two

@@ -608,7 +608,7 @@ class KronQFast:
                     sc = 1.0 - a.rem / rho
                     for l in range(L): self.Wt[l].data.add_(sc * lr * self.eta[l] * Dws[l])
                 if diag_now: emit('rem_rho', rho, step)
-            if a.rem_val > 0 and self.xv_fresh is not None:   # REPORT 61 item 30: the budget on a FRESH batch (the cross-kernel effect, Cor. 24a)
+            if (a.rem_val > 0 or a.ls_val) and self.xv_fresh is not None:   # REPORT 61 item 30: the budget on a FRESH batch (the cross-kernel effect, Cor. 24a)
                 xv_, yv_ = self.xv_fresh; sc_b = (1.0 - a.rem / rho) if (a.rem > 0 and rho > a.rem) else 0.0   # fraction already undone by the batch budget
                 steps_taken = [(1.0 - sc_b) * lr * self.eta[l] * Dws[l] for l in range(L)]                   # the step as applied so far
                 f1v = self.forward(xv_)
@@ -616,7 +616,11 @@ class KronQFast:
                 f0v = self.forward(xv_)
                 for l in range(L): self.Wt[l].data.sub_(steps_taken[l])
                 rho_v = float((f1v - f0v).norm() / ((f0v - yv_).norm() + 1e-30))
-                if rho_v > a.rem_val:
+                if a.ls_val:                                   # REPORT 61 item 31: exact line search on the fresh batch, alpha = <E_v, -df> / ||df||^2
+                    dfv = f1v - f0v; alpha = float(-((f0v - yv_) * dfv).sum() / ((dfv * dfv).sum() + 1e-30)); alpha = min(max(alpha, 0.0), 1.0)
+                    for l in range(L): self.Wt[l].data.add_((1.0 - alpha) * steps_taken[l])
+                    if diag_now: emit('lsv_alpha', alpha, step); emit('lsv_cos', float(-((f0v - yv_) * dfv).sum() / ((f0v - yv_).norm() * dfv.norm() + 1e-30)), step)
+                elif rho_v > a.rem_val:
                     scv = 1.0 - a.rem_val / rho_v
                     for l in range(L): self.Wt[l].data.add_(scv * steps_taken[l])
                 if diag_now: emit('remv_rho', rho_v, step)
