@@ -145,6 +145,7 @@ class KronQFast:
         self.cres = [None] * self.L if (a.alloc2 or a.curv) else None   # residual curvature per mode c_ij = <E, f_uu> (LOOKAHEAD_THEORY Prop. 10)
         self.cres_n = [0] * self.L                                        # samples since the basis last changed: running mean, then EMA (not transportable)
         self.T_eff = 1.0
+        self.scan_steps = set(int(x) for x in a.radius_scan.split(',')) if a.radius_scan else set()
         self.eta = [1.0] * self.L; self.refresh_cur = a.refresh; self.emp_scale = [None] * self.L
         self.period = [a.refresh] * self.L; self.next_ref = [1] * self.L; self.rf = [None] * self.L
         self.last_gamma = [None] * self.L; self.kappa = a.lr_kappa if a.lr_kappa > 0 else a.sphere
@@ -212,6 +213,31 @@ class KronQFast:
                     emit(f'curvcheck_l{l}_i{ii}_j{jj}_c_vecdense', float(((US ** 2).T @ (rc.T @ (atc * atc)))[ii, jj]), step)
                     emit(f'curvcheck_l{l}_i{ii}_j{jj}_gh_ratio', float((gh - hgrad[l]).norm() / (gh.norm() + 1e-30)), step)
                     emit(f'curvcheck_l{l}_i{ii}_j{jj}_at_ratio', float((at_ - atc).norm() / (at_.norm() + 1e-30)), step)
+    def radius_scan(self, xb, l, dirs, s0, emit, step, nl=13):
+        """Taylor radius along several directions at the current point: for each unit direction u, the relative remainder
+        rf(s) = ||f(W + s u) - f(W) - s J u|| / (s ||J u||) on a log grid of lengths s around the step's length s0, the
+        leverage ||J u|| (output change per unit length), and the length s* at which rf first reaches 0.1, in parameter
+        units and in output units (s* ||J u||). TF32 off."""
+        W0 = self.Wt[l].data; grid = [s0 * 10 ** (-3 + 5.0 * k / (nl - 1)) for k in range(nl)]
+        with exact_fp32():
+            f0 = self.forward_with(xb, l, W0)
+            for name, Dir in dirs.items():
+                u = Dir / (float(Dir.norm()) + 1e-30)
+                _, Ju = jvp(lambda Wl: self.forward_with(xb, l, Wl), (W0,), (u,)); lev = float(Ju.norm())
+                E0 = (f0 - self._scan_yb).flatten(); cosE = float((E0 @ Ju.flatten()) / (E0.norm() * Ju.norm() + 1e-30))   # alignment of the descent step's output response (-J u) with -E
+                emit(f'rscan_{name}_l{l}_cosE', cosE, step)
+                rfs = []
+                for k, s_ in enumerate(grid):
+                    f1 = self.forward_with(xb, l, W0 + s_ * u); rf = float((f1 - f0 - s_ * Ju).norm() / (s_ * lev + 1e-30)); rfs.append(rf)
+                    emit(f'rscan_{name}_l{l}_rf{k}', rf, step)
+                sstar = float('nan')
+                for k in range(1, nl):
+                    if rfs[k - 1] < 0.1 <= rfs[k]:
+                        a0, a1 = math.log(grid[k - 1]), math.log(grid[k]); r0, r1 = math.log(max(rfs[k - 1], 1e-12)), math.log(rfs[k])
+                        sstar = math.exp(a0 + (math.log(0.1) - r0) * (a1 - a0) / (r1 - r0)); break
+                if math.isnan(sstar) and rfs[0] >= 0.1: sstar = grid[0]
+                emit(f'rscan_{name}_l{l}_sstar', sstar, step); emit(f'rscan_{name}_l{l}_lev', lev, step)
+                emit(f'rscan_{name}_l{l}_sstar_out', sstar * lev, step); emit(f'rscan_{name}_l{l}_s0', s0, step)
     def forward_with(self, x, lw, Wl):
         """forward using Wl in place of Wt[lw] (functional; for jvp)."""
         h = x
@@ -290,7 +316,7 @@ class KronQFast:
         # every backward that passes through it (the probe's included, ~m ny / 2 times larger), so it cannot be read later
         hgrad = [h.grad.clone() if h.grad is not None else None for h in self.cache['h']] if self.cres is not None else None
         ztgrad = [zt.grad.clone() if zt.grad is not None else None for zt in self.cache['zt']] if a.S_mode == 'emp' else None
-        diag_now = emit is not None and (step % a.eval_every == 0 or step == a.steps)
+        diag_now = emit is not None and (step % a.eval_every == 0 or step == a.steps or step in self.scan_steps)
         # ---- statistics in the current basis
         if need_stats or a.gnls:
             t0 = t() if t else None
@@ -397,6 +423,10 @@ class KronQFast:
                             emit(f'u_q50_concave_l{l}', float(self.u[l].float()[conc].median()), step); emit(f'u_q50_convex_l{l}', float(self.u[l].float()[~conc].median()), step)
                     if a.alloc2: emit(f'alloc2_mu_over_lmax_l{l}', self.last_gamma[l], step)
                     if a.alloc and self.last_gamma[l] is not None: emit(f'alloc_gamma_over_lmax_l{l}', self.last_gamma[l], step); emit(f'alloc_fitfrac_l{l}', float((lam > self.last_gamma[l] * float(lam.max())).float().mean()), step)
+                    if a.radius_scan and step in self.scan_steps and l < L - 1:
+                        lmax_ = float(lam.max()); top = torch.zeros_like(g); ij = torch.argmax(g.abs()); top.view(-1)[ij] = 1.0
+                        rs_dirs = {'step': D, 'grad': g, 'sign': torch.sign(g), 'ridge2': g / (lam + 1e-2 * lmax_), 'ridge4': g / (lam + 1e-4 * lmax_), 'rand': torch.randn_like(g), 'mode': top}
+                        self._scan_yb = yb; self.radius_scan(xb, l, rs_dirs, float(lr * self.eta[l] * D.norm()), emit, step)
                     if l == (1 if L > 2 else 0):               # shape of the Taylor radius: remainder and leverage along five directions at the step's length
                         lmax_ = float(lam.max()); dirs = {'step': D, 'grad': g, 'rand': torch.randn_like(g),
                                                           'ridge2': g / (lam + 1e-2 * lmax_), 'ridge4': g / (lam + 1e-4 * lmax_)}
