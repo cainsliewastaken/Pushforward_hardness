@@ -312,8 +312,17 @@ class KronQFast:
             V2 = self.V2[l]; V2f = V2.float() if a.mom_adapt else V2.float() * a.b2 + (g * g) * (1 - a.b2)
             if update_state and not a.mom_adapt: self.V2[l] = V2f.to(V2.dtype)
             bc1 = 1 - a.b1 ** self.t_step; bc2 = 1 - a.b2 ** self.t_step
-            return (Cf / bc1) / ((V2f / bc2).sqrt() + a.eps), lam, live
+            D = (Cf / bc1) / ((V2f / bc2).sqrt() + a.eps)
+            if not a.adam_fair: return D, lam, live
+            if a.hyper: D = D * torch.exp(self.u[l].float())                      # fair comparison: the learned weight and the cap on the Adam rule too
+            if a.cap:
+                capv = g.abs() / (lam.clamp(min=1e-30) * max(lr * self.eta[l], 1e-30) * L); D = torch.sign(D) * torch.minimum(D.abs(), capv)
+            return D, lam, live
         w = torch.ones_like(g)
+        if a.wrule == 'derived':                      # MECHANISM.md section 3: w ~ e_k erf(SNR_k / sqrt 2) / s_k with the Kronecker SNR
+            snr = math.sqrt(a.batch) * Cf.abs() / (lam.clamp(min=1e-30) * self.nout / 2.0).sqrt() * math.sqrt(1.0 / (1 - a.b1))   # momentum SNR
+            w = (Cf.abs() / lam.clamp(min=1e-30)) * torch.erf(snr / math.sqrt(2.0))
+            w = w / (w.median() + 1e-30); w = w.clamp(a.wrule_min, a.wrule_max)
         qq = a.q_in if (l == 0 and a.q_in != 0) else a.q                 # per-mode weight exponent; --q_in overrides it on the input layer
         if a.qa != 0 and l < L - 1 and self.A[l].e is not None:            # TRUST_REGION: the layer's radius is a sphere in pre-activation space,
             al = self.A[l].e; w = w * (al / float(al.max())).clamp(min=a.q_floor)[None, :] ** (0.5 * a.qa)   # i.e. ~ 1/sqrt(alpha_j) per mode
@@ -384,6 +393,20 @@ class KronQFast:
                     self.A[l].update(at, a.beta_stats)
                     if not self.S[l].diag: self.S[l].update(d, a.beta_stats)
                     else: self.S[l].update(d, a.beta_stats)
+                    if diag_now and emit is not None and l < L - 1 and self.S[l].e is not None and self.A[l].e is not None and hgrad is not None and hgrad[l] is not None:
+                        # per-sample spread of the mode's gradient term (MECHANISM Lemma 1 / assumption S): z_x,ij = d~_x,i a~_x,j, true residual
+                        zt_ = self.cache['zt'][l].detach(); z_ = self.S[l].cols_from_basis(zt_)
+                        gd1 = 0.5 * (1 + torch.erf(z_ / math.sqrt(2.0))) + z_ * torch.exp(-0.5 * z_ * z_) * 0.3989422804014327   # gelu'
+                        dtil = self.S[l].cols_to_basis(hgrad[l] * gd1)                                  # m x o, rotated dL/dz
+                        lam_ = self.S[l].e[:, None] * self.A[l].e[None, :] * (2.0 / self.nout); order = torch.argsort(lam_.flatten(), descending=True); n_ = order.numel()
+                        for dec in range(10):
+                            seg = order[dec * n_ // 10:(dec + 1) * n_ // 10][torch.randperm(max(1, n_ // 10), device=order.device)[:100]]
+                            ii_ = seg // lam_.shape[1]; jj_ = seg % lam_.shape[1]
+                            zx = dtil[:, ii_] * at[:, jj_]                                              # m x 100 per-sample terms
+                            mu = zx.mean(0); sd = zx.std(0); lam_s = lam_.flatten()[seg]
+                            emit(f'spread_tau_d{dec}_l{l}', float((sd / lam_s.clamp(min=1e-30).sqrt()).median()), step)        # tau_k = std / s_k: flat if (S)
+                            emit(f'spread_snr_d{dec}_l{l}', float((mu.abs() / (sd / math.sqrt(zx.shape[0]) + 1e-30)).median()), step)   # per-batch SNR
+                            emit(f'spread_snrk_d{dec}_l{l}', float((math.sqrt(zx.shape[0]) * mu.abs() / lam_s.clamp(min=1e-30).sqrt()).median()), step)   # the Kronecker estimate
                     if self.cres is not None and l < L - 1 and hgrad[l] is not None:
                         # c_ij = sum_x sum_a (q_i)_a^2 (dL/dh_x)_a act''(z_xa) (a~_xj)^2: the mode's second derivative on the residual
                         zt_ = self.cache['zt'][l]; z_ = self.S[l].cols_from_basis(zt_.detach()); dlh = hgrad[l]
@@ -472,7 +495,7 @@ class KronQFast:
                         self.sc2[l] = c2.to(self.sc2[l].dtype)
                     else: c2 = torch.zeros_like(g)
                     self.u[l] = (self.u[l].float() + a.sc_rate * (c_ + c2)).clamp(-a.u_clamp, a.u_clamp).to(self.u[l].dtype)
-                elif a.hyper and a.rule != 'adam' and self.Dprev[l] is not None:        # kronq3h one-step / traced hypergradient on u
+                elif a.hyper and (a.rule != 'adam' or a.adam_fair) and self.Dprev[l] is not None:        # kronq3h one-step / traced hypergradient on u
                     Dp = self.Dprev[l].float() if not a.dprev_bits else self.Dprev[l].float() * torch.exp(self.u[l].float())
                     if a.horizon > 1:
                         gam = 1 - 1.0 / a.horizon
@@ -490,7 +513,7 @@ class KronQFast:
                 D, lam, live = self.direction(l, g, Cf, lr)
                 if a.mom_adapt: self.Dabs[l] = D.abs().to(torch.bfloat16 if a.compress else torch.float32)
                 if a.hyper and a.hyper_rule == 'signcorr': self.Dprev2[l] = self.Dprev[l]
-                if a.hyper and a.rule != 'adam': self.Dprev[l] = (torch.sign(g).to(torch.int8) if a.hyper_rule == 'signcorr' else (D.to(self.u[l].dtype) if not a.dprev_bits else torch.sign(D).to(torch.int8)))
+                if a.hyper and (a.rule != 'adam' or a.adam_fair): self.Dprev[l] = (torch.sign(g).to(torch.int8) if a.hyper_rule == 'signcorr' else (D.to(self.u[l].dtype) if not a.dprev_bits else torch.sign(D).to(torch.int8)))
                 if a.gnls:                                   # exact-GN line search along D on the batch
                     at = self.cache['at'][l].detach(); dz = self.cache['zt'][l]
                     sx = (gzt[l].detach() * (at @ D.T)).sum(1); q = float((sx * sx).mean()) * (2.0 / self.nout); gD = float((g * D).sum())
