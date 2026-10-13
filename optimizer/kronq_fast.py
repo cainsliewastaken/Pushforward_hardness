@@ -258,6 +258,9 @@ class KronQFast:
                         sstar = math.exp(a0 + (math.log(0.1) - r0) * (a1 - a0) / (r1 - r0)); break
                 if math.isnan(sstar) and rfs[0] >= 0.1: sstar = grid[0]
                 emit(f'rscan_{name}_l{l}_sstar', sstar, step); emit(f'rscan_{name}_l{l}_lev', lev, step)
+                if l < self.L - 1 and sstar == sstar:
+                    at_ = self.cache['at'][l].detach(); zt_ = self.cache['zt'][l].detach()
+                    emit(f'rscan_{name}_l{l}_dzrel', float((sstar * (at_ @ u.T)).norm() / (zt_.norm() + 1e-30)), step)   # ||dz|| / ||z|| at the radius
                 emit(f'rscan_{name}_l{l}_sstar_out', sstar * lev, step); emit(f'rscan_{name}_l{l}_s0', s0, step)
     def forward_with(self, x, lw, Wl):
         """forward using Wl in place of Wt[lw] (functional; for jvp)."""
@@ -590,6 +593,12 @@ class KronQFast:
             if a.rem > 0 or self.kappa > 0:
                 f_before = out.detach()
             for l in range(L): self.Wt[l].data.sub_(lr * self.eta[l] * Dws[l])
+            if a.zbud > 0:                                   # per-layer pre-activation budget (TRUST_REGION: the layer's radius is a sphere in z-space)
+                for l in range(L - 1):
+                    at = self.cache['at'][l].detach(); zt = self.cache['zt'][l].detach()
+                    dz = (lr * self.eta[l]) * (at @ Dws[l].T); rz = float(dz.norm() / (zt.norm() + 1e-30))
+                    if rz > a.zbud: self.Wt[l].data.add_((1.0 - a.zbud / rz) * lr * self.eta[l] * Dws[l])
+                    if diag_now: emit(f'zbud_rho_l{l}', rz, step)
             if a.rem > 0:
                 f_after = self.forward(xb); rho = float((f_after - f_before).norm() / ((f_before - yb).norm() + 1e-30))
                 if rho > a.rem:
