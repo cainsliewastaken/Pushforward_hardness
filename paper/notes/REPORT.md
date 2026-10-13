@@ -1793,6 +1793,28 @@ Caveats: one seed; baselines untuned (3 fixed lrs, no schedule, beta2 = 0.99); 5
    is worth an extra pass. The per-layer budget (item 30) also lost. The length rule to keep is the free one (batch output
    budget + schedule), with the derived bracket c <= rho <= 2c as its explanation and the batch-scaling of the constant
    (item 27) as its one practical consequence. The length line is closed.
+33. BASIS-COST TESTS T1, T2 (job 59758020, 1 node, 4 min; --S_identity, --A_identity; scale_basis1.sh; runs/scale_basis1/;
+   plan: the side chat's basis-cost list). One run per GPU (isolated). Reference 0.0612 / 1.41e-4, state 1.96 / P.
+   | variant | rough | smooth | state / P | isolated wall per 600 steps (fb / stats / eig / update) |
+   | reference (A and S bases) | 0.0612 | 1.41e-4 | 1.96 | 49 s (1.4 / 1.2 / 42.9 / 3.7) |
+   | T1: A-only basis, S diagonal, probe at refresh steps only | 0.0910 | 1.45e-4 | 1.73 | 23 s (1.1 / 0.5 / 17.1 / 3.7) |
+   | T2: coordinates only (no basis, diagonal curvature) | 0.6357 (collapse) | 6.5e-4 | 1.50 | 5 s (0.7 / 0.1 / 0.1 / 3.6) |
+   | AdamW | 0.39 | 7.2e-4 | 2.00 | 2 s (0.5 / 0 / 0 / 0.8) |
+   (a) THE BASIS IS WHAT CARRIES THE ROUGH TARGET. In weight coordinates the same rule (sign of the momentum, learned
+       per-coordinate weights, output budget, diagonal cap) collapses to the mean on rough and is AdamW-class on smooth.
+       The A side alone (input-covariance eigenbasis) recovers most of it (0.091, 1.5x off the reference) and all of the
+       smooth result; the S side is worth the remaining 1.5x on rough and nothing on smooth. (The earlier reading "the
+       basis buys nothing", item 13, was about SOAP's basis vs ours for a magnitude rule; it does not transfer to
+       "no basis".)
+   (b) WALL CORRECTION. In isolation the reference configuration (subspace iteration, adaptive refresh with floor 5) is
+       82 ms per step over the first 600 steps, 88 % of it in the per-refresh subspace iterations (the batched QR), i.e.
+       25x AdamW's 3.3 ms, not the 2-3x stated in items 11 and 28 (which held for a fixed refresh every 20 steps: 24 ms).
+       Over 5000 steps the adaptive period grows and the average is ~90 ms / step (scale_profile j0: 449 s) against
+       AdamW's 6.6 ms: ~14x. T1 halves the refresh cost (one side), T2 removes it (5 s / 600 steps: 2.5x AdamW) and loses
+       the rough target. So the cost that matters is the refresh frequency x the per-refresh factorisation cost, and the
+       accuracy that matters comes from the A side's basis being fresh. The plan's T3 (fixed input-layer A), T4 (global
+       top-k subspace per side with the complement in coordinates) and a refresh-floor control are the right next tests;
+       the per-side overlap diagnostic (now logged) decides how often each side needs refreshing.
 
 25 (this fork). APPROXIMATION CONTROLS AND BASIS TRACKING (job 59749741, 1 node, 12 min; optimizer/tracking.py, --track;
    scale_exact.sh; runs/scale_exact/). Width 4096, both targets: reference fast configuration (blocks 256, bf16 state, two
