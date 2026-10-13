@@ -430,6 +430,8 @@ class KronQFast:
                         for dec in range(10):                        # one mode per lambda decile (the mode with the largest |g| in the decile)
                             seg = order[dec * nm // 10:(dec + 1) * nm // 10]; k = seg[torch.argmax(g.flatten()[seg].abs())]
                             md = torch.zeros_like(g); md.view(-1)[k] = 1.0; rs_dirs[f'moded{dec}'] = md
+                            if a.hyper: emit(f'u_q50_d{dec}_l{l}', float(self.u[l].float().flatten()[seg].median()), step)   # learned weight per decile
+                            emit(f'lam_q50_d{dec}_l{l}', float(lam.flatten()[seg].median()), step)
                         self._scan_yb = yb; self.radius_scan(xb, l, rs_dirs, float(lr * self.eta[l] * D.norm()), emit, step)
                     if l == (1 if L > 2 else 0):               # shape of the Taylor radius: remainder and leverage along five directions at the step's length
                         lmax_ = float(lam.max()); dirs = {'step': D, 'grad': g, 'rand': torch.randn_like(g),
