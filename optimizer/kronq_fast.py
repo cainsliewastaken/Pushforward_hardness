@@ -147,6 +147,7 @@ class KronQFast:
         if a.mom_adapt and self.V2 is None: self.V2 = [torch.zeros(W.shape, device=dev, dtype=torch.bfloat16 if a.compress else torch.float32) for W in self.Wt]
         self.Tk_log = [None] * self.L; self.m2s = [None] * self.L   # smoothed de-biased signal^2 per mode (mom_adapt)
         self.Dabs = [None] * self.L                                    # |D| of the previous step per mode (staleness limit)
+        self.sc = [None] * self.L                                      # smoothed lag-1 sign correlation per mode (signcorr rule)
         self.cres = [None] * self.L if (a.alloc2 or a.curv) else None   # residual curvature per mode c_ij = <E, f_uu> (LOOKAHEAD_THEORY Prop. 10)
         self.cres_n = [0] * self.L                                        # samples since the basis last changed: running mean, then EMA (not transportable)
         self.T_eff = 1.0
@@ -417,6 +418,7 @@ class KronQFast:
                     if self.V2 is not None: self.V2[l] = tr(self.V2[l].float(), True).to(self.V2[l].dtype)
                     if self.m2s[l] is not None: self.m2s[l] = tr(self.m2s[l].float(), True).to(self.m2s[l].dtype)
                     if self.Dabs[l] is not None: self.Dabs[l] = tr(self.Dabs[l].float(), True).to(self.Dabs[l].dtype)
+                    if self.sc[l] is not None: self.sc[l] = tr(self.sc[l].float(), True).to(self.sc[l].dtype)
                     if self.lamx is not None and self.lamx[l] is not None: self.lamx[l] = tr(self.lamx[l].float(), True).to(self.lamx[l].dtype)
                     if self.cres is not None: self.cres[l] = None; self.cres_n[l] = 0   # (p_j . a)^2 has cross terms under a basis change: restart in the new basis
                     if old_ok and a.adapt_refresh > 0:              # kronq2: relative change of the first-order decrease g.D
@@ -459,10 +461,11 @@ class KronQFast:
                     bk = 1 - 1.0 / Tk; C.copy_((C.float() * bk + g * (1 - bk)).to(C.dtype)); self.Tk_log[l] = Tk
                 else: C.mul_(a.b1).add_(g.to(C.dtype), alpha=1 - a.b1)
                 Cf = C.float()
-                if a.hyper and a.hyper_rule == 'rprop' and self.Dprev[l] is not None:   # sign-consistency rule: grow the mode's step while
-                    sp = torch.sign(self.Dprev[l].float()); sg = torch.sign(g)              # the gradient keeps its sign, cut it when it flips
-                    un = self.u[l].float() + torch.where(sp * sg > 0, torch.full_like(g, math.log(a.rprop_up)), torch.where(sp * sg < 0, torch.full_like(g, math.log(a.rprop_down)), torch.zeros_like(g)))
-                    self.u[l] = un.clamp(-a.u_clamp, a.u_clamp).to(self.u[l].dtype)
+                if a.hyper and a.hyper_rule == 'signcorr' and self.Dprev[l] is not None:  # sign-correlation rule (ACF item 24): the smoothed
+                    sp = torch.sign(self.Dprev[l].float()); sg = torch.sign(g)              # lag-1 sign correlation c_k is 0 for white noise,
+                    if self.sc[l] is None: self.sc[l] = torch.zeros_like(g, dtype=self.u[l].dtype)   # > 0 persistent, < 0 oscillating
+                    c_ = self.sc[l].float() * a.sc_beta + (sp * sg) * (1 - a.sc_beta); self.sc[l] = c_.to(self.sc[l].dtype)
+                    self.u[l] = (self.u[l].float() + a.sc_rate * c_).clamp(-a.u_clamp, a.u_clamp).to(self.u[l].dtype)
                 elif a.hyper and a.rule != 'adam' and self.Dprev[l] is not None:        # kronq3h one-step / traced hypergradient on u
                     Dp = self.Dprev[l].float() if not a.dprev_bits else self.Dprev[l].float() * torch.exp(self.u[l].float())
                     if a.horizon > 1:
@@ -480,7 +483,7 @@ class KronQFast:
                     self.u[l] = un.clamp(-a.u_clamp, a.u_clamp).to(self.u[l].dtype)
                 D, lam, live = self.direction(l, g, Cf, lr)
                 if a.mom_adapt: self.Dabs[l] = D.abs().to(torch.bfloat16 if a.compress else torch.float32)
-                if a.hyper and a.rule != 'adam': self.Dprev[l] = (D.to(self.u[l].dtype) if not a.dprev_bits else torch.sign(D).to(torch.int8))
+                if a.hyper and a.rule != 'adam': self.Dprev[l] = (torch.sign(g).to(torch.int8) if a.hyper_rule == 'signcorr' else (D.to(self.u[l].dtype) if not a.dprev_bits else torch.sign(D).to(torch.int8)))
                 if a.gnls:                                   # exact-GN line search along D on the batch
                     at = self.cache['at'][l].detach(); dz = self.cache['zt'][l]
                     sx = (gzt[l].detach() * (at @ D.T)).sum(1); q = float((sx * sx).mean()) * (2.0 / self.nout); gD = float((g * D).sum())
@@ -528,6 +531,10 @@ class KronQFast:
                                 emit(f'shape_rf_{name}_l{l}', float((f1 - f0 - Jd).norm() / (Jd.norm() + 1e-30)), step)
                                 emit(f'shape_lev_{name}_l{l}', float(Jd.norm() / (d.norm() + 1e-30)), step)
                     if a.hyper: emit(f'u_q50_l{l}', float(self.u[l].float().median()), step)
+                    if a.hyper and a.hyper_rule == 'signcorr' and self.sc[l] is not None:
+                        order = torch.argsort(lam.flatten(), descending=True); n_ = order.numel(); scf = self.sc[l].float().flatten(); uf = self.u[l].float().flatten()
+                        for dec in range(10):
+                            seg = order[dec * n_ // 10:(dec + 1) * n_ // 10]; emit(f'sc_q50_d{dec}_l{l}', float(scf[seg].median()), step); emit(f'u_q50_d{dec}_l{l}', float(uf[seg].median()), step)
                     if a.mom_adapt and self.Tk_log[l] is not None:
                         Tk = self.Tk_log[l].flatten(); order = torch.argsort(lam.flatten(), descending=True); n_ = order.numel()
                         emit(f'Tk_q50_l{l}', float(Tk.median()), step)
