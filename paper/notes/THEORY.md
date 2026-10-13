@@ -10,7 +10,9 @@
 > n = 200 statements until redone. The exact staged model does not scale to large n (eigendecomposition per stage);
 > the ground-truth GD harness does, so the redo is training-only.**
 
-Status 2026-10-10 (night). Companion to WRITEUP.md (sections 2-10) and REPORT.md. Every statement is labelled
+Status 2026-10-12: sections 1-20 reviewed with the corrections marked REVISED / CORRECTION / downgraded (2026-10-12);
+experiments required by the review are in EXPERIMENTS.md; section 21 states what the optimizer line can and cannot
+take from here. Sections 7.1 and 12.2-12.4 were moved to their numerical places. Companion to WRITEUP.md (sections 2-10) and REPORT.md. Every statement is labelled
 THEOREM (exact, proof given), PROPOSITION (exact under the stated assumptions), or FINDING (measured; sample given).
 
 ## 0. Setting and notation
@@ -199,6 +201,11 @@ E(T) over N (not yet run; a few GPU-minutes per pair at this size).
 Remark. Theorem 10 also explains Proposition 9b from the other side: the information that separates the two
 networks is carried by the weights' action outside the span of the data activations, which no data-indexed quantity
 at init can see, and which enters the data-indexed dynamics only as the activations move.
+Scope (added 2026-10-12). The construction needs a hidden-hidden interface: for the first layer the incoming
+activations are the inputs (rank d_in + 1 = H_{l-1}), and for the output layer the outgoing signal is the identity
+(rank ny = H_l), so no N exists there. A network with ONE hidden layer has no such interface and Theorem 10 gives no
+ambiguity for it; the conditioning statement of section 14 then rests on Prop. 9b and the amplification alone. The
+seed-spread measurement should therefore include depth 1 as the control in which the hidden-state channel is absent.
 
 ## 7. Spikes form whenever the network learns: the linear-response theorem (added 2026-10-11)
 
@@ -236,6 +243,34 @@ is exactly this. (ii) rank(core) <= ny: the spike is low-rank because the OUTPUT
 with many outputs the core's rank is rank(U) = rank of the residual's data-output cross-structure, a property of the
 task, not of the network. (iii) Kernel-space spikes follow from weight-space spikes to first order in the feature change.
 (iv) The propagation term (Theorem 4) is not part of dW_l and does not affect this decomposition; it enters the states.
+
+### 7.1 The spike theorem along the trajectory without independence (added 2026-10-11)
+
+What fails after initialisation is only the bookkeeping, not the rank. MEASURED (reference, t = 0.3): the cumulative
+change is still 98 % in three singular directions, but the per-unit-mean split of Theorem 11 (core = mean sigma' x drive)
+gives bulk/core = 0.9 against a dispersion prediction of 0.05: the local derivative S = sigma'(Z) and the drive M have
+become correlated across the data (the units have adapted to the residual), so the mean of sigma' is no longer the right
+rank-ny approximant of S. Independence was a convenience valid at t = 0; the rank statement never used it.
+
+THEOREM 11' (correlation-free rank bound, any time).  For the last hidden layer the instantaneous update is
+dW = -(1/n)(S (.) M)^T A with rank M <= ny EXACTLY (M = E W_out). For any rank-r approximation S_r of S with remainder S~ = S - S_r,
+      rank( (S_r (.) M)^T A ) <= ny r,          || (S~ (.) M)^T A ||_F <= ||S~||_max ||M||_F ||A||_2 / n,
+so the energy of dW outside an (ny r)-dimensional subspace is bounded by the entrywise size of the spectral tail of S.
+S itself is constrained without any assumption on correlations: Z = A_{l-1} W_l^T + b, so every column of Z lies in the
+column space of the layer below's activations on the data, whose Gram spectrum the chain tracks (steep: ~k^-5 here), and
+sigma' applied entrywise raises the numerical rank only through the Hermite coefficients of sigma' (He_k(Z) has rank at most
+that of degree-k polynomials in the columns of Z; for the first hidden layer with d_in = 3 that is C(3+k, k)). Hence
+rank_delta(S_l(t)) is controlled at every t by (i) the activation's Hermite decay at the current preactivation scale and
+(ii) the numerical rank of the preactivation matrix Z_l(t), both chain quantities. For deeper layers M_l is the layer above's
+(S (.) M) propagated through W, so the bound composes: rank(dW_l) <= ny prod_{l' >= l} rank_delta(S_{l'}).
+Proof: Hadamard rank inequality rank(X (.) Y) <= rank X . rank Y; the entrywise Frobenius bound; the column-space inclusion
+for Z; Hermite expansion of sigma'.  []
+This replaces the independence assumption by two computable spectra and holds along the whole path, for any
+activation, any width. The sharpness of the bound (how close ny r_S is to the measured effective rank) is being
+measured along the reference trajectory (code/rank_trajectory.py); numbers to follow.
+Remark on the testbed. L63 at n = 200 is nearly fit by T, so its late stage has small residuals; the late lifts are large
+(tail gains 10^2-10^4) but carry little loss. A target strongly misaligned with K_0 (or a larger n) would exercise the
+late-stage regime more; nothing in Theorems 11'/26-28 depends on the testbed.
 
 ## 8. Expansion at an arbitrary time and chaining (added 2026-10-11)
 
@@ -407,9 +442,24 @@ entrywise, with v the second-moment estimate; momentum replaces g by its exponen
 Then (i) f_dot = -K_P g with K_P = Psi P Psi^T / n >= 0 (this is why the plain-kernel regression fails on the Adam runs while
 the structure survives); (ii) K_P = sum_blocks sum_{q,p} P_l[q,p] (delta_q delta_q^T) (.) (a_p a_p^T) / n, exact, no Gram
 factorisation unless P_l is rank one; (iii) dW_l = -(1/n) int P_l (.) (Delta_l g A_l^T): the data-indexed outer-product form,
-multiplied ENTRYWISE by P_l; (iv) the stage identity, Theorem 12 and Theorem 13 hold verbatim for K_P with Psi replaced by
+multiplied ENTRYWISE by P_l; (iv) AT A FIXED TIME T, Theorem 12 and Theorem 13 hold for K_{P,T} with Psi replaced by
 P_T^{1/2}-weighted features: v^T K_{P,T} v = (1/n)||P_T^{1/2}(Psi_0^T v + D_v)||^2, and Theorem 14 with the extra factor ||P||.
 Proof: chain rule with the preconditioner; (iv) is algebra.  []
+CORRECTION (2026-10-12). The stage identity does NOT transfer verbatim along the path, because K_P changes through P as
+well as through Psi. Over a stage, with P = P(t_{s-1}) and dP = P(t_s) - P(t_{s-1}),
+      K_P(t_s) - K_P(t_{s-1}) = Cross_P + Q_P + Psi(t_s) dP Psi(t_s)^T / n,
+where Cross_P and Q_P are the stage identity with P^{1/2}-weighted features (Q_P >= 0) and the third term has the sign
+of dP. Under Adam dP is NEGATIVE on every coordinate whose second-moment estimate is still growing (early training on
+every active coordinate; later on any coordinate the drive moves into), so the "tail lifted by Q at every stage" and
+the monotonicity inputs of Cor. 50 / Thm 46 do not hold for K_P without a bound on the dP term; the lift and the
+preconditioner's decay compete, and nothing here says which wins. Three further restrictions: (a) with momentum the
+drive is the averaged gradient g_bar, f_dot = -K_P g_bar, and d||E||^2/dt = -2 E^T K_P g_bar has no sign, so the energy
+identity, Prop. 29 (Lyapunov) and the sign structure of Thm 36 are lost; (b) Adam in practice runs at its own edge of
+stability (preconditioned sharpness ~ 2/eta), the discrete regime Prop. 29 excludes; (c) the same three points apply to
+every preconditioned sign method of the optimizer line (section 21). What survives for Adam: the identities (i)-(iii),
+the fixed-time bracket (iv), Lemma 18 for the spike, and the chain as an exact description with the dP term carried as a
+named stage term. To be measured [large n]: the sign and size of v^T Psi dP Psi^T v / n per stage against Cross_P + Q_P on
+the residual-carrying modes, under Adam and under KronQ.
 LEMMA 18 (sign of low rank; STATUS: needed for the Adam spike statement, measured, not proved).  For the core, the gradient
 block G = Delta g A^T / n has rank <= ny, and Adam's P is built from G itself (v ~ time-average of G^2 entrywise), so
 P (.) G is a normalised-sign pattern of a low-rank matrix. For rank one, sign(u w^T) = sign(u) sign(w)^T exactly (rank one);
@@ -435,7 +485,7 @@ bound on the instantaneous decay rate at every time, hence on the loss decrease,
    Thm 14 drive upper bound         exact where J is C^1; ReLU via jumps
    Lemma 15 cross-term sign         derived for the core-core part; init-feature part measured (negative at t=0, positive after); NOT proved
    Thm 16 stage error               exact (C^2 along the path); the chain's convergence verified numerically
-   Thm 17 Adam identities           exact
+   Thm 17 Adam identities           exact at fixed P; along the path the stage identity carries a dP term of no fixed sign (see CORRECTION)
    Lemma 18 sign of low rank        rank one exact; general measured (erank 6-13); NOT proved
    Thm 19 residual at T             exact representation; rate bound conditional on Lemma 15; mode-wise bound needs fixed basis
 Verification still to run (login node, existing code): the bracket of Thm 13 against K(T) on the reference run (needs
@@ -481,7 +531,10 @@ network's increment-phase weight motion is O(Delta) (Theorem 20), so by the lazy
 in the linearised regime over a fixed horizon when the parameter motion is small relative to the curvature scale of the
 map) its normalised residual E~ converges to kernel regression with the FROZEN kernel K_D(t_1) = K_0 + (identity-phase
 change). Hence the normalised direct error converges to the frozen-kernel error of the increment target, which is the
-quantity the static roughness bound controls: the held-rough bound becomes TIGHT for direct as Delta -> 0. The Euler
+quantity the static roughness theory is about: for direct as Delta -> 0 the held-rough statements become FROZEN-KERNEL
+statements (no lift, fixed basis, Prop. 6 exact). "Tight" would be too strong: the floor of the held-rough section decays
+at the rate sigma_R^2 (the top of the rough subspace), the frozen-kernel error decays mode by mode at lambda_k, and the two
+agree only when the rough residual sits in the top rough mode. The Euler
 network's drive is Delta-independent; its error is the full feature-learning error, below the frozen-kernel value by the
 feature-learning gain on the increment target (Theorem 19's rate comparison, conditional on Lemma 15), so the same
 bound is loose for Euler by exactly that gain, which grows with T and with the increment's roughness (gain law).
@@ -569,54 +622,6 @@ Not addressable here: anything about test error (validation is outside the ident
     tau* ~ s^{1.5-2.0}, not s^1. The direction and the power-law form are right; the exponent needs the full chain
     (the one-line argument ignores how the drive's spectral position and the propagation term change with s).
 
-## 13. Validation error: the swap of the left Jacobian stack (added 2026-10-11)
-
-THEOREM 24 (validation dynamics, exact).  With J_val the Jacobian on validation points, the validation outputs obey
-f_val' = -(1/n) J_val J_tr^T g_tr = -K_vt g_tr, K_vt = J_val J_tr^T / n (the cross kernel). For the squared loss,
-E_val' = -K_vt(t) E_tr(t), so  -d/dt (1/2)||E_val||^2 = E_val^T K_vt(t) E_tr(t).  Everything in the chain applies with the
-left factor replaced: K_vt(t_s) - K_vt(t_{s-1}) = (dJ_val J_tr^T + J_val dJ_tr^T + dJ_val dJ_tr^T)/n, and the coherent part of
-dJ_val is the SAME weight increment (data-indexed on the training points, Theorem 3) evaluated on validation inputs:
-its activation part is the cross activation Gram A_{val,tr} applied to the drive. Under the assumption that the unit
-statistics on validation and training points agree (same preactivation distribution, same bulk ratio), the stage core
-on validation points is the training core transported by A_{val,tr}. No other change.  Proof: chain rule.  []
-Consequence (the overfitting split, exact): the validation descent rate splits as
-      E_val^T K_vt(0) E_tr   (lazy transfer: the frozen init cross-kernel acting on the current training residual)
-    + E_val^T [K_vt(t) - K_vt(0)] E_tr   (feature-learning transfer: the lifted cross-kernel).
-MEASURED (snapshots of six GD runs, rates normalised by |E_val||E_tr|; training rate for scale):
- - Early (t <~ 5): both parts positive and the validation rate is 70-110 % of the training rate: training steps reduce
-   validation error almost as fast as training error.
- - Late: the LAZY part turns NEGATIVE (H128 d6: from t = 28; H256 d8: from t = 13; H256 d4 Delta 1: from t = 16;
-   H96 d3: at t = 420): once the training residual lives in sample-specific rough modes, the frozen init cross-kernel maps
-   it into directions that INCREASE validation error — the static "held rough" overfitting mechanism, seen directly.
- - The LIFTED part stays POSITIVE in the same window (e.g. H128 d6 at t = 28-840: lifted +0.037..+0.0013 vs lazy
-   -0.011..-0.0005; H256 d8 at t = 13-390: +0.088..+0.0063 vs -0.038..-0.0042), so the net validation rate remains
-   slightly positive and validation error keeps falling slowly; where the lifted part also flips (H256 d4 Delta 1,
-   t = 155-466) validation error rises (1.06 -> 1.45): overfitting proper.
- - By band of the training residual the lifted contributions have large alternating signs (e.g. -0.79 / -0.20 / +1.08),
-   i.e. the lift transfers coherently through some bands and overfits through others; the sign is decided by whether
-   the lifted direction is shared by validation points (smooth under A_{val,tr}) or sample-specific.
-Statement this supports (to be proved under the equal-statistics assumption): feature learning generalises better than
-the frozen kernel in the late phase because the lift is built from A_{val,tr}-smoothed drives (shared directions),
-while the lazy tail is sample-specific. This is the dynamic counterpart of the roughness paper's static bound, and the
-"cross-kernel coherence" of a lifted direction is its roughness measured between the two samples.
-(7, continued) Lazy-side runs (H96 d2 Delta 0.5 at s = 2, 4, 8, 16; runs/gt_lazy) and fixed-direction analysis.
- - Drive saturation is NOT the cause of the lazy-side exponent: at s = 8, 16 the drive grows as tau^0.92-0.95 (lazy
-   learning curve |E|^2 ~ tau^-0.14), so U ~ tau, yet the sorted-gain delay exponent is ~2 and the fixed-direction excess
-   at matched tau scales as s^-1.5 (not s^-2) with tau-growth 0.6-0.8 (not 2).
- - The stage identity explains the whole pattern: along a fixed direction v the excess is [2 (Psi'v).(dPsi'v) + ||dPsi'v||^2]/(n lam_v).
-   On the lazy side the FIRST-order cross term dominates (||dPsi'v|| << ||Psi'v||): excess ~ (U/s) x alignment, where the
-   alignment of the feature change with the existing features is itself built by the accumulated core (~U/s) — hence the
-   intermediate exponents (-1.5 in s, 0.6-0.8 in tau). On the rich side the second-order term and the Hermite bulk dominate:
-   exponents -2.4 to -3.5 in s. For the deep tail (rank >= 200) the fixed-direction excess is NEGATIVE early at every s >= 2
-   (-0.2 to -0.3 at rank 300 until tau ~ 40-130): the init-tail eigen-directions lose kernel energy before the lift arrives
-   (the rotation of Prop. 9d), so they are not "task directions" in the grokking sense either.
- - Conclusion: a universal delay exponent in the output scale does not exist in this testbed under any natural
-   observable; the clean law tau* ~ s holds only when the direction has substantial initial features, small change and a
-   fixed alignment, which is not the grokking regime. What the theory gives rigorously is the decomposition of the
-   delay into first-order (alignment-weighted), second-order and bulk contributions (Theorem 13 + section 8), each with its
-   own s-dependence, and the monotone power-law-like growth of the delay with s that the literature reports.
-   Strengthening beyond this = attribution, not a law: run the exact staged model with per-direction accumulators for the
-   cross, Q and bulk parts along a chosen task direction to show which term carries the s-dependence in each regime.
 
 ### 12.2 Item 7 resolved by the chain: the lift as a series in 1/s (2026-10-11)
 
@@ -689,14 +694,20 @@ epsilon a_1(tau; H) + epsilon^2 a_2(tau; H) + ..., so hyperparameter transfer ac
 epsilon(H) a_k(tau; H) is H-independent at the orders that matter — a finite-width criterion computable from one Jacobian
 per size, no limit taken.
 
-THEOREM 27 (the radius).  R(tau) is bounded below by the stage criterion of Theorem 16 applied to a single expansion
-point: the series is valid while the induced feature change stays within the Taylor radius of J at theta_0,
-|epsilon| ||theta^(1)(tau)|| ||Psi''|| / ||Psi'|| < 1, and along a given direction v while ||dPsi^T v|| < ||Psi_0^T v|| (Theorem 13's
-inequality: the feature change smaller than the existing features). Where the second condition fails the lift along v is of
-order one and the series around theta_0 cannot represent it: no finite or infinite number of terms recovers the event,
-because the singularity of the map epsilon -> trajectory lies inside the evaluation point.  (Proof: Theorem 16 + 13.)
-MEASURED: the truncated series fails sharply where the measured lift reaches ~1 (12.2), and the direction that is "fit" in
-the grokking sense (lift >> 1) lies beyond R(tau) by construction.
+PROPOSITION 27 (the radius; STATUS downgraded 2026-10-12: the lower bound on R is NOT proved).  Within the region
+|epsilon| ||theta^(1)(tau)|| ||Psi''|| / ||Psi'|| < 1 the first-order term of the series is accurate to the stated relative error
+(Theorem 16 at the single expansion point theta_0), and along a direction v the first-order lift is a valid approximation
+while ||dPsi^T v|| < ||Psi_0^T v|| (Theorem 13's inequality). These are TRUNCATION-ACCURACY statements. The radius of
+convergence R(tau) of the series in epsilon is the distance from 0 to the nearest complex singularity of the map
+epsilon -> (theta(tau; epsilon), E(tau; epsilon)); a Taylor-remainder bound at real epsilon does not bound it from below,
+and Theorem 16 + 13 do not prove the earlier claim "R(tau) is bounded below by the stage criterion". What a proof needs:
+a majorant (Cauchy-Kovalevskaya type) estimate for the ODE in epsilon, i.e. bounds on all directional derivatives of J at
+theta_0 of the form ||J^{(k)}|| <= k! C^k, which hold for analytic activations on a ball and give R(tau) >= c / (C ||theta^(1)(tau)||)
+with an explicit c; this is bookkeeping with the existing H_2-type constants and is not done. What is established: the
+truncated series fails sharply where the measured lift reaches ~1 (12.2), consistent with the singularity sitting where
+the feature change along v reaches the existing features, and the direction that is "fit" in the grokking sense
+(lift >> 1) lies beyond that point by construction. The resummation statement (Theorem 28) does not depend on the value
+of R(tau), only on its positivity, which analyticity gives.
 
 THEOREM 28 (the chain is the resummation).  Re-expanding at each stage boundary t_s around theta(t_s) (section 8, Theorem 16)
 gives a sequence of convergent expansions each within its own radius; their composition is the exact trajectory for
@@ -710,33 +721,80 @@ grokking time, the late error — to the chain (28), where it is a computation, 
 than truncated, and it applies verbatim to Euler-vs-direct, to the output-scale and width/depth families, and to Adam
 with K_P in place of K_N.
 
-### 7.1 The spike theorem along the trajectory without independence (added 2026-10-11)
+### 12.4 Item 5 result (transfer sweep, 24 GD runs, n = 200; runs/gt_transfer, code/transfer_analysis.py): INCONCLUSIVE
+Widths 48/96/192/384 at depth 2 and 96/192 at depth 4, output scales 0.25/0.5/1/2, budget 3000/s^2.
+- The training-error optimum is NOT bracketed: the smallest scale (richest) is best at every width and depth
+  (E(T) at s = 0.25: 0.0090/0.0074/0.0045/0.0041 for widths 48-384 at depth 2), so "optimal s vs width" cannot
+  distinguish standard from muP-like transfer in this range. On TRAINING error at fixed budget, more feature learning
+  simply wins here; the transfer question needs a regime where richness has a cost (test error, or a budget/stability
+  constraint), which the training-error criterion does not have.
+- The feature-learning/lazy ratio R(tau) = (E'KE - E'K0E)/E'K0E does not collapse under either labelling: at fixed s it
+  GROWS with width (s = 1, tau = 3000: 4.1, 9.5, 16.3, 18.3 for widths 48-384), and rows with equal s*sqrt(H/96) differ
+  by 2x. So the finite-width criterion of Theorem 26's remark is not satisfied by either parameterisation at these
+  widths and n; the feature-learning share increases with width in standard parameterisation.
+Status: no claim on item 5 from this sweep. Redo at large n with a criterion that has an optimum.
 
-What fails after initialisation is only the bookkeeping, not the rank. MEASURED (reference, t = 0.3): the cumulative
-change is still 98 % in three singular directions, but the per-unit-mean split of Theorem 11 (core = mean sigma' x drive)
-gives bulk/core = 0.9 against a dispersion prediction of 0.05: the local derivative S = sigma'(Z) and the drive M have
-become correlated across the data (the units have adapted to the residual), so the mean of sigma' is no longer the right
-rank-ny approximant of S. Independence was a convenience valid at t = 0; the rank statement never used it.
+## 13. Validation error: the swap of the left Jacobian stack (added 2026-10-11)
 
-THEOREM 11' (correlation-free rank bound, any time).  For the last hidden layer the instantaneous update is
-dW = -(1/n)(S (.) M)^T A with rank M <= ny EXACTLY (M = E W_out). For any rank-r approximation S_r of S with remainder S~ = S - S_r,
-      rank( (S_r (.) M)^T A ) <= ny r,          || (S~ (.) M)^T A ||_F <= ||S~||_max ||M||_F ||A||_2 / n,
-so the energy of dW outside an (ny r)-dimensional subspace is bounded by the entrywise size of the spectral tail of S.
-S itself is constrained without any assumption on correlations: Z = A_{l-1} W_l^T + b, so every column of Z lies in the
-column space of the layer below's activations on the data, whose Gram spectrum the chain tracks (steep: ~k^-5 here), and
-sigma' applied entrywise raises the numerical rank only through the Hermite coefficients of sigma' (He_k(Z) has rank at most
-that of degree-k polynomials in the columns of Z; for the first hidden layer with d_in = 3 that is C(3+k, k)). Hence
-rank_delta(S_l(t)) is controlled at every t by (i) the activation's Hermite decay at the current preactivation scale and
-(ii) the numerical rank of the preactivation matrix Z_l(t), both chain quantities. For deeper layers M_l is the layer above's
-(S (.) M) propagated through W, so the bound composes: rank(dW_l) <= ny prod_{l' >= l} rank_delta(S_{l'}).
-Proof: Hadamard rank inequality rank(X (.) Y) <= rank X . rank Y; the entrywise Frobenius bound; the column-space inclusion
-for Z; Hermite expansion of sigma'.  []
-This replaces the independence assumption by two computable spectra and holds along the whole path, for any
-activation, any width. The sharpness of the bound (how close ny r_S is to the measured effective rank) is being
-measured along the reference trajectory (code/rank_trajectory.py); numbers to follow.
-Remark on the testbed. L63 at n = 200 is nearly fit by T, so its late stage has small residuals; the late lifts are large
-(tail gains 10^2-10^4) but carry little loss. A target strongly misaligned with K_0 (or a larger n) would exercise the
-late-stage regime more; nothing in Theorems 11'/26-28 depends on the testbed.
+THEOREM 24 (validation dynamics, exact).  With J_val the Jacobian on validation points, the validation outputs obey
+f_val' = -(1/n) J_val J_tr^T g_tr = -K_vt g_tr, K_vt = J_val J_tr^T / n (the cross kernel). For the squared loss,
+E_val' = -K_vt(t) E_tr(t), so  -d/dt (1/2)||E_val||^2 = E_val^T K_vt(t) E_tr(t).  Everything in the chain applies with the
+left factor replaced: K_vt(t_s) - K_vt(t_{s-1}) = (dJ_val J_tr^T + J_val dJ_tr^T + dJ_val dJ_tr^T)/n, and the coherent part of
+dJ_val is the SAME weight increment (data-indexed on the training points, Theorem 3) evaluated on validation inputs:
+its activation part is the cross activation Gram A_{val,tr} applied to the drive. Under the assumption that the unit
+statistics on validation and training points agree (same preactivation distribution, same bulk ratio), the stage core
+on validation points is the training core transported by A_{val,tr}. No other change.  Proof: chain rule.  []
+COROLLARY 24a (minibatch training is the validation identity, added 2026-10-12). Under a step on a batch B of the data
+with per-sample gradient g_B, the residual on the FULL set obeys E_full' = -K_{full,B} g_B with K_{full,B} = J_full J_B^T / n_B,
+i.e. Theorem 24 with B as the training set and the full set as the validation set; the batch's own residual obeys
+E_B' = -K_B g_B exactly. Hence: (i) every identity of sections 8-10 holds for the batch kernel at each step, with the
+stage's feature change driven by g_B; (ii) the full-set energy obeys d||E_full||^2/dt = -2 E_full^T K_{full,B} g_B, which has
+no sign (the lazy part of the cross kernel can increase the full residual, exactly the late sign flip measured in section
+13), so monotone decrease of the full loss is NOT guaranteed step by step even for gradient flow on the batch; (iii) the
+accumulated feature change is the sum over batches of the stage cores, each driven by its batch's residual, so the chain
+is exact for SGD with the drive history {g_{B_s}}; the only new ingredient is that consecutive drives differ by the
+batch sampling. Fresh batches at every step (the scaling study) remove overfitting in the sense of section 13 but not
+the sign indeterminacy of (ii). "SGD-noise effects: not addressable" (section 12) is withdrawn: the effects are
+addressable through the cross kernel, and what is not done is the statistics of {g_{B_s}} over the sampling.
+Consequence (the overfitting split, exact): the validation descent rate splits as
+      E_val^T K_vt(0) E_tr   (lazy transfer: the frozen init cross-kernel acting on the current training residual)
+    + E_val^T [K_vt(t) - K_vt(0)] E_tr   (feature-learning transfer: the lifted cross-kernel).
+MEASURED (snapshots of six GD runs, rates normalised by |E_val||E_tr|; training rate for scale):
+ - Early (t <~ 5): both parts positive and the validation rate is 70-110 % of the training rate: training steps reduce
+   validation error almost as fast as training error.
+ - Late: the LAZY part turns NEGATIVE (H128 d6: from t = 28; H256 d8: from t = 13; H256 d4 Delta 1: from t = 16;
+   H96 d3: at t = 420): once the training residual lives in sample-specific rough modes, the frozen init cross-kernel maps
+   it into directions that INCREASE validation error — the static "held rough" overfitting mechanism, seen directly.
+ - The LIFTED part stays POSITIVE in the same window (e.g. H128 d6 at t = 28-840: lifted +0.037..+0.0013 vs lazy
+   -0.011..-0.0005; H256 d8 at t = 13-390: +0.088..+0.0063 vs -0.038..-0.0042), so the net validation rate remains
+   slightly positive and validation error keeps falling slowly; where the lifted part also flips (H256 d4 Delta 1,
+   t = 155-466) validation error rises (1.06 -> 1.45): overfitting proper.
+ - By band of the training residual the lifted contributions have large alternating signs (e.g. -0.79 / -0.20 / +1.08),
+   i.e. the lift transfers coherently through some bands and overfits through others; the sign is decided by whether
+   the lifted direction is shared by validation points (smooth under A_{val,tr}) or sample-specific.
+Statement this supports (to be proved under the equal-statistics assumption): feature learning generalises better than
+the frozen kernel in the late phase because the lift is built from A_{val,tr}-smoothed drives (shared directions),
+while the lazy tail is sample-specific. This is the dynamic counterpart of the roughness paper's static bound, and the
+"cross-kernel coherence" of a lifted direction is its roughness measured between the two samples.
+(7, continued) Lazy-side runs (H96 d2 Delta 0.5 at s = 2, 4, 8, 16; runs/gt_lazy) and fixed-direction analysis.
+ - Drive saturation is NOT the cause of the lazy-side exponent: at s = 8, 16 the drive grows as tau^0.92-0.95 (lazy
+   learning curve |E|^2 ~ tau^-0.14), so U ~ tau, yet the sorted-gain delay exponent is ~2 and the fixed-direction excess
+   at matched tau scales as s^-1.5 (not s^-2) with tau-growth 0.6-0.8 (not 2).
+ - The stage identity explains the whole pattern: along a fixed direction v the excess is [2 (Psi'v).(dPsi'v) + ||dPsi'v||^2]/(n lam_v).
+   On the lazy side the FIRST-order cross term dominates (||dPsi'v|| << ||Psi'v||): excess ~ (U/s) x alignment, where the
+   alignment of the feature change with the existing features is itself built by the accumulated core (~U/s) — hence the
+   intermediate exponents (-1.5 in s, 0.6-0.8 in tau). On the rich side the second-order term and the Hermite bulk dominate:
+   exponents -2.4 to -3.5 in s. For the deep tail (rank >= 200) the fixed-direction excess is NEGATIVE early at every s >= 2
+   (-0.2 to -0.3 at rank 300 until tau ~ 40-130): the init-tail eigen-directions lose kernel energy before the lift arrives
+   (the rotation of Prop. 9d), so they are not "task directions" in the grokking sense either.
+ - Conclusion: a universal delay exponent in the output scale does not exist in this testbed under any natural
+   observable; the clean law tau* ~ s holds only when the direction has substantial initial features, small change and a
+   fixed alignment, which is not the grokking regime. What the theory gives rigorously is the decomposition of the
+   delay into first-order (alignment-weighted), second-order and bulk contributions (Theorem 13 + section 8), each with its
+   own s-dependence, and the monotone power-law-like growth of the delay with s that the literature reports.
+   Strengthening beyond this = attribution, not a law: run the exact staged model with per-direction accumulators for the
+   cross, Q and bulk parts along a chosen task direction to show which term carries the s-dependence in each regime.
+
 
 ## 14. Is training chaotic? Why late-stage prediction is hard, provably (written 2026-10-11; numbers pending the perturbation test)
 
@@ -784,18 +842,6 @@ Prediction from Props 29-30: no exponential growth; algebraic growth of the tail
 > state (Theorem 10) that no data-indexed observable sees early (Prop. 9b) and that feature learning amplifies (gain law);
 > a statistical description predicts the distribution over initialisations, never the draw.
 
-### 12.4 Item 5 result (transfer sweep, 24 GD runs, n = 200; runs/gt_transfer, code/transfer_analysis.py): INCONCLUSIVE
-Widths 48/96/192/384 at depth 2 and 96/192 at depth 4, output scales 0.25/0.5/1/2, budget 3000/s^2.
-- The training-error optimum is NOT bracketed: the smallest scale (richest) is best at every width and depth
-  (E(T) at s = 0.25: 0.0090/0.0074/0.0045/0.0041 for widths 48-384 at depth 2), so "optimal s vs width" cannot
-  distinguish standard from muP-like transfer in this range. On TRAINING error at fixed budget, more feature learning
-  simply wins here; the transfer question needs a regime where richness has a cost (test error, or a budget/stability
-  constraint), which the training-error criterion does not have.
-- The feature-learning/lazy ratio R(tau) = (E'KE - E'K0E)/E'K0E does not collapse under either labelling: at fixed s it
-  GROWS with width (s = 1, tau = 3000: 4.1, 9.5, 16.3, 18.3 for widths 48-384), and rows with equal s*sqrt(H/96) differ
-  by 2x. So the finite-width criterion of Theorem 26's remark is not satisfied by either parameterisation at these
-  widths and n; the feature-learning share increases with width in standard parameterisation.
-Status: no claim on item 5 from this sweep. Redo at large n with a criterion that has an optimum.
 PERTURBATION TEST RESULT (code/lyapunov2.py, runs/lyapunov_full.txt; H96 d2 Delta 0.5, full run to T = 3000, 1e-7 relative
 perturbations of theta_0; separation ||dtheta(t)||/||dtheta(0)|| and ||dE(t)||/||E(t)||):
    t:          0.1     1      10     100    1000   3000
@@ -901,26 +947,34 @@ THEOREM 35 (term-wise facts, exact).
      two properties at each u: (S) Delta(u) >= 0 on the relevant subspace, and (P) the alignment of E_lazy(u) with
      E_lazy(2T-u) in the modes Delta touches (persistence of the lazy residual's direction).
 
-THEOREM 36 (the integrated rate comparison, term by term; conditional on (S) and (P)).  Suppose for u in [t_0, T]:
- (S)  Delta(u) >= 0  (Lemma 15: the accumulated stage increments are positive semidefinite after the transient), and
+THEOREM 36 (the integrated rate comparison at first order; conditional on (S) and (P); REVISED 2026-10-12).  Suppose for
+u in [t_0, T]:
+ (S)  Delta(u) >= 0 as an operator on the subspace spanned by the lazy residual's directions at the times u and 2T - u
+      (Lemma 15 / Cor. 43 for the accumulated increments after the transient), and
  (P)  for the modes k with Delta(u)-components, E_lazy,k(u) E_lazy,k(2T-u) >= 0 — automatically true in a fixed basis
       (both are E_{0,k} e^{-lambda_k (.)}), and the content of the persistence condition when the basis rotates.
-Then the first-order term reduces the energy, < E_lazy(T), term_1 > <= 0, and by the same argument applied recursively
-(each additional increment is paired with lazy propagators on both sides) every odd term reduces it and every even term
-is bounded by the square of the previous odd one; summing,
-      ||E(T)||^2  <=  ||E_lazy(T)||^2  -  2 int_0^T < E_lazy(2T-u), Delta(u) E_lazy(u) > du  +  O(||Delta||^2),
-with an explicit, nonnegative first correction. In the fixed-basis case (P) is automatic and the statement is exact to
-all orders: E_k(T) = E_{0,k} exp(-lambda_k T - int_0^T Delta_k(u) du) <= E_lazy,k(T) mode by mode (Prop. 6 recovered as the
-resummed series). With rotation, (P) is the hypothesis, and the term-wise form shows it is needed at every order and
-nowhere else.
-Proof. (a) is the standard Dyson bound; (b) is Theorem 11 inserted into each increment; (c)-(36) are the inner products
-written out with e^{-K_0 t} symmetric; the resummation in the fixed-basis case is the scalar ODE per mode.  []
+Then the first-order term reduces the energy, < E_lazy(T), term_1 > <= 0, and
+      ||E(T)||^2  <=  ||E_lazy(T)||^2  -  2 int_0^T < E_lazy(2T-u), Delta(u) E_lazy(u) > du  +  R_2,
+      |R_2| <= ||E_0||^2 ( D^2 + 2 e^D r + r^2 ),   D = int_0^T ||Delta(u)|| du,   r = e^D - 1 - D,
+from the Dyson bound (a): R_2 = ||term_1||^2 + 2 <E_lazy + term_1, R> + ||R||^2 with R = sum_{m>=2} term_m, ||term_1|| <= D ||E_0||,
+||R|| <= r ||E_0||. The first correction is explicit and
+nonnegative; the remainder is second order in the integrated increment and is NOT sign-controlled by (S) and (P): for
+m >= 2 the inner products pair increments through non-symmetric products of propagators and no recursive sign argument
+is available once the basis rotates. The earlier text ("every odd term reduces the energy and every even term is bounded
+by the square of the previous odd one"; "the method shows there is no third hypothesis") is WITHDRAWN as unproved. In the
+fixed-basis case the series resums exactly, E_k(T) = E_{0,k} exp(-lambda_k T - int_0^T Delta_k(u) du) <= E_lazy,k(T) mode by
+mode (Prop. 6 recovered), and there (S) and (P) are indeed the only hypotheses to all orders. With rotation the
+first-order statement is what is proved, and the all-orders comparison is handed to the moving frame (sections 18-19),
+where the hypothesis is the leakage rather than persistence.
+Proof. (a) is the standard Dyson bound; (b) is Theorem 11 inserted into each increment; (c) and the first-order inequality
+are the inner products written out with e^{-K_0 t} symmetric; R_2 is the tail of the exponential bound; the resummation in
+the fixed-basis case is the scalar ODE per mode.  []
 
 What this adds to section 10. Theorem 19's rate comparison (L' <= -E^T K(t_0) E under (S)) is the differential form; Theorem 36
-is the same statement integrated to T and expanded term by term, which (i) identifies (S) and (P) as the complete set of
-hypotheses, order by order, (ii) gives the first correction explicitly in terms of the lazy residual and the increments,
-and (iii) recovers Prop. 6 (frozen kernel bound) as the exactly resummed fixed-basis case. The two lemmas remain the
-open items; the method shows there is no third.
+is the same statement integrated to T at first order in the increments, which (i) identifies (S) and (P) as the
+hypotheses at that order, (ii) gives the first correction explicitly in terms of the lazy residual and the increments, and
+(iii) recovers Prop. 6 (frozen kernel bound) as the exactly resummed fixed-basis case. Beyond first order and with
+rotation the Dyson organisation is not the right one, which is the reason for section 18.
 
 ## 17. Term-wise corollaries (written 2026-10-12): statements that become unconditional once the right series is used
 
@@ -992,12 +1046,21 @@ Remark (validation).  Theorem 35 holds verbatim for E_val with K_0 -> K_vt(0) on
 increments; the m = 0 term is lazy transfer, m >= 1 feature-learning transfer, and Theorem 36's sign analysis applies with
 (S) and (P) stated for the cross-kernel. Not written out separately.
 
-COROLLARY 43 (the sign condition is discharged on the support of E(T); the obstruction is rotation alone).  By Theorem 13, on
-every direction v with ||D_v|| > 2 ||Psi_0^T v|| the accumulated increment satisfies v^T Delta v >= ||D_v||^2/n - 2 l_v ||D_v||/n > 0,
-i.e. (S) holds there without any lemma. MEASURED (reference at T, n = 200): the inequality holds on 100 % of the init
-directions beyond rank 10 (40 % within the top 10), and 100 % of the energy of E(T) lies in directions where it holds
-(E(T) is 93 % in ranks > 200, 45 % in ranks > 400). So for the error at T the hypothesis (S) of Theorem 36 is satisfied on
-the whole support of the late residual, and what remains is (P) alone.
+COROLLARY 43 (what Theorem 13 gives for the sign condition; REVISED 2026-10-12: the earlier "discharged" was an
+overstatement).  By Theorem 13, on every unit direction v with ||D_v|| > 2 ||Psi_0^T v|| the accumulated increment satisfies
+v^T Delta v >= ||D_v||^2/n - 2 l_v ||D_v||/n > 0. Two gaps separate this from the hypothesis (S) as the theorems use it:
+ (i) (S) is an OPERATOR inequality on a subspace W (Delta >= 0 on W, i.e. lambda_min(V_W^T Delta V_W) >= 0). Positivity of the
+     quadratic form on each of a set of basis directions does not imply it on their span (a 2 x 2 matrix with 1 on the
+     diagonal and 2 off it is positive on both basis vectors and has eigenvalue -1). Theorem 13's inequality holds for
+     EVERY unit v, so (S) on W follows if ||D_v|| > 2 l_v for every unit v IN W, i.e. if min_{v in W} (||D_v|| - 2 l_v) > 0;
+     that minimum, or directly lambda_min of the compressed increment, is the quantity to check, not the per-direction list.
+ (ii) Cor. 43 concerns the ACCUMULATED increment K_T - K_0. Theorem 46 and Cor. 50 need each STAGE increment to be
+     positive on W, which does not follow from the accumulated one (a stage can lower a mode that an earlier stage lifted;
+     lambda_1 late is the measured example). Per-stage positivity on W is Lemma 15 per stage, and remains open.
+MEASURED (reference at T, n = 200; per-direction only): the inequality holds on 100 % of the init directions beyond rank
+10 (40 % within the top 10), and 100 % of the energy of E(T) lies in directions where it holds (E(T) is 93 % in ranks > 200,
+45 % in ranks > 400). This is evidence for (S) on the support of E(T), not a proof of it; the compressed-operator check
+(lambda_min of V_W^T Delta V_W on W = the residual-carrying modes, accumulated and per stage) is listed in EXPERIMENTS.md.
 (P) in its accumulated first-order form FAILS completely: the increment Delta = K_T - K_0 is far outside first-order
 eigenvector perturbation theory (max_j |v_j^T Delta v_k| / |lambda_k - lambda_j| = 16 at the top, 160 at ranks 11-50, 2e3 at
 51-100, 6e4 at 101-200, 1e7-6e9 in the tail), as it must be when gains are 10^2-10^4. Corollary 39's rotation formula is
@@ -1048,13 +1111,21 @@ hence  d/dt ||c||^2 = -2 c^T Lambda c  exactly: the rotation A redistributes ene
 change the norm; the energy decays only through the current eigenvalues on the current rank profile c_k(t)^2.
 Proof: differentiate c = V^T E with E' = -K E and V^T V = I (so V^T V' is antisymmetric).  []
 
-THEOREM 46 (rate comparison without persistence).  Suppose the sorted eigenvalues of K are nondecreasing on [t_0, T] —
-which follows from the per-stage increments being positive semidefinite on the relevant subspace (Weyl), i.e. from (S),
-discharged by Theorem 13 on every direction whose feature change exceeds twice its initial features (measured: the whole
-support of the late residual). Then at every t in [t_0, T]
-      -d/dt ||E||^2 = 2 sum_k lambda_k(t) c_k(t)^2  >=  2 sum_k lambda_k(t_0) c_k(t)^2 :
-the instantaneous descent rate is at least the frozen-kernel rate evaluated on the CURRENT rank profile. No hypothesis on
-eigenvector persistence enters: the moving frame absorbs the rotation into the profile.  (Lemma 45 + Weyl.)  []
+THEOREM 46 (rate comparison without persistence; REVISED 2026-10-12).  Two forms, with different inputs.
+ (a) Subspace form (no frame). If every stage increment on [t_0, T] is positive semidefinite on a subspace W that contains
+     E(t) for all t in [t_0, T], then K(t) - K(t_0) >= 0 on W and
+      -d/dt ||E||^2 = 2 E^T K(t) E  >=  2 E^T K(t_0) E     for t in [t_0, T]:
+     the descent rate is at least the frozen-kernel rate on the CURRENT residual. This is Theorem 19's rate statement with
+     its hypothesis made precise: per-stage positivity on W (open: Lemma 15 per stage; the check is lambda_min of the
+     compressed stage increment, Cor. 43(ii)).
+ (b) Frame form. If every stage increment is positive semidefinite on the WHOLE space, then the sorted eigenvalues are
+     nondecreasing (Weyl) and, in the moving frame of Lemma 45,
+      -d/dt ||E||^2 = 2 sum_k lambda_k(t) c_k(t)^2  >=  2 sum_k lambda_k(t_0) c_k(t)^2 ,
+     the frozen sorted spectrum evaluated on the current rank profile. Weyl's monotonicity is a global statement; "sorted
+     eigenvalues nondecreasing on a subspace" is not defined (positivity on W gives monotonicity of the eigenvalues of the
+     COMPRESSED operator V_W^T K V_W, which are not the lambda_k).
+ In neither form does eigenvector persistence enter. Form (a) is the one the data can check and the one the error bound
+ at T uses; form (b) is the interpretation. (Lemma 45 + Weyl.)  []
 
 What this does and does not give. It is the exact accounting of feature learning for the error: the lifted eigenvalues
 help at every instant; what changes besides is the rank profile c_k(t)^2 — which feature learning pushes to higher ranks
@@ -1086,11 +1157,13 @@ COROLLARY 47 (extreme eigenvalues to all orders; what the eigenvalue series does
  (c) For interior eigenvalues neither sign is forced; their all-orders behaviour is what the chain tracks and what the
      rotation remainder of section 18 measures.
 
-COROLLARY 50 (interior eigenvalues, all orders).  If a stage increment is positive semidefinite on a subspace containing the
-relevant eigenvectors, Weyl's monotonicity (A <= B  =>  lambda_k(A) <= lambda_k(B) for every k) gives lambda_k nondecreasing for
-EVERY sorted index, with no series. With (S) discharged on the support of the late residual (Cor. 43), all sorted
-eigenvalues on that support are nondecreasing along the chain, exactly. The eigenvalue-series question is therefore
-closed: extreme eigenvalues by the variational principle (Cor. 47), interior ones by monotonicity, both to all orders.
+COROLLARY 50 (interior eigenvalues, all orders; REVISED 2026-10-12).  If a stage increment is positive semidefinite on
+the whole space, Weyl's monotonicity (A <= B  =>  lambda_k(A) <= lambda_k(B) for every k) gives lambda_k nondecreasing for
+EVERY sorted index, with no series. If it is positive semidefinite only on a subspace W, the same holds for the eigenvalues
+of the compression V_W^T K V_W (Cauchy interlacing gives nothing for the lambda_k themselves). Since per-stage positivity
+is open (Cor. 43(ii)), the monotone-spectrum input of Theorem 48 is a HYPOTHESIS to be checked per stage, not a
+consequence of Theorem 13. What is closed without hypotheses: the extreme eigenvalues by the variational principle
+(Cor. 47(b)).
 
 ## 19. The cutoff bound: a two-sided, unconditional bound on the error at T with a named rotation remainder (2026-10-12)
 
@@ -1098,22 +1171,32 @@ Setting: Lemma 45's moving frame, K(t) = V(t) Lambda(t) V(t)^T, c = V^T E, sorte
 on the support of the residual). Fix the index set u = { k : lambda_k(T) T < 1 } (the modes still unfit at T; its complement f
 are the modes with lambda_k(T) T >= 1), and let k* = min f be the CUTOFF RANK at T. Transport the index set along the eigenvector
 flow: P(t) = V(t) Pi_u V(t)^T, with Pi_u the fixed coordinate projector onto u. Define the cross-front rotation rate
-      rho(t) = max_{k in u, j in f} |A_kj(t)|,     A = V^T V'   (per Cor. 39, A_kj = v_j^T K' v_k / (lambda_k - lambda_j)).
+      rho(t) = || A_uf(t) ||_2,   the SPECTRAL NORM of the u x f block of A = V^T V'   (per Cor. 39, A_kj = v_j^T K' v_k / (lambda_k - lambda_j)).
+(CORRECTED 2026-10-12: the earlier definition rho = max_{k in u, j in f} |A_kj| gives |L| <= 2 rho ||c_u||_1 ||c_f||_1 with
+1-norms, which is weaker than the stated bound by up to sqrt(|u| |f|); with the block spectral norm the 2-norm bound holds.)
 
 THEOREM 48 (energy above the cutoff, two-sided).  With E_u = P E and E_f = (I - P) E,
    d/dt ||E_u||^2 = -2 E_u^T K E_u + L(t),    d/dt ||E_f||^2 = -2 E_f^T K E_f - L(t),    |L(t)| <= 2 rho(t) ||E_u|| ||E_f||,
 (the leakage L = E^T P' E is the only coupling between the two subspaces and it is antisymmetric: what leaves one enters
-the other). Consequently, writing lambda_u(t) = max_{k in u} lambda_k(t) <= 1/T x (1 + ...) ... precisely lambda_u(t) <= lambda_{k*-1}(t) and
-lambda_f(t) = min_{k in f} lambda_k(t) = lambda_{k*}(t):
+the other). Write lambda_u(t) = max_{k in u} lambda_k(t) and lambda_f(t) = min_{k in f} lambda_k(t), the extreme eigenvalues of K
+on the two TRACKED subspaces at time t (run quantities; see the note on monotonicity below). Then
    (floor)    ||E(T)||  >=  ||E_u(T)||  >=  ||Pi_u c(t_0)|| exp(-int_{t_0}^T lambda_u)  -  int_{t_0}^T rho ||E_f|| ,
    (ceiling)  ||E(T)||^2 <=  ||Pi_u c(t_0)||^2  +  2 int_{t_0}^T rho ||E_u|| ||E_f||  +  ||E_f(T)||^2 ,
               with  ||E_f(T)|| <= ||(I - Pi_u) c(t_0)|| exp(-int_{t_0}^T lambda_f)  +  int_{t_0}^T rho ||E_u|| .
-At t_0 = 0, Pi_u c(0) is the initial residual's energy on the init modes with ranks >= k*: "the energy of the initial error
-above the cutoff", with the cutoff rank set by the LIFTED spectrum at T through lambda_{k*}(T) T = 1.
+At t_0 = 0, Pi_u c(0) is the initial residual's energy on the init-time eigenvectors that evolve into u: "the energy of the
+initial error above the cutoff", with the cutoff set by the LIFTED spectrum at T through lambda_k(T) T = 1 on the tracked modes.
 Proof. Differentiate ||P E||^2 with E' = -K E and [P, K] = 0 (P is a spectral projector of K(t)); the term E^T P' E is the
 leakage, and P' = sum_{k in u, j in f} A_kj (v_j v_k^T + v_k v_j^T) (eigenvector perturbation with a FIXED index set, so no
-crossing terms), giving the bound on |L|. Gronwall on each subspace with lambda_u, lambda_f as the extreme eigenvalues of K on
-them gives the floor and ceiling; the two leakage integrals are the same quantity with opposite sign.  []
+crossing terms), so L = 2 c_u^T A_uf c_f and |L| <= 2 ||A_uf||_2 ||c_u|| ||c_f||. Gronwall on each subspace with lambda_u, lambda_f
+as the extreme eigenvalues of K on them gives the floor and ceiling; the two leakage integrals are the same quantity with
+opposite sign.  []
+NOTE ON THE DECAY INPUT (2026-10-12). The sentence previously here, "lambda_u(t) <= lambda_{k*-1}(t) < 1/T, so the floor's decay
+factor over [t_0, T] is at least about t_0/T", used SORTED labels and Weyl monotonicity, while P is transported by
+CONTINUITY (see the correction below). A continuously tracked eigenvalue is not monotone even when the sorted ones are
+(lambda_1 drifts down once its drive is spent, stage 300-400 in section 8), so int_{t_0}^T lambda_u has no a priori bound and
+lambda_u(t) is read off the run. If, in addition, the tracked eigenvalues in u are nondecreasing (a hypothesis, checkable per
+stage), then lambda_u(t) <= lambda_u(T) < 1/T, int_{t_0}^T lambda_u < 1 and the floor is at least e^{-1} ||Pi_u c(t_0)|| minus the
+leakage: the bracket is then a factor-e statement plus leakage, which is its real content and should be stated as such.
 
 What the theorem says. The error at T is bracketed by the energy of the initial residual above the lifted cutoff, from
 below after decay at the slow rate of the unfit subspace (which is < 1/T by definition of u, so the decay factor over
@@ -1125,7 +1208,8 @@ because it moves energy within P, not across it. This is why the measured 45-55 
 subspace (Cor. 43) is compatible with a sharp energy statement: what matters is not whether the residual keeps its
 direction but whether it crosses the front, and crossing requires coupling to a mode that is being fit, whose residual
 component is already small. No persistence hypothesis appears; (S) enters only through Cor. 50 for the monotone
-spectrum, and it is discharged on the support of the residual.
+spectrum, which is per-stage positivity on the residual's subspace: a hypothesis to be checked (Cor. 43(ii), Cor. 50), not
+a consequence of Theorem 13.
 
 How the chain closes it. The cutoff rank k*(T) is determined by the lifted sorted spectrum at T, which Theorem 13 brackets
 two-sidedly in terms of the accumulated feature change along the init directions (and the gain law summarises); the
@@ -1169,6 +1253,23 @@ the absence of any persistence hypothesis, and Cor. 49's crossing condition (whi
 fixed direction v uses v^T K v, not a sorted rank). What the correction teaches: in a regime where ranks reorder, the right
 bookkeeping of "which modes are fit" is the continuously transported label, i.e. the chain, and the sorted spectrum alone
 is insufficient — the same lesson as Cor. 43 and section 18, now at the level of the bound's input.
+SECOND CORRECTION (2026-10-12): where the 14x goes. For a generic one-parameter family of symmetric matrices eigenvalues
+do not cross (von Neumann-Wigner); the "massive crossings" are AVOIDED crossings, at which the tracked eigenvectors swap
+character over a short interval and A_kj = v_j^T K' v_k / (lambda_k - lambda_j) is large there. With continuity transport those
+events are exactly the cross-front coupling, so the 14x by which the sorted-label check overshot does not disappear with
+the relabelling: it moves into the leakage integral int rho ||E_f||, and Theorem 48 is a statement with a large named
+remainder until that integral is computed. Two consequences. (i) "Rotation enters only through the leakage, which is
+suppressed by ||E_f||" is true as an inequality, but at an avoided crossing between a mode in u and a mode in f the f-mode
+is by definition a mode being fit, with a residual component that may still be of order one at the crossing time; the
+suppression is not automatic. (ii) The correctly transported bracket (tracked Pi_u c(0), rho(t) as the block norm, lambda_u(t)
+tracked) has not been evaluated at any n and is the measurement that decides whether the cutoff bound is a bound with a
+correction or a tautology; it requires the per-stage eigendecompositions of the chain and is listed first in EXPERIMENTS.md.
+An alternative formulation that avoids tracking: define u(t) = {k : lambda_k(t) t < 1} at EACH time by the current sorted
+spectrum (a moving cutoff, Prop. 8); P(t) is then the spectral projector onto the current unfit modes, [P, K] = 0 still
+holds, but P jumps whenever a mode's lambda_k(t) t crosses 1, and the leakage acquires the jump terms (the residual energy of
+the mode at its crossing time, which is Cor. 49's event). This is the form closest to the held-rough section's moving
+cutoff, and it makes the crossing events explicit instead of hiding them in rho. The two formulations should be compared
+on the same run.
 
 ## 20. Consequences for the held-rough section of the paper (reconciliation, 2026-10-12)
 
@@ -1197,9 +1298,98 @@ Prop 20) onto the chain:
      the fixed seminorm is a valid floor whose content shrinks as sigma_R grows.
  (v) Definition cutoff (from the a-priori growth bound I_m(t)) -> the transported cutoff of Theorem 48 (from the actual lifted
      spectrum, continuity-labelled). Prop cutoff-floor remains a valid a-priori inequality; the chain version is two-sided.
- (vi) Prop 20 (analyticity radius about theta_0) = Theorem 27 at one expansion point; Theorem 28 (the chain) is its continuation.
+ (vi) Prop 20 (analyticity radius about theta_0) = Prop. 27 at one expansion point (truncation accuracy; the radius lower bound is
+     not proved, see 12.3); Theorem 28 (the chain) is its continuation and needs only R > 0.
  (vii) Prop reduced ignition -> Theorem 26 (richness expansion; onset of the lift as a convergent series) + Cor. 49 (the
      crossing condition and its bracket); the reduced two-variable model is subsumed and should be cut.
+ (viii) THE BRIDGE FROM THE MOVING FRAME BACK TO ROUGHNESS IS AN UNPROVED FINDING (added 2026-10-12). Everything in
+     sections 18-19 is stated in the current kernel eigenbasis, i.e. in terms of RANK. The paper's claim is about roughness
+     in the input-space sense of Part I (a projector seminorm fixed by the inputs). The only link between the two is the
+     F2 law of WRITEUP (the graph-Laplacian roughness of the k-th eigenvector of K(t) is the same function of k for K_0 and
+     K_T, measured at n = 200 on 42 runs). If F2 holds, "the lift moves the cutoff up in rank" is "the network fits rougher
+     functions", and Theorem 48 is a roughness statement; if F2 fails at large n (e.g. the lifted eigenvectors are
+     sample-specific rather than Laplacian-rough, which is what the late negative lazy transfer of section 13 suggests they
+     partly are), Theorem 48 says nothing about roughness. F2 is therefore the linchpin of the paper's title claim and has
+     no theorem behind it. What a derivation could use: the stage lift is targeted at Gram-smoothed residual directions
+     (section 8 (ii)), each layer's Gram A_l is a kernel on the inputs whose eigenvectors are ordered by input-space
+     roughness (this is Part I's content for the first layer, where A_0 is the input Gram), and Theorem 11' bounds the
+     numerical rank of the local-derivative matrix by the Hermite decay at the current preactivation scale; so the
+     lifted directions are images of input-smooth directions through a controlled number of Hermite orders, which is a
+     statement about their roughness in the input sense. Not done. Measurement: F2 at large n, along training, with the
+     cross-sample test (is the lifted eigenvector's roughness the same on a held-out sample) — EXPERIMENTS.md.
+ (ix) THE A PRIORI FLOOR HAS NEVER BEEN EVALUATED AND MAY BE VACUOUS (added 2026-10-12). Theorem rough-apriori uses
+     Sigma(s) = sigma_0 + a s with a = lambda_1^{1/2} H_2 ||E_0|| and I(t) ~ a^2 t^3 / 3. The analogous H_2 bound on the propagator
+     (Prop. 31) is loose by exp(13) on the reference run, because H_2 bounds the worst-case curvature while the realised
+     curvature along the path is 10^-5 of it. If Sigma(t) is loose by a similar factor, exp(-(2+eps) I(t)) is zero at every t
+     of interest, the cutoff mode of Definition cutoff sits at the top of the spectrum from early on, the floor
+     (Prop. cutoff-floor) is trivially satisfied, and the cube-root ignition time of Cor. min-time-rough is meaninglessly
+     short. The theorem stays true; its content at the times that matter is then nil. The check (item (13) of the
+     held-rough section's list) is sigma_m(t) against Sigma_m(t) and the realised drive Theta_R along saved runs, one top
+     eigenvalue of P K P per snapshot; it must be run before anything quantitative is built on that section. If the floor
+     is vacuous, the fix is the trajectory bracket of Theorem 13 on PKP (item (ii) above), which replaces the worst-case a
+     by the accumulated feature change on the range of P, and the a priori statement becomes "a priori in sigma_0, run
+     quantity in the lift" — honest, and the same shape as Theorem 48.
 Net: keep Part I and the exact fixed-projector floor; replace the closure, the band, the ignition model and Prop 20's role
 by the chain section; the paper's "closure beyond the lazy regime" becomes the chain, and its one measured hypothesis
-(constant c) is replaced by a theorem plus a named remainder.
+(constant c) is replaced by a theorem plus a named remainder — with the remainder (the leakage) still to be computed, the
+sign input (per-stage positivity on the residual's subspace) still a hypothesis, and the roughness bridge (F2) still a finding.
+Also: Cor. depth (ii)-(iii) of the held-rough section is NOT a before-training comparison: the ceiling needs design B's
+whole trajectory (tracked Pi_u c(0), rho, E_f along the run). Part (i) is a priori; (ii) is a trajectory bound; the tex
+is corrected accordingly.
+
+## 21. Optimizers in the chain's terms: what is covered and what is not (added 2026-10-12)
+
+The optimizer line (OPTIMIZER_HANDOFF.md, REPORT 53-60) uses the identities of this document as a design language. This
+section states precisely which of its claims are theorems here and which are measurements, so that neither document
+overstates the other.
+
+(a) What the theory gives. Theorem 1-2 (residual flow with the kernel as a sum of per-block Grams) and Theorem 17(i)
+    (preconditioned flow has kernel K_P = Psi P Psi^T / n): any per-mode metric is a choice of K_P, and under GRADIENT FLOW
+    with a fixed P the residual energy decays at rate 2 E^T K_P E. The per-layer Gauss-Newton eigenbasis of the optimizer is
+    the eigenbasis of each block's term in Theorem 2, and the leverage s_k = sqrt(n lambda_k) is that block's Jacobian
+    singular value. Theorem 16 (Taylor radius) is the statement behind the function-space remainder detector: the
+    remainder rf = ||f(theta + d) - f(theta) - J d|| / ||J d|| is the stage error of Theorem 16 along the step d, and the
+    measured constant-remainder ridge (REPORT 60) says the optimizer operates at a fixed stage error of ~0.1, i.e. at the
+    edge of the first-order regime, where by the stage identity the step changes the kernel by Q + Cross of relative size
+    ~rf. That the optimum sits at NONZERO remainder is consistent with Q being the mechanism of learning (section 8), not
+    an error; the theory does not predict the level, which is open question 3 of the handoff.
+
+(b) What the theory does NOT give, and why the optimizer's results are measurements.
+    1. Per-step rate. "A per-mode step a_k ~ (s_k/s_1)^q sign(m_k) gives per-step residual decrease ~ lambda_k^((1+q)/2)"
+       holds for a mode that is an eigen-direction of the FULL residual dynamics. The per-layer modes are not: different
+       layers' modes overlap in residual space (the cap split across L blocks is the symptom), and the step along a
+       layer mode moves the residual along that layer's Jacobian image only to first order. The rate is therefore a
+       one-layer, first-order statement; the measured fact that per-layer bases beat the global (exact GN) basis for
+       equal push is not explained by it and is an open item.
+    2. Sign steps are not gradient flow. The step is not along the gradient in any fixed metric (the sign of the rotated
+       momentum, capped), so f_dot = -K_P g does not hold with a positive P and the energy identity has no sign;
+       Theorem 17 does not apply. Fitted stiff modes oscillate (measured) exactly because of this; the GN cap is what makes
+       the per-mode step contractive on them. The right description of a sign-plus-cap step is a per-mode map on the
+       residual coordinate, |e_k| -> max(|e_k| - lr w_k s_k, 0)-type for |e_k| above the cap and GN-contraction below it,
+       which is a discrete per-mode dynamics, not a kernel flow. Nothing in sections 8-19 is stated for it.
+    3. The metric moves. KronQ's factors, bases and push weights change every refresh, so K_P carries the dP term of the
+       CORRECTION to Theorem 17; the "tail lifted at every stage" structure is not available and the competition between
+       lift and metric change is unmeasured.
+    4. Edge of stability. The best momentum result (REPORT 53) and sign push at its working learning rate operate at or
+       beyond the stability edge of the top modes, the discrete regime Prop. 29 excludes; the edge effect is the one place
+       a first-order method beat gradient flow at equal rescaled time, and it is outside the chain.
+    5. Minibatch. Cor. 24a gives the identity; the statistics of the batch drives are not treated.
+    So: the basis, the leverage, the cap's form and the remainder detector are theory-derived; sign push, the exponent q,
+    the hypergradient weights, the per-layer-beats-global fact, the remainder level and every speedup factor are
+    measurements organised by the identities. The handoff's "what is established" list is to be read with this split.
+
+(c) Theory items worth doing (from the handoff's open question 4, restated as chain statements).
+    1. Hypergradient value: the one-step hypergradient dL_t/du_k = -lr (G_t)_k D_{t-1,k} is the first-order change of the
+       loss under a per-mode rescaling of the previous step; in the stage identity it is the cross term between the
+       previous stage's feature change along mode k and the current gradient. Deriving it as such would say which part of
+       the measured "per-mode value" is kernel lift (Q, second order in the step) and which is first-order progress.
+    2. Curvature sign (Lemma 15 / REPORT 57): r.f''[V_k, V_k] negative at init on the raw residual, positive after; the
+       raw-vs-centred comparison of 12.1 is the mechanism; a closed-form sign is not available and should not be claimed.
+    3. Sign vs magnitude: both are steepest descent (l_inf vs l_2 on the mode coordinates); the measured advantage of
+       sign is the spectrum compression of (b)1 within the radius, which is a statement about the per-mode map, to be made
+       for the discrete dynamics of (b)2, not for a flow.
+
+(d) The scaling study's baselines (optimizer/scale_jobs.py) use three fixed learning rates, no warmup, no schedule, no
+    weight decay, beta2 = 0.99 for AdamW, and the same grid at every width although AdamW's optimum shifts with width. Its
+    result decides whether KronQ's memory reductions cost accuracy at width 4096; it does not decide "beats tuned AdamW /
+    Muon / SOAP" in the sense of the literature cited in the handoff's section 7, and should not be reported as doing so.

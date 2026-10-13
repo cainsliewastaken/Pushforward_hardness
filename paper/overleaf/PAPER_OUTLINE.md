@@ -6,8 +6,8 @@ Keep from the existing paper
 - Euler-vs-direct and edge-of-stability sections, rewritten to cite the chain results (Thm Euler order-by-order; sharpening via Cor. 38/47 and the sign flip of the cross term).
 
 Replace
-- Assumption "efficient roughness supply" + Prop. two-sided band + Prop. reduced model of ignition  ->  the chain's targeting theorem (Thm 11/13: the lift is along the smoothed residual, with a computable lower bound on the Rayleigh quotient), the front/cutoff bound (Thm 48, transported projector, leakage = cross-front rotation), and the richness expansion with its radius (Thms 26-27) for ignition/onset. The constant-c closure is replaced by c(t) = lambda_eff(t)/sigma_R(t)^2, which decays as the rough subspace's top is lifted (measured below) — the residual sits at the front, not at the top of the rough subspace.
-- Proposition 20 (radius of expansions about theta_0)  ->  Thm 27 (radius at any expansion point) + Thm 28 (the chain as resummation). Prop. 20 becomes a corollary.
+- Assumption "efficient roughness supply" + Prop. two-sided band + Prop. reduced model of ignition  ->  the chain's targeting theorem (Thm 11/13: the lift is along the smoothed residual, with a computable lower bound on the Rayleigh quotient), the front/cutoff bound (Thm 48, transported projector, leakage = cross-front rotation), and the richness expansion (Thm 26; its radius is Prop. 27, truncation accuracy only, the lower bound on R unproved) for ignition/onset. The constant-c closure is replaced by c(t) = lambda_eff(t)/sigma_R(t)^2, which decays as the rough subspace's top is lifted (measured below) — the residual sits at the front, not at the top of the rough subspace.
+- Proposition 20 (radius of expansions about theta_0)  ->  Prop. 27 (truncation accuracy at any expansion point) + Thm 28 (the chain as resummation, needs only R > 0). Prop. 20 becomes a corollary.
 
 Add (the new section, ~12 pages main + appendix)
 1. Identities and the chain (Prop. chain-identities, stage identity, Thms bracket/chain) — 2 pp.
@@ -23,4 +23,5 @@ Cut
 - The per-model numerics of the early sweeps (sections 0-30 of REPORT.md); the init-only ranker (keep one sentence as the expected accuracy of a one-Jacobian statistic); the Gaussian/real-init ensemble variants (one paragraph in the appendix as negative results); the v2-v5 reduced models entirely.
 
 Open before submission
+- Review of 2026-10-12 (THEORY.md, items marked REVISED / CORRECTION): the leakage bound uses the block spectral norm; the cutoff bound's decay input and its leakage integral are run quantities not yet computed; the sign condition is a per-stage hypothesis (compressed-operator check), not discharged; Thm 36 is first order only; Prop. 27's radius bound is unproved; Adam's stage identity carries a dP term; the rank-to-roughness law (F2) is the unproved bridge to the paper's title claim; the a priori floor has never been evaluated and may be vacuous. The experiments these require are in ../notes/EXPERIMENTS.md.
 - Redo at n in the thousands (every number). The sign of the init-feature part of the cross term (Lemma 15). The continuously transported cutoff input of Thm 48 along a run. The front law from the chain (the one derivation that makes the error bound closed-form).

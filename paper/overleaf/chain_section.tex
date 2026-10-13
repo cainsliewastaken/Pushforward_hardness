@@ -208,20 +208,26 @@ a trained path enters at any order.
 
 \begin{theorem}[Radius, and the chain as resummation]
 \label{thm:radius}
-$R(\tau)$ is bounded below by the stage criterion of Theorem~\ref{thm:chain}
-applied at $\theta_0$, and along a direction $v$ the series is valid while
-$\|\delta\Psi^{\!\top}v\|<\|\Psi_0^{\!\top}v\|$ (Proposition~\ref{prop:stage}). Where
-this fails the lift along $v$ is of order one and no finite or infinite number
-of terms of the series about $\theta_0$ represents it. Re-expanding at each
+$R(\tau)>0$ by analyticity. Within the region in which the stage criterion of
+Theorem~\ref{thm:chain} holds at $\theta_0$ the first-order term of the series
+is accurate to the stated relative error, and along a direction $v$ the
+first-order lift is a valid approximation while
+$\|\delta\Psi^{\!\top}v\|<\|\Psi_0^{\!\top}v\|$ (Proposition~\ref{prop:stage}); these
+are truncation statements and do not bound $R(\tau)$ from below, which would
+need a majorant estimate on the derivatives of $J$ at $\theta_0$ (available
+for analytic activations on a ball; not carried out). Where the lift along
+$v$ reaches order one the truncated series fails sharply in the measurements,
+consistent with the singularity of $\epsilon\mapsto$ trajectory sitting there.
+Re-expanding at each
 stage boundary (Theorem~\ref{thm:chain}) continues the series past $R(\tau)$
 by moving the expansion point along the path; within $R(\tau)$ the two agree,
 beyond it only the chain is defined.
 \end{theorem}
 \begin{proof}
 Analytic dependence of ODE solutions on parameters; the recursion is the Taylor
-expansion of the vector field in $\epsilon$; the radius statement is
+expansion of the vector field in $\epsilon$; the truncation statements are
 Proposition~20 at the expansion point $\theta_0$ together with
-Proposition~\ref{prop:stage}.
+Proposition~\ref{prop:stage}; the resummation uses only $R(\tau)>0$.
 \end{proof}
 
 
@@ -240,20 +246,23 @@ $\dot\theta_D=-\frac\Delta nJ^{\!\top}\tilde E$ against
 $\dot\theta_E=-\frac1nJ^{\!\top}E_E$: the direct problem is the Euler problem with
 the richness parameter multiplied by $\Delta$ (Theorem~\ref{thm:richness}
 evaluated at a smaller argument). Hence (i) direct's stage lifts on the
-increment are $\Delta^2$ times Euler's at equal normalised residual; (ii) as
+increment are $\Delta^2$ times Euler's at equal normalised residual, and (ii) as
 $\Delta\to0$ at fixed budget the direct network is in the lazy regime on the
-increment, its normalised error converges to the frozen-kernel error of the
-increment target, and the held-rough bound of Section~\ref{sec:held-rough}
-becomes tight for it; (iii) Euler's error is the full feature-learning error,
-below that bound by the feature-learning gain, which grows with the budget
-and with the increment's roughness. The direct network additionally spends a
-$\Delta$-independent early drive on the identity component of its target.
+increment, after a $\Delta$-independent early phase in which it fits the
+identity component of its target, and its normalised error converges to the
+frozen-kernel error of the increment target.
 \end{theorem}
-The static argument of the previous sections (``the increment is a smoother
+For direct as $\Delta\to0$ the held-rough statements of
+Section~\ref{sec:held-rough} are therefore frozen-kernel statements (no lift,
+fixed basis); they are not tight, since the floor decays at the rate set by
+the top of the rough subspace while the frozen-kernel error decays mode by
+mode. Euler's error is the full feature-learning error, below the frozen-kernel
+value by the feature-learning gain, which grows with the budget and with the
+increment's roughness; this comparison is conditional on the rate comparison
+below. The static argument of the previous sections (``the increment is a smoother
 target'') is the frozen-kernel shadow of this: dividing by $\Delta$ multiplies the
 drive by $1/\Delta$ and the lifts by $1/\Delta^2$, so Euler trains rich on the
-increment while direct trains lazy on it. Statement (ii) is exact; (iii) is
-conditional on the rate comparison below.
+increment while direct trains lazy on it.
 
 \paragraph{Progressive sharpening, the initial reduction phase, and the edge of stability.}
 By Proposition~\ref{prop:stage},
@@ -268,8 +277,9 @@ initialisations. Once learning has accumulated, the coherent part of the cross
 term is the inner product of the accumulated core above with the stage core
 below through the shared drive, positive while the drive keeps its direction
 (measured positive on $80$--$100\%$ of modes from $t\approx1$ on): progressive
-sharpening, faster with depth by composition ($5\times,11\times,20\times,86\times$
-top gain at depths $2,3,6,6$ [n=200]). Taking GD steps as stages, above the
+sharpening, faster with depth by composition ($5\times,11\times,20\times$
+top gain at depths $2,3,6$ on the $\Delta=0.5$ target and $86\times$ at depth $6$
+on $\Delta=1.0$ [n=200]). Taking GD steps as stages, above the
 stability threshold the top component of the residual alternates in sign, the
 stage cores along it alternate, their cross terms with the accumulated core
 are negative at the core level, and $\lambda_1$ decreases until the step is
@@ -280,8 +290,18 @@ after the transient (Lemma~\ref{lem:sign} below).
 \paragraph{Adam.} For $\dot\theta=-P(t)\nabla L$ with $P$ diagonal positive, (a)
 of Proposition~\ref{prop:chain-identities} holds with $K_P=\Psi P\Psi^{\!\top}/n$,
 (c) with the outer products multiplied entrywise by $P_\ell$, and
-Proposition~\ref{prop:stage} and Theorem~\ref{thm:bracket} verbatim with
-$P^{1/2}$-weighted features. The spike statement needs one more fact: $P$ is
+Theorem~\ref{thm:bracket} at a fixed time with $P_T^{1/2}$-weighted features.
+Along the path the stage identity acquires a third term: with
+$\delta P_s=P(t_s)-P(t_{s-1})$,
+$K_P(t_s)-K_P(t_{s-1})=\mathrm{Cross}_{P,s}+Q_{P,s}+\Psi(t_s)\,\delta P_s\,\Psi(t_s)^{\!\top}/n$,
+and $\delta P_s$ is negative on every coordinate whose second-moment estimate
+is still growing. The lift and the preconditioner's decay therefore compete,
+the monotone-spectrum inputs below do not transfer to $K_P$ without a bound
+on this term, and with momentum the drive is the averaged gradient, so the
+energy identity has no sign. What transfers is the set of identities, the
+fixed-time bracket and the spike statement; the discrete regime in which Adam
+runs in practice (its own edge of stability) is outside gradient flow
+altogether. The spike statement needs one more fact: $P$ is
 built from the gradient block itself, so $P\odot G$ is a normalised sign
 pattern of a rank-$\le n_y$ matrix, and the same mean-plus-fluctuation
 argument as Theorem~\ref{thm:spike} gives its core fraction as the squared first
@@ -291,7 +311,7 @@ vectors, with the time-averaged second moment lowering it further (measured
 $0.68$--$0.81$, $0.95$--$1.00$, $0.52$ respectively on synthetic blocks). This
 is the rotation-dependent property that distinguishes Adam from SGD.
 
-\paragraph{Validation.} With $J_{\mathrm{val}}$ the Jacobian on validation
+\paragraph{Validation, and minibatches.} With $J_{\mathrm{val}}$ the Jacobian on validation
 points, $\dot{\hat Y}_{\mathrm{val}}=-K_{vt}E$ with
 $K_{vt}=J_{\mathrm{val}}J^{\!\top}/n$, exactly, so
 $-\frac d{dt}\frac12\|E_{\mathrm{val}}\|^2=E_{\mathrm{val}}^{\!\top}K_{vt}(0)E+
@@ -299,7 +319,12 @@ E_{\mathrm{val}}^{\!\top}[K_{vt}(t)-K_{vt}(0)]E$: a lazy-transfer part and a
 feature-learning-transfer part. The coherent part of the lift on validation
 points is the training stage core transported by the cross activation Gram;
 under equal unit statistics on the two samples the whole chain applies with
-that substitution. Measured [n=200]: early both parts positive and the
+that substitution. The same identity covers minibatch training: a step on a
+batch $B$ drives the residual on the full set by $\dot E=-K_{\mathrm{full},B}\,g_B$,
+which is the validation identity with $B$ as the training set, so the chain
+is exact for SGD with the drive history $\{g_{B_s}\}$, while the full-set
+energy, like the validation energy, has no sign step by step.
+Measured [n=200]: early both parts positive and the
 validation rate $70$--$110\%$ of the training rate; late the lazy part
 negative (the frozen kernel maps a residual living in sample-specific rough
 modes into directions that increase validation error, the static held-rough
@@ -335,22 +360,32 @@ every increment is built from the stage cores of Theorem~\ref{thm:spike}, so
 $E(T)$ lies in the span generated by the lazy flow of $E_0$ and the stage
 targets. The first-order term paired with the lazy solution is
 $-\int_0^T\langle E_{\mathrm{lazy}}(2T-u),\Delta(u)E_{\mathrm{lazy}}(u)\rangle\,du$,
-whose sign is fixed by two properties at each $u$: $\Delta(u)\succeq0$ on the
-relevant subspace (the sign lemma below) and the alignment of
+whose sign is fixed by two properties at each $u$: $\Delta(u)\succeq0$ as an
+operator on the subspace spanned by the lazy residual at $u$ and at $2T-u$
+(the sign lemma below) and the alignment of
 $E_{\mathrm{lazy}}(u)$ with $E_{\mathrm{lazy}}(2T-u)$ in the modes $\Delta$ touches
-(persistence; automatic in a fixed basis). Under both, every odd term reduces
-the energy and the even terms are controlled by the preceding odd ones, so
+(persistence; automatic in a fixed basis). Under both,
 $\|E(T)\|^2\le\|E_{\mathrm{lazy}}(T)\|^2-2\int_0^T\langle
-E_{\mathrm{lazy}}(2T-u),\Delta(u)E_{\mathrm{lazy}}(u)\rangle du+O(\|\Delta\|^2)$,
-with the fixed-basis case resumming exactly to the mode-wise bound of
-Section~\ref{sec:held-rough}. The expansion thus identifies the sign lemma and
-persistence as the complete set of hypotheses, order by order, and shows there
-is no third.
+E_{\mathrm{lazy}}(2T-u),\Delta(u)E_{\mathrm{lazy}}(u)\rangle du+R_2$, with an
+explicit nonnegative first correction and a remainder bounded by
+$\|E_0\|^2(D^2+2e^Dr+r^2)$, $D=\int_0^T\|\Delta\|$, $r=e^D-1-D$, from the Dyson
+bound on the terms $m\ge2$. The remainder is not sign-controlled by the two
+properties once the basis rotates; in a fixed basis the series resums
+exactly to the mode-wise bound of Section~\ref{sec:held-rough}, and there the
+two properties are the only hypotheses to all orders. With rotation the
+first-order inequality is what the expansion proves, and the all-orders
+comparison is organised differently below.
 
 \paragraph{What the data say about the two hypotheses.} On the reference run
-the sign condition holds on the entire support of the late residual, because
-every direction carrying it satisfies the feature-change inequality of
-Theorem~\ref{thm:bracket} [n=200]; what fails is persistence in the initial
+every initial eigen-direction carrying the late residual satisfies the
+feature-change inequality of Theorem~\ref{thm:bracket}, so the accumulated
+increment is positive along each of them [n=200]. This is evidence for the
+sign condition on that subspace, not a proof of it: positivity of a quadratic
+form on each of a set of directions does not give positivity on their span,
+the condition the theorems use is the smallest eigenvalue of the increment
+compressed to the subspace, and the monotone-spectrum statements below need
+it for each stage increment, not only for the accumulated one. What fails
+outright is persistence in the initial
 basis: the subspace carrying the residual at $t=44$ is only $55\%$ retained at
 $t=428$, the accumulated increment on those modes being $10^2$--$10^3$ times the
 initial gaps. Persistence is therefore false there, not merely unproved, and
@@ -365,12 +400,16 @@ remaining step.
 $c=V^{\!\top}E$ the residual in the instantaneous eigenframe,
 $\dot c=-\Lambda c-Ac$ with $A=V^{\!\top}\dot V$ antisymmetric, so
 $\frac d{dt}\|c\|^2=-2c^{\!\top}\Lambda c$ exactly: rotation redistributes energy
-among the current modes and does not change the norm. If the sorted
-eigenvalues are nondecreasing from $t_0$ on, which follows from the stage
-increments being positive on the relevant subspace (discharged by
-Theorem~\ref{thm:bracket} on the support of the late residual), then at every
-$t$ the descent rate is at least the frozen-kernel rate evaluated on the
-\emph{current} rank profile, with no hypothesis on eigenvector persistence.
+among the current modes and does not change the norm. If every stage
+increment from $t_0$ on is positive semidefinite on a subspace containing the
+residual, then $\langle E,K(t)E\rangle\ge\langle E,K(t_0)E\rangle$ and the descent
+rate is at least the frozen-kernel rate on the \emph{current} residual; if the
+increments are positive on the whole space, the sorted eigenvalues are
+nondecreasing (Weyl) and the same reads, in the moving frame, as the frozen
+sorted spectrum evaluated on the current rank profile. Neither form needs
+eigenvector persistence; both need per-stage positivity, which is the sign
+lemma below stated per stage and is a hypothesis, checked on the data by the
+smallest eigenvalue of the compressed stage increment.
 What a closed comparison with the lazy trajectory then needs is the evolution
 of the rank profile, i.e.\ the moving cutoff of
 Section~\ref{sec:held-rough}: in the moving frame persistence is a statement
@@ -381,12 +420,13 @@ bounds are the case $A=0$.
 modes still unfit at $T$, with cutoff rank $k^*=\min u^c$, and transport it
 along the eigenvector flow by continuity (through crossings, which are
 massive here: sorted rank is not an invariant label), $P(t)=V(t)\Pi_uV(t)^{\!\top}$. With $E_u=PE$, $E_f=(I-P)E$
-and the cross-front rotation rate $\rho=\max_{k\in u,j\notin u}|A_{kj}|$,
+and the cross-front rotation rate $\rho=\|A_{uf}\|_2$, the spectral norm of
+the $u\times f$ block of $A$,
 \[
 \tfrac d{dt}\|E_u\|^2=-2E_u^{\!\top}KE_u+L,\qquad \tfrac d{dt}\|E_f\|^2=-2E_f^{\!\top}KE_f-L,\qquad |L|\le2\rho\|E_u\|\|E_f\|,
 \]
-the leakage $L$ being the only coupling between the two subspaces. Hence, with
-$\lambda_u,\lambda_f$ the extreme eigenvalues of $K$ on them,
+the leakage $L=2c_u^{\!\top}A_{uf}c_f$ being the only coupling between the two subspaces. Hence, with
+$\lambda_u,\lambda_f$ the extreme eigenvalues of $K$ on the two tracked subspaces at each time,
 \[
 \|\Pi_uc(t_0)\|\,e^{-\int_{t_0}^T\lambda_u}-\!\int_{t_0}^T\!\rho\|E_f\|\;\le\;\|E(T)\|,\qquad
 \|E(T)\|^2\le\|\Pi_uc(t_0)\|^2+2\!\int_{t_0}^T\!\rho\|E_u\|\|E_f\|+\|E_f(T)\|^2,
@@ -396,12 +436,27 @@ $\Pi_uc(0)$ is the energy of the initial error on the init-time eigenvectors
 that evolve into the unfit set at $T$ (not the energy above sorted rank $k^*$
 at $t=0$, which mislabels the modes by an order of magnitude here), the cutoff
 being set by the \emph{lifted} spectrum at $T$; computing it requires the
-continuously tracked eigenvectors, which the chain carries. Rotation enters only through
-the leakage, which is weighted by the fit residual and therefore decays:
-rotation among unfit modes, where Corollary~(iii) above places most of it,
-moves energy within $P$ and costs nothing. No persistence hypothesis appears;
-monotonicity of the sorted spectrum (Weyl, from the discharged sign condition)
-is the only input. The cutoff rank is bracketed two-sidedly by
+continuously tracked eigenvectors, which the chain carries. Three things
+should be said about the inputs. A continuously tracked eigenvalue is not
+monotone even when the sorted spectrum is, so $\int\lambda_u$ is a run
+quantity; if the tracked eigenvalues in $u$ are nondecreasing, then
+$\int_{t_0}^T\lambda_u<1$ and the floor is at least $e^{-1}\|\Pi_uc(t_0)\|$ minus
+the leakage, which is the bracket's real content. For a generic path the
+eigenvalues do not cross but avoid each other, and at an avoided crossing
+between a mode in $u$ and a mode in $f$ the coupling over gap is large; those
+events are exactly where $\rho$ is large, so the order-of-magnitude
+mislabelling seen with sorted ranks does not vanish with continuity
+transport but moves into the leakage integral, which has not been evaluated at
+any sample size. And rotation among unfit modes, where the term-wise
+corollary (iii) below places most of it, moves energy within $P$ and costs
+nothing, while rotation across the front is weighted by the fit residual,
+which is small except at the crossing events themselves. No persistence
+hypothesis appears; the inputs are the tracked cutoff set, the leakage, and
+per-stage positivity of the increments on the residual's subspace for the
+decay rates. An equivalent formulation defines the unfit set at each time by
+the current spectrum, $u(t)=\{k:\lambda_k(t)t<1\}$, the moving cutoff of
+Section~\ref{sec:held-rough}; then $P$ jumps when a mode's $\lambda_kt$ crosses
+one and the leakage carries those jumps explicitly. The cutoff rank is bracketed two-sidedly by
 Theorem~\ref{thm:bracket} through the accumulated feature change, $\rho$ is the
 per-stage coupling over current gap across $k^*$, and the static held-rough
 floor of Section~\ref{sec:held-rough} is the case in which the cutoff is read
@@ -492,7 +547,17 @@ the lifted spectrum; Proposition~\ref{prop:cutoff-floor} remains a valid
 a~priori floor. (vi) Proposition~20 is the radius theorem at a single
 expansion point and the chain is its continuation. (vii) The reduced model of
 ignition is subsumed by the richness expansion and the crossing condition and
-can be cut.
+can be cut. (viii) The moving frame speaks of rank in the current kernel
+basis; the statement that this is roughness in the input-space sense of
+Part~I rests on the measured law that the Laplacian roughness of the $k$-th
+eigenvector is the same function of $k$ for $K_0$ and $K_T$ [n=200], which has
+no proof and must be re-established at the sample sizes of interest, with a
+held-out sample, before the cutoff bound is read as a roughness statement.
+(ix) The a~priori floor of Theorem~\ref{thm:rough-apriori} has not been
+evaluated against $\sigma_R(t)$ on any run; the analogous $H_2$ bound on the
+propagator is loose by $e^{13}$ on the reference run, and if the floor is loose
+by a comparable factor its content at the times of interest is nil, in which
+case the trajectory bracket of Theorem~\ref{thm:bracket} on $PKP$ replaces it.
 
 \subsection{Why the late stage is not predictable from the initialisation}
 \label{ssec:chain-impossible}
@@ -632,9 +697,13 @@ at a sample size that leaves a genuine late stage before any is quoted. The
 exact chain does not scale to large $n$ (one $N\times N$ eigendecomposition per
 stage); the ground-truth runs do, so the redo is training-only, and it should
 include, at that $n$: the seed spread of the late error against width and
-depth; the gap between the own-initialisation and the other-initialisation
-chain against width and depth; the cross-term sign and the spike bound along
-the trajectory; the validation split; and the Euler-versus-direct comparison
+depth, with depth one as the control in which the hidden-state channel of
+Theorem~\ref{thm:hidden} is absent; the gap between the own-initialisation and the other-initialisation
+chain against width and depth; the per-stage sign of the increments as the
+smallest eigenvalue of their compression to the residual's subspace; the spike bound along
+the trajectory; the transported cutoff bracket with its leakage integral; the
+rank-to-roughness law with a held-out sample; the a~priori floor against the
+measured $\sigma_R(t)$; the validation split; and the Euler-versus-direct comparison
 at several $\Delta$ from a shared initialisation.
 
 \paragraph{Hyperparameter transfer (negative result, n=200).} A sweep over widths

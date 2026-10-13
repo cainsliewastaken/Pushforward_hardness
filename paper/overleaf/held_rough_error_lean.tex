@@ -281,6 +281,9 @@ the band is the cutoff bound of Section~\ref{sec:chain}: the energy of the
 initial error on the continuously transported unfit set, with the cross-front
 rotation as the only remainder, and the onset of the lift given by a
 convergent expansion in the richness parameter in place of a reduced model.
+That the current kernel basis orders functions by roughness in the sense of
+this section is the measured rank-to-roughness law of the earlier sections
+[n=200], which the cutoff bound uses and does not prove.
 
 \subsection{Depth and the comparison of architectures}
 
@@ -296,18 +299,39 @@ Let designs $A$ and $B$ be trained by gradient flow on the same dataset, let
 $P$ be the projector of a roughness function fixed by the inputs, and let
 $T>0$.
 \begin{enumerate}
-\item[(i)] (Proved.) $\|E_r^A(T)\|^2$ is at least the right side of
+\item[(i)] (A priori.) $\|E_r^A(T)\|^2$ is at least the right side of
 Eq.~\eqref{eq:rough-floor-apriori} computed with $\sigma_0^A$, $a_A$ and
 $J_s^A(T)$.
-\item[(ii)] (Proved, Section~\ref{sec:chain}.) $\|E^B(T)\|^2$ is at most the
+\item[(ii)] (Along the run of $B$, Section~\ref{sec:chain}.) $\|E^B(T)\|^2$ is at most the
 ceiling of the cutoff bound computed for $B$: the energy of its initial error on
 the modes that are still unfit at $T$ under its lifted spectrum, plus the
-cross-front leakage and the decayed fit part.
+cross-front leakage and the decayed fit part. Its inputs (the transported
+unfit set, the leakage, the fit residual) are read along $B$'s trajectory;
+it is not computable before training.
 \item[(iii)] If the bound in (ii) is below the bound in (i), then
 $\|E^B(T)\|<\|E_r^A(T)\|$: $B$ has learned more of the rough part of the
-labels by time $T$.
+labels by time $T$. Since (ii) needs $B$'s run, the corollary compares a
+trained $B$ against an untrained $A$; a before-training comparison of two
+designs needs (ii) replaced by an a~priori ceiling, which the theory does not
+have.
 \end{enumerate}
 \end{corollary}
+
+\begin{remark}[Status of the a priori floor]
+Theorem~\ref{thm:rough-apriori} has not been evaluated against the measured
+$\sigma_R(t)$ on any run. Its growth constant $a$ uses the second-derivative
+bound $H_2$, and the analogous $H_2$ bound on the variational propagator in
+Appendix~\ref{app:chain} is loose by $e^{13}$ on the reference run, because
+$H_2$ bounds the worst-case curvature while the realised curvature along the
+path is five orders smaller. If $\Sigma(t)$ is loose by a comparable factor,
+$e^{-(2+\varepsilon)I(t)}$ vanishes at every time of interest, the cutoff mode
+sits at the top of the spectrum, and the floor, Definition~\ref{def:cutoff}
+and Corollary~\ref{cor:min-time-rough} hold without content. Measurement (13)
+below decides this; if the floor is vacuous, the trajectory bracket of
+Theorem~\ref{thm:bracket} applied to $PKP$ replaces $\Sigma$ by the accumulated
+feature change on the range of $P$, and the statement becomes a~priori in
+$\sigma_0$ and a run quantity in the lift.
+\end{remark}
 
 The corollary separates what depth does into two effects that can be checked
 one at a time. A deeper network can have larger initial peak feature
@@ -338,10 +362,14 @@ along the path or over the ball of radius $\ell(t)$;
 Proposition~\ref{prop:cutoff-floor}; Corollary~\ref{cor:depth}(i).
 The leak term is exact and is read off a run; its a priori bound through
 Theorem~10 is available while the band of that theorem is informative.
-\textbf{Proved in Section~\ref{sec:chain}.} The cutoff bound (two-sided, with
-the leakage as remainder); Corollary~\ref{cor:depth}(ii)--(iii); the onset law.
+\textbf{Proved in Section~\ref{sec:chain}, with named inputs read along the run.} The cutoff bound (two-sided, with
+the leakage as remainder, the leakage not yet evaluated at any sample size);
+Corollary~\ref{cor:depth}(ii)--(iii) as a trajectory bound; the onset law
+inside its radius. Its link to roughness in the sense of this section is the
+measured rank-to-roughness law, not a theorem.
 Nothing in this section is approximated; the one hypothesis of the earlier
-draft has been measured false and removed.
+draft has been measured false and removed, and the a~priori floor's content
+awaits measurement (13).
 The measurements that decide whether the closure is the right one, to be added
 to the list of Section~15: (13) $\sigma_R(t)$ along each run for the
 manifold high-pass at several $m$, against its a priori bound $\Sigma(t)$ of

@@ -75,6 +75,12 @@ themselves being lifted by the steps.
 
 Withdrawn / corrected claims are listed in OPTIMIZER_SUMMARY.md ("Corrected claims", "Correction").
 
+Which of the items above are theorems and which are measurements organised by the identities: THEORY.md section 21 (added
+2026-10-12). Short version: the basis, the leverage, the cap's form and the remainder detector are theory-derived; sign
+push, q, the hypergradient weights, per-layer-beats-global, the remainder level and every speedup factor are measured.
+Sign-plus-cap steps are not a kernel flow (no energy identity), the metric moves (dP term in the stage identity for K_P),
+and the working regime is at or beyond the stability edge, so the chain's conditional results do not apply to KronQ.
+
 ## 3. The current algorithm (KronQ; optimizer/kronq2.py, kronq3h.py, scale_study.py --opt kronq)
 
 Per linear layer with Wt = [W | b] (out x (in+1)):
@@ -116,9 +122,12 @@ time split (fwd/bwd, statistics, eigh, update), peak GPU memory, exact optimizer
   salloc --no-shell -A m5326 -C gpu -q interactive -N <nodes> -t <time> --image=nersc/pytorch:26.01.01 -J l63_scale
   srun --jobid=<id> --overlap -N <nodes> --ntasks-per-node=1 --gpus-per-node=4 shifter --image=nersc/pytorch:26.01.01 \
        bash optimizer/scale_launch.sh 3
-Estimated ~9 GPU-hours total (width 4096 runs ~5-10 min each); ~30-40 min on 4 nodes. NOT RUN YET (allocation needs the
-user's explicit yes). Analyse: accuracy vs state memory per optimizer and width; equal wall-clock comparison; the
-accuracy cost of each memory reduction as width grows.
+Estimated ~9 GPU-hours total (width 4096 runs ~5-10 min each); ~30-40 min on 4 nodes. LAUNCHED 2026-10-12 17:51 on job
+59722234 (m5326, interactive, 4 nodes, 1 h; approved by the user in chat). Analyse: accuracy vs state memory per optimizer
+and width; equal wall-clock comparison; the accuracy cost of each memory reduction as width grows.
+CAVEAT on the baselines: three fixed lrs, no warmup / schedule / weight decay, beta2 = 0.99 for AdamW, the same lr grid at
+every width. The study decides whether the memory reductions cost accuracy at large width; it does NOT decide "beats tuned
+AdamW / Muon / SOAP" by the standard of section 7, and must not be reported as doing so (THEORY.md 21(d)).
 
 ### Pending decisions (awaiting the user, as of 2026-10-12 evening)
 
