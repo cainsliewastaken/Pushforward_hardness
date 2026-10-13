@@ -122,16 +122,22 @@ time split (fwd/bwd, statistics, eigh, update), peak GPU memory, exact optimizer
   salloc --no-shell -A m5326 -C gpu -q interactive -N <nodes> -t <time> --image=nersc/pytorch:26.01.01 -J l63_scale
   srun --jobid=<id> --overlap -N <nodes> --ntasks-per-node=1 --gpus-per-node=4 shifter --image=nersc/pytorch:26.01.01 \
        bash optimizer/scale_launch.sh 3
-Estimated ~9 GPU-hours total (width 4096 runs ~5-10 min each); ~30-40 min on 4 nodes. LAUNCHED 2026-10-12 17:51 on job
-59722234 (m5326, interactive, 4 nodes, 1 h; approved by the user in chat). Analyse: accuracy vs state memory per optimizer
-and width; equal wall-clock comparison; the accuracy cost of each memory reduction as width grows.
+Estimated ~9 GPU-hours total; RUN 2026-10-12 on job 59722234 (m5326, interactive, 4 nodes, 36 min, approved in chat).
+RESULTS: REPORT.md section 61 (tables in runs/scale/summary/). Verdict against the user's criterion: KronQ as built does NOT
+scale. At width 4096 the variant at Adam's memory (b256 + compress, 2.0 state/P) collapses to the constant predictor on the
+rough target and is 32x worse than full KronQ on the smooth one; every memory reduction's cost grows with width; the usable
+lr shrinks with width (3e-3 fails everywhere >= 1024, only 1e-3 works at 4096 and only for full / b1024); and SOAP with
+blocks of 256 (2.5 state/P) is the best method at 4096 on the rough target (0.083 vs KronQ full 0.108) with SOAP full best
+on the smooth one (4.5e-5 vs 1.2e-4). KronQ's lead over SOAP at widths 256-2048 reverses at 4096. Next (needs a yes): the
+live-mode / uncapped-null-push diagnosis and an lr of 3e-4 / 1e-4 for the blocked variants at 4096 (REPORT 61 item 4),
+~1 GPU-hour; if the reductions cannot be made to work at Adam's memory, the line stops here per the criterion.
 CAVEAT on the baselines: three fixed lrs, no warmup / schedule / weight decay, beta2 = 0.99 for AdamW, the same lr grid at
-every width. The study decides whether the memory reductions cost accuracy at large width; it does NOT decide "beats tuned
-AdamW / Muon / SOAP" by the standard of section 7, and must not be reported as doing so (THEORY.md 21(d)).
+every width. The study decides whether the memory reductions cost accuracy at large width (they do); it does NOT decide
+"beats tuned AdamW / Muon / SOAP" by the standard of section 7 (THEORY.md 21(d)).
 
 ### Pending decisions (awaiting the user, as of 2026-10-12 evening)
 
-1. **Scaling-study allocation, requested but not approved yet:** account m5326, QOS interactive, 4 GPU nodes (16 GPUs,
+1. **Scaling-study allocation: DONE (job 59722234, 2026-10-12).** Was: account m5326, QOS interactive, 4 GPU nodes (16 GPUs,
    3 runs per GPU), 1 hour limit, released automatically by chaining `scancel` after the launcher finishes; expected
    use ~30-40 min (~9 GPU-hours). Commands (fill in the job id):
    `salloc --no-shell -A m5326 -C gpu -q interactive -N 4 -t 01:00:00 --image=nersc/pytorch:26.01.01 -J l63_scale`, then

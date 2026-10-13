@@ -1179,3 +1179,55 @@ CORRECTION to Sections 58 and OPTIMIZER_SUMMARY.md: "the gain comes from multi-s
 criterion sees" is not supported. The local trust-region Newton step lost because its MODEL (GN + interpolated residual
 curvature, GN-on-stiff / GD-on-deep shape) mispredicts the one-step gain of deep pushes; a greedy criterion that
 MEASURES the one-step gain per mode (the hypergradient) finds it. Measure, do not model.
+
+## 61. Optimizer scaling study: results (job 59722234, 4 GPU nodes, 36 min; optimizer/scale_study.py, scale_summary.py; 2026-10-12)
+
+Field problem (16x16 GRF input, target tanh(2 N[(-Lap)^p u]), p = 0 smooth / p = 2 rough), fresh minibatch of 256 every
+step, MLP 256 -> w x 2 -> 256 GELU fp32, widths 256-4096, 5000 steps, one seed, no warmup / schedule / weight decay,
+3 runs per GPU (wall times inflated and only roughly comparable). 220 runs, all finished, none NaN. Tables (per run CSV
+and the printed tables) in runs/scale/summary/. Validation MSE at step 5000, best of the lr grid (AdamW 3e-4/1e-3/3e-3,
+Muon 5e-3/2e-2/5e-2 with lr_adam 1e-3, SOAP 1e-3/3e-3, KronQ 1e-3/3e-3); state memory per parameter in brackets.
+
+| variant (state/P at w=4096) | rough w=256 | 512 | 1024 | 2048 | 4096 | smooth w=256 | 512 | 1024 | 2048 | 4096 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| AdamW (2.0) | 0.527 | 0.486 | 0.443 | 0.457 | 0.390 | 4.0e-3 | 2.2e-3 | 1.2e-3 | 8.2e-4 | 7.2e-4 |
+| Muon (1.1) | 0.435 | 0.396 | 0.343 | 0.304 | 0.264 | 2.5e-3 | 1.2e-3 | 7.1e-4 | 3.8e-4 | 2.2e-4 |
+| SOAP full (9.1) | 0.171 | 0.124 | 0.119 | 0.116 | 0.107 | 1.3e-3 | 4.4e-4 | 1.4e-4 | 9.4e-5 | **4.5e-5** |
+| SOAP block 256 (2.5) | 0.174 | 0.126 | 0.120 | 0.112 | **0.083** | 1.3e-3 | 5.2e-4 | 2.5e-4 | 1.5e-4 | 1.1e-4 |
+| KronQ full (11.1) | **0.128** | **0.120** | **0.116** | **0.110** | 0.108 | 1.2e-3 | 4.4e-4 | 1.6e-4 | 1.1e-4 | 1.2e-4 |
+| KronQ block 1024 (5.8) | 0.128 | 0.120 | 0.116 | 0.109 | 0.106 | 1.2e-3 | 4.4e-4 | 1.8e-4 | 1.2e-4 | 2.4e-3 |
+| KronQ block 256 (4.5) | 0.127 | 0.122 | 0.119 | 0.109 | FAIL | 1.4e-3 | 6.4e-4 | 3.3e-4 | 2.7e-4 | 3.6e-3 |
+| KronQ block 64 (4.1) | 0.139 | 0.125 | 0.120 | 0.104 | FAIL | 2.0e-3 | 1.1e-3 | 5.8e-4 | 8.6e-4 | 6.1e-3 |
+| KronQ b256 + compressed state, bf16 momentum (2.0) | 0.128 | 0.123 | 0.119 | 0.109 | FAIL | 1.2e-3 | 6.3e-4 | 3.4e-4 | 3.4e-4 | 3.8e-3 |
+| KronQ diagonal sides > 1024 (4.0) | 0.128 | 0.120 | 0.120 | FAIL | FAIL | 1.2e-3 | 4.4e-4 | 1.2e-3 | 9.7e-4 | 3.6e-3 |
+
+FAIL = the run sits at the constant predictor (val 0.636 = target variance) at both lrs: the network collapses to the
+mean, no NaN. Per-step wall at w = 4096 (shared GPU): AdamW 8-14 ms, KronQ diag 26, KronQ b1024 58, KronQ b256/b64 150-200,
+KronQ full 191, SOAP b256 195, Muon 180-230, SOAP full 290. KronQ full's cost is the two 4096^2 eighs per layer every 20
+steps (380 s of 955 s) and the rotations (545 s).
+
+Findings.
+1. Against the user's criterion (keep the advantage at Adam's memory): KronQ as built does NOT scale. The one variant at
+   Adam's memory (b256 + compress, 2.0 state/P) collapses on the rough target at w = 4096 and is 32x worse than full
+   KronQ on the smooth one; every reduction's cost grows with width on the smooth target (b256: 1.1x at w = 256, 2.1x at
+   1024, 2.4x at 2048, 31x at 4096; b1024: 1.0x up to 2048, 21x at 4096) and on the rough target the reductions hold
+   to w = 2048 (0.95-1.03x) and then fail outright.
+2. At w = 4096 the best method is SOAP with blocks of 256 (2.5 state/P): 0.083 rough vs KronQ full 0.108 (and
+   KronQ b1024 0.106 at 5.8 state/P); on the smooth target SOAP full 4.5e-5 vs KronQ full 1.2e-4. KronQ's lead over SOAP
+   (1.3x at w = 256 rough, equal at 512-2048) reverses at 4096. Muon is second on smooth (2.2e-4) and far behind on rough
+   (0.26); AdamW is last on both (0.39 / 7.2e-4).
+3. The usable learning rate of KronQ shrinks with width: lr 3e-3 fails (collapse or 10-100x worse) at every width >= 1024
+   for every variant including full, on both targets; at 4096 only lr 1e-3 works and only for full and b1024. The claim
+   "insensitive to the base lr over 10x" (REPORT 59, H96, n = 20000) does not hold at width; the 2-point grid has its
+   optimum at the edge, so the reductions may be recoverable at lr 3e-4 or 1e-4 (not run).
+4. Mechanism (hypothesis, not measured): blocked and diagonal sides have no null modes (a 256 x 256 block of the EMA'd
+   factor is full rank, the full 4096 x 4096 factor at batch 256 is not), so 'live = lam > reltol lam_max' excludes nothing
+   and the sign push is applied, uncapped (the GN cap |Gr|/(lam lr L) is large where lam is small), on directions the full
+   basis treats as null; the number of such directions grows with width, which is the width dependence of the failure.
+   The diagonal-side variant is the extreme case (sign push in raw coordinates on the wide side) and fails first.
+   Test: log the live-mode fraction and the share of the step's parameter-space energy on modes with lam < 1e-6 lam_max,
+   full vs b256, at w = 2048-4096; try a cap relative to the gradient energy instead of per mode, and an lr of 3e-4 / 1e-4.
+5. Equal wall-clock comparison is not meaningful at w >= 2048 here: AdamW finishes 5000 steps in 40-70 s, before any
+   other method reaches its first evaluation, and the shared GPUs make the wall times unreliable. At w <= 512, at AdamW's
+   wall budget, KronQ b1024 / SOAP reach 1.5-3x lower error than AdamW on the rough target.
+Caveats: one seed; baselines untuned (3 fixed lrs, no schedule, beta2 = 0.99); 5000 steps; see THEORY.md 21(d).
