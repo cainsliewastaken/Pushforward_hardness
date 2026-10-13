@@ -1815,6 +1815,27 @@ Caveats: one seed; baselines untuned (3 fixed lrs, no schedule, beta2 = 0.99); 5
        accuracy that matters comes from the A side's basis being fresh. The plan's T3 (fixed input-layer A), T4 (global
        top-k subspace per side with the complement in coordinates) and a refresh-floor control are the right next tests;
        the per-side overlap diagnostic (now logged) decides how often each side needs refreshing.
+34. REFRESH COST (job 59758426, 1 node, 8 min; Cholesky-QR in the subspace iteration, --refresh_min, --S_every, --A0_fixed;
+   scale_fastref.sh; runs/scale_fastref/). One run per GPU, 5000 steps, --diag 1 (AdamW with the same diag: 33 s; AdamW
+   clean 600-step timing: 3.3 ms per step).
+   | variant | rough | smooth | wall / 5000 steps (fb / stats / refresh / update) | ms per step | x AdamW (6.6 ms with diag) |
+   | batched QR, floor 5 (item 33 reference) | 0.0612 | 1.41e-4 | 349 s (13 / 11 / 293 / 31) | 70 | 10.6 |
+   | Cholesky-QR, floor 5 | 0.0601 | - | 79 s (12 / 10 / 27 / 28) | 15.8 | 2.4 |
+   | Cholesky-QR, floor 20 | 0.0700 | 1.37e-4 | 63 s (12 / 10 / 10 / 29) | 12.6 | 1.9 |
+   | Cholesky-QR, floor 20, S every 4th refresh, A0 fixed (T3) | 0.1321 | - | 59 s (12 / 11 / 6 / 29) | 11.8 | 1.8 |
+   (a) The cost problem of item 33 is solved by the factorisation alone: CholeskyQR2/3 (Gram in float64, 20x faster per
+       call than the batched QR, subspace agreement 2e-4, accumulated basis re-orthonormalised every 10 refreshes) gives
+       the reference accuracy on both targets at 15.8 ms per step, 2.4x AdamW with the same diagnostics (about 4.8x
+       AdamW's clean 3.3 ms). The refresh is now 27 s of 79, the per-step update (direction, cap, hypergradient on three
+       1.7e7-entry arrays) 28 s: the next engineering target, fusable.
+   (b) Refresh floor 20 saves another 20 % of wall for 1.17x on rough and nothing on smooth.
+   (c) T3 as implemented LOSES 2x: the input layer's A basis was frozen at the first refresh (step 1, statistics from
+       one batch); S every 4th refresh adds little. The overlaps at width 4096 are A 0.95 / S 0.98 per refresh at floor 5
+       (the S side moves LESS than the A side here, unlike the width-64 smoke), so refreshing S rarely is defensible and
+       freezing A at step 1 is not; T3 needs the basis frozen after the statistics have converged (e.g. the 5th refresh).
+   Standing figures for the method from here on: the Cholesky-QR configuration at floor 5 (reference accuracy, 2.4x AdamW
+   wall with diagnostics); the equal-wall comparison with AdamW on rough is now 0.060 vs AdamW at 2.4x the steps (~0.33
+   from its curve): 5x.
 
 25 (this fork). APPROXIMATION CONTROLS AND BASIS TRACKING (job 59749741, 1 node, 12 min; optimizer/tracking.py, --track;
    scale_exact.sh; runs/scale_exact/). Width 4096, both targets: reference fast configuration (blocks 256, bf16 state, two

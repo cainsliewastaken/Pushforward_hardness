@@ -22,8 +22,9 @@ warm-started subspace iterations. Cost 2.1-2.5 forward-backwards per step, state
 
 Results (items 1, 9, 11, 13, 21): rough 0.061-0.076 (SOAP b256 0.083-0.095, AdamW 0.39 at equal steps and 0.25 at 4x
 the steps, Muon 0.26, exact-K Krylov 0.48-0.56); smooth 1.41e-4 (SOAP 1.1-1.4e-4, AdamW 7.2e-4 / 1.56e-4 at 4x). At
-equal FLOPs about 4x over AdamW on rough; a tie on smooth. Per-step wall 2-3x AdamW in this configuration (item 11; the
-eigendecomposition variant used in items 13-20 is 25-50x and must not be used).
+equal FLOPs about 4x over AdamW on rough; a tie on smooth. Per-step wall: 15.8 ms = 2.4x AdamW (with the same diagnostics; ~4.8x AdamW's clean 3.3 ms) with the Cholesky-QR
+subspace iteration (item 34; the batched-QR / eigendecomposition variants used in items 13-33 were 10-50x and must not
+be used). At equal wall on rough: 0.060 vs AdamW ~0.33 (5x).
 
 ## 2. The mechanism (MECHANISM.md; items 21, 22, 27, 28)
 
