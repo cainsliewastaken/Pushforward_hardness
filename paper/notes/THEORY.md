@@ -1302,37 +1302,48 @@ Prop 20) onto the chain:
      not proved, see 12.3); Theorem 28 (the chain) is its continuation and needs only R > 0.
  (vii) Prop reduced ignition -> Theorem 26 (richness expansion; onset of the lift as a convergent series) + Cor. 49 (the
      crossing condition and its bracket); the reduced two-variable model is subsumed and should be cut.
- (viii) THE BRIDGE FROM THE MOVING FRAME BACK TO ROUGHNESS IS AN UNPROVED FINDING (added 2026-10-12). Everything in
-     sections 18-19 is stated in the current kernel eigenbasis, i.e. in terms of RANK. The paper's claim is about roughness
-     in the input-space sense of Part I (a projector seminorm fixed by the inputs). The only link between the two is the
-     F2 law of WRITEUP (the graph-Laplacian roughness of the k-th eigenvector of K(t) is the same function of k for K_0 and
-     K_T, measured at n = 200 on 42 runs). If F2 holds, "the lift moves the cutoff up in rank" is "the network fits rougher
-     functions", and Theorem 48 is a roughness statement; if F2 fails at large n (e.g. the lifted eigenvectors are
-     sample-specific rather than Laplacian-rough, which is what the late negative lazy transfer of section 13 suggests they
-     partly are), Theorem 48 says nothing about roughness. F2 is therefore the linchpin of the paper's title claim and has
-     no theorem behind it. What a derivation could use: the stage lift is targeted at Gram-smoothed residual directions
-     (section 8 (ii)), each layer's Gram A_l is a kernel on the inputs whose eigenvectors are ordered by input-space
-     roughness (this is Part I's content for the first layer, where A_0 is the input Gram), and Theorem 11' bounds the
-     numerical rank of the local-derivative matrix by the Hermite decay at the current preactivation scale; so the
-     lifted directions are images of input-smooth directions through a controlled number of Hermite orders, which is a
-     statement about their roughness in the input sense. Not done. Measurement: F2 at large n, along training, with the
-     cross-sample test (is the lifted eigenvector's roughness the same on a held-out sample) — EXPERIMENTS.md.
- (ix) THE A PRIORI FLOOR HAS NEVER BEEN EVALUATED AND MAY BE VACUOUS (added 2026-10-12). Theorem rough-apriori uses
-     Sigma(s) = sigma_0 + a s with a = lambda_1^{1/2} H_2 ||E_0|| and I(t) ~ a^2 t^3 / 3. The analogous H_2 bound on the propagator
-     (Prop. 31) is loose by exp(13) on the reference run, because H_2 bounds the worst-case curvature while the realised
-     curvature along the path is 10^-5 of it. If Sigma(t) is loose by a similar factor, exp(-(2+eps) I(t)) is zero at every t
-     of interest, the cutoff mode of Definition cutoff sits at the top of the spectrum from early on, the floor
-     (Prop. cutoff-floor) is trivially satisfied, and the cube-root ignition time of Cor. min-time-rough is meaninglessly
-     short. The theorem stays true; its content at the times that matter is then nil. The check (item (13) of the
-     held-rough section's list) is sigma_m(t) against Sigma_m(t) and the realised drive Theta_R along saved runs, one top
-     eigenvalue of P K P per snapshot; it must be run before anything quantitative is built on that section. If the floor
-     is vacuous, the fix is the trajectory bracket of Theorem 13 on PKP (item (ii) above), which replaces the worst-case a
-     by the accumulated feature change on the range of P, and the a priori statement becomes "a priori in sigma_0, run
-     quantity in the lift" — honest, and the same shape as Theorem 48.
+ (viii) WHAT A ROUGHNESS FUNCTION IS, AND THE ONE TO USE (corrected 2026-10-12 after user review; the earlier text here,
+     which made the Laplacian "rank-is-roughness" law F2 the bridge between the moving frame and the paper's roughness
+     claim, was a misreading and is withdrawn). In the main text (Part I: Def. lcf, Thm stepsup, Thm stepkrylov, Thm slow(c))
+     a roughness function is any seminorm on sampled functions, and it is a DUAL VARIABLE for a lower bound: every
+     seminorm R gives ||E|| >= (R(E) - sigma_R Upsilon(gamma)^{1/2}) / C_R and the step bound b_R(s); the supremum over all R
+     of the step bound is F(s), the smallest first-order reachable error, attained by ONE rank-one functional
+     phi* = E_gamma / ||E_gamma||, E_gamma = gamma (K + gamma)^{-1} E, the slow part of the CURRENT error under the CURRENT
+     kernel, which is a polynomial in K applied to E and is computed by the Krylov series span{E, KE, K^2 E, ...}
+     (reaching F after at most q_E terms). "Rough" therefore means "slow for the current features" by construction; the
+     budget inequality lambda_k R(v_k)^2 <= sigma_R^2 is the definition of that link, and with phi* every chain of
+     inequalities in the floor is an equality in its signed form (Eq. mainexact): ||E_gamma|| = <phi*, E> - ||phi*||_K
+     Upsilon^{1/2}. A fixed input-space seminorm (cluster, Laplacian high-pass) is a local complexity function: it makes
+     R(Y) computable before training, and gives a WEAKER bound. Consequences for this document:
+       - The moving frame of sections 18-19 is the hard-threshold form of the Krylov functional: the transported
+         projector P_u(t) onto {lambda_k(t) t < 1} is the limit of the smooth weight gamma/(lambda + gamma) at gamma ~ 1/t,
+         and Theorem 48 is the energy identity for the slow part in that form. Nothing about Laplacian roughness is needed
+         for it to be a roughness statement; F2 is an observation about one local complexity function, not load-bearing.
+       - The held-rough section's "closure fails" (c(t) -> 10^-3, item (iii) above) is an artefact of a FIXED projector:
+         for the rank-one functional R(u) = |<phi, u>|, P = phi phi^T is a projector, PKP has the single eigenvalue
+         ||phi||_K^2 = sigma_R^2, and <E_r, K E_r> = sigma_R^2 ||E_r||^2 exactly (c = 1). The closure is not false; the
+         Laplacian P put the residual in the slow directions of ITS range, where its sigma_R (the top of P K P) is
+         irrelevant. What does fail for the Krylov functional is the ENERGY form's leak <E_r, K E_s> (REPORT 0: 4-12x the
+         diagonal from t = 0), and the remedy is the SIGNED form: d/dt <phi, E> = -<phi, K E>, |.| <= ||phi||_K |theta_dot|
+         (Prop. rates (a)), integrated along the path (Thm path: ||E(t)|| >= <phi, E_0> - cost_t(phi), cost_t(phi) =
+         int ||phi||_{K(s)} |theta_dot| ds), which has NO leak and NO closure. The energy/Gronwall form of the draft
+         (exp(-(2+eps) int sigma^2) with the 1/eps leak) is the wrong form for a rank-one functional.
+       - The a priori floor of the draft (Sigma(s) = sigma_0 + a s, I(t) cubic) is replaced by the main text's own time-0
+         floor: ||E(t)|| >= F_0(ell(t)) - (1/2) H_2bar(ell) ell^2 (Thm time0), with F_0 the ridge/Krylov value at theta_0 and
+         ell(t) = int |theta_dot| <= sqrt(t/2) ||E_0|| the path length (Prop. ell), and the minimum path length / time of
+         Cor. mintime. The "cutoff mode" becomes a cutoff RATE: ||E(t)|| >= ||E_{0,gamma}|| - ell(t) sqrt(gamma)/2 - (1/2)
+         H_2bar ell^2 for every gamma (since ||phi_gamma||_{K_0} <= sqrt(gamma)/2 and <phi_gamma, E_0 - E_{0,gamma}> >= 0),
+         so the error at t is at least the slow part of the initial error at every rate gamma whose removal the path
+         cannot yet have paid for; the chain's Theorem 48 is the same statement with the a priori charge replaced by the
+         actual lifted spectrum. The rewritten held-rough section (held_rough_error_lean.tex, 2026-10-12) says all this.
+       - Whether the time-0 floor and the path floor have content along a run (the H_2 term may be loose, as it was for
+         the propagator in Prop. 31) is the Krylov-form C1 of EXPERIMENTS.md, run on the n = 200 snapshots on 2026-10-12
+         (chain/krylov_floor.py; numbers in EXPERIMENTS.md C1) and to be redone at large n.
 Net: keep Part I and the exact fixed-projector floor; replace the closure, the band, the ignition model and Prop 20's role
 by the chain section; the paper's "closure beyond the lazy regime" becomes the chain, and its one measured hypothesis
-(constant c) is replaced by a theorem plus a named remainder — with the remainder (the leakage) still to be computed, the
-sign input (per-stage positivity on the residual's subspace) still a hypothesis, and the roughness bridge (F2) still a finding.
+(constant c) is replaced by a theorem plus a named remainder — with the remainder (the leakage) still to be computed and the
+sign input (per-stage positivity on the residual's subspace) still a hypothesis. The roughness function in all of this is
+the Krylov functional at the current point; the fixed-projector statements are its weaker corollaries ((viii) above).
 Also: Cor. depth (ii)-(iii) of the held-rough section is NOT a before-training comparison: the ceiling needs design B's
 whole trajectory (tracked Pi_u c(0), rho, E_f along the run). Part (i) is a priori; (ii) is a trajectory bound; the tex
 is corrected accordingly.

@@ -14,8 +14,8 @@ These are the files uploaded to Overleaf; they are the current version of the th
 - `PAPER_OUTLINE.md`           : what to keep / replace / cut, and what is open before submission
 - (review 2026-10-12)          : corrections applied to the three tex files (leakage bound as a block norm, cutoff-bound inputs as run
                                  quantities, sign condition as a per-stage hypothesis, Thm 36 first order only, radius bound unproved,
-                                 Adam's dP term, Cor. depth (ii) a trajectory bound, status remark on the a priori floor, rank-to-
-                                 roughness as the unproved bridge); details in `../notes/THEORY.md` (REVISED / CORRECTION marks,
+                                 Adam's dP term, Cor. depth (ii) a trajectory bound); then, after the user's correction, the held-rough
+                                 section rewritten around the Krylov functional (the roughness function of Part I), same flow; details in `../notes/THEORY.md` (REVISED / CORRECTION marks,
                                  section 21) and the experiments they require in `../notes/EXPERIMENTS.md`
 
 In the Overleaf main file: replace `\input{held_rough_error.tex}` by `\input{held_rough_error_lean.tex}`;

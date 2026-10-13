@@ -416,7 +416,11 @@ Section~\ref{sec:held-rough}: in the moving frame persistence is a statement
 about where the residual sits, not which way it points, and the fixed-basis
 bounds are the case $A=0$.
 
-\paragraph{The cutoff bound.} Fix the index set $u=\{k:\lambda_k(T)T<1\}$ of
+\paragraph{The cutoff bound.} The slow part of the error at rate $\gamma$,
+$E_\gamma=\gamma(K+\gamma I)^{-1}E$, keeps each mode with the weight
+$\gamma/(\lambda_k+\gamma)$; replacing the weight by the indicator of
+$\lambda_k<\gamma$ at $\gamma=1/T$ gives the following hard-threshold form, in
+which the energy identity closes exactly. Fix the index set $u=\{k:\lambda_k(T)T<1\}$ of
 modes still unfit at $T$, with cutoff rank $k^*=\min u^c$, and transport it
 along the eigenvector flow by continuity (through crossings, which are
 massive here: sorted rank is not an invariant label), $P(t)=V(t)\Pi_uV(t)^{\!\top}$. With $E_u=PE$, $E_f=(I-P)E$
@@ -547,17 +551,15 @@ the lifted spectrum; Proposition~\ref{prop:cutoff-floor} remains a valid
 a~priori floor. (vi) Proposition~20 is the radius theorem at a single
 expansion point and the chain is its continuation. (vii) The reduced model of
 ignition is subsumed by the richness expansion and the crossing condition and
-can be cut. (viii) The moving frame speaks of rank in the current kernel
-basis; the statement that this is roughness in the input-space sense of
-Part~I rests on the measured law that the Laplacian roughness of the $k$-th
-eigenvector is the same function of $k$ for $K_0$ and $K_T$ [n=200], which has
-no proof and must be re-established at the sample sizes of interest, with a
-held-out sample, before the cutoff bound is read as a roughness statement.
-(ix) The a~priori floor of Theorem~\ref{thm:rough-apriori} has not been
-evaluated against $\sigma_R(t)$ on any run; the analogous $H_2$ bound on the
-propagator is loose by $e^{13}$ on the reference run, and if the floor is loose
-by a comparable factor its content at the times of interest is nil, in which
-case the trajectory bracket of Theorem~\ref{thm:bracket} on $PKP$ replaces it.
+can be cut. (viii) The roughness function in all of the above is the one of
+Part~I: the Krylov functional $\varphi_\gamma=E_\gamma/\|E_\gamma\|$ built from
+the current error and the current kernel, which attains the supremum of the
+floor over all seminorms. The transported projector of the cutoff bound is its
+hard-threshold form, the unfit set $\{\lambda_k(t)t<1\}$ standing in for the
+weight $\gamma/(\lambda+\gamma)$ at $\gamma\approx1/t$, and the cutoff bound is
+the energy identity for that slow part; no input-space notion of roughness
+enters, and the fixed-projector statements of Section~\ref{sec:held-rough}
+are the weaker corollaries one obtains by holding a seminorm fixed.
 
 \subsection{Why the late stage is not predictable from the initialisation}
 \label{ssec:chain-impossible}
@@ -702,8 +704,7 @@ Theorem~\ref{thm:hidden} is absent; the gap between the own-initialisation and t
 chain against width and depth; the per-stage sign of the increments as the
 smallest eigenvalue of their compression to the residual's subspace; the spike bound along
 the trajectory; the transported cutoff bracket with its leakage integral; the
-rank-to-roughness law with a held-out sample; the a~priori floor against the
-measured $\sigma_R(t)$; the validation split; and the Euler-versus-direct comparison
+floors of Section~\ref{sec:held-rough} in their Krylov form along the run; the validation split; and the Euler-versus-direct comparison
 at several $\Delta$ from a shared initialisation.
 
 \paragraph{Hyperparameter transfer (negative result, n=200).} A sweep over widths
