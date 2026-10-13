@@ -333,12 +333,12 @@ for step in range(1, a.steps + 1):
                     for s_, lin in zip(st, lins):
                         lin.weight.sub_((g_scale - 1.0) * lr * s_['Dw_last'][:, :-1]); lin.bias.sub_((g_scale - 1.0) * lr * s_['Dw_last'][:, -1]); s_['Dw_last'] = g_scale * s_['Dw_last']
                 df = (forward(xb) - out).norm(); En = (out - yb).norm(); rho = float(df / (En + 1e-30))
-                target = a.rem if a.rem > 0 else a.rem_ctrl
-                if rho > 2.0 * target:                       # safety: undo the fraction of the step beyond twice the target
-                    sc = 1.0 - 2.0 * target / rho
-                    for s_, lin in zip(st, lins): lin.weight.add_(sc * lr * s_['Dw_last'][:, :-1]); lin.bias.add_(sc * lr * s_['Dw_last'][:, -1])
-                elif a.rem > 0 and rho > a.rem:              # one-sided budget (--rem): undo the fraction beyond the budget
-                    sc = 1.0 - a.rem / rho
+                # one-sided budget (--rem): undo the fraction of the step beyond the budget (exact semantics of the fix runs);
+                # controller (--rem_ctrl): safety undo beyond twice the target only. NOTE: between 2026-10-12 20:27 and this
+                # edit, --rem undid only down to 2 x rem when rho > 2 rem (REPORT 61 item 8); runs with git a36fd54/6e29d3a are affected.
+                lim = a.rem if a.rem > 0 else 2.0 * a.rem_ctrl
+                if rho > lim:
+                    sc = 1.0 - lim / rho
                     for s_, lin in zip(st, lins): lin.weight.add_(sc * lr * s_['Dw_last'][:, :-1]); lin.bias.add_(sc * lr * s_['Dw_last'][:, -1])
                 if a.rem_ctrl > 0:                           # damped multiplicative update of the running factor toward the target
                     g_scale *= min(2.0, max(0.5, (a.rem_ctrl / max(rho, 1e-12)) ** 0.5))

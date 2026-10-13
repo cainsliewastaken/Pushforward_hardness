@@ -13,7 +13,7 @@ for r in recs:
     if r['metric'] in ('val', 'wall'): d['curve'].setdefault(r['step'], {})[r['metric']] = r['value']
     elif r['metric'].startswith('gnls_qratio'): d['q'][r['metric']].append(r['value'])
     else: d[r['metric']] = r['value']
-    d['opt'], d['width'], d['p'] = r['opt'], r['width'], r['p']
+    d['opt'], d['width'], d['p'], d['git'] = r['opt'], r['width'], r['p'], r['git']
 def variant(a):
     o = re.search(r'--opt (\w+)', a).group(1)
     if o == 'kronq':
@@ -32,7 +32,7 @@ for a, d in runs.items():
     rows.append(dict(variant=variant(a), width=d['width'], p=d['p'], lr=float(re.search(r'--lr ([0-9.e-]+)', a).group(1)),
                      steps=int(re.search(r'--steps (\d+)', a).group(1)), val=d['val_final'], spp=d.get('state_per_param', np.nan),
                      peak_gb=d.get('peak_mem_bytes', np.nan) / 1e9, wall=d.get('wall_total', np.nan),
-                     q1=np.median(d['q']['gnls_qratio_l1']) if d['q'].get('gnls_qratio_l1') else np.nan, args=a))
+                     q1=np.median(d['q']['gnls_qratio_l1']) if d['q'].get('gnls_qratio_l1') else np.nan, git=d['git'], args=a))
 print(f'{len(rows)} finished runs of {len(runs)} started')
 if not rows: sys.exit(0)
 os.makedirs(f'{F}/summary', exist_ok=True)
@@ -50,8 +50,9 @@ for p in sorted(set(r['p'] for r in rows)):
         print(f'\n== p = {p:g} ({"smooth" if p == 0 else "rough"}), width {w}: equal FLOPs; best lr per method; sorted by state/param')
         print('   %-26s %8s %6s %7s %7s %8s %6s %s' % ('method', 'val', 'lr', 'steps', 'state/P', 'peak GB', 'wall s', 'memory class'))
         for r in sel:
-            print('   %-26s %8.3e %6g %7d %7.2f %8.2f %6.0f %s%s' % (r['variant'], r['val'], r['lr'], r['steps'], r['spp'], r['peak_gb'], r['wall'], mclass(r['spp']),
-                  '' if np.isnan(r['q1']) else f'   q_true/q_K(l1) med {r["q1"]:.0f}'))
+            flag = '  [rem undo-to-0.2 code]' if ('rem' in r['variant'] and r['git'] in ('a36fd54', '6e29d3a')) else ''
+            print('   %-26s %8.3e %6g %7d %7.2f %8.2f %6.0f %s%s%s' % (r['variant'], r['val'], r['lr'], r['steps'], r['spp'], r['peak_gb'], r['wall'], mclass(r['spp']),
+                  '' if np.isnan(r['q1']) else f'   q_true/q_K(l1) med {r["q1"]:.0f}', flag))
         ref = best.get(('adamw', w, p))
         if ref:
             print('   ratio to AdamW (val_adamw / val):', '  '.join(f"{r['variant']}: {ref['val'] / r['val']:.2f}" for r in sel if r['variant'] != 'adamw'))
