@@ -1670,6 +1670,33 @@ Caveats: one seed; baselines untuned (3 fixed lrs, no schedule, beta2 = 0.99); 5
    but it is a 2-3x contrast on a 0.05 baseline, which the one-step hypergradient already turns into 2-3x weights on the
    slow input modes and 0.9 on the top decile (item 19). Verdict: the one-step hypergradient stays; no rule built on the
    gradient's sign statistics has beaten it, and the per-mode time structure it could use is small. Closed.
+27. OPEN MEASUREMENTS OF MECHANISM.md (job 59750990, 1 node, 10 min; scale_open.sh; runs/scale_open/). Reference: sign push +
+   cap + learned weights 0.0612 rough / 1.41e-4 smooth (batch 256, 5000 steps).
+   (1) Adam rule WITH the cap and the learned weights (--adam_fair): rough 0.1103, smooth 1.62e-4. The sign push is 1.8x
+       better on rough with everything else equal; on smooth 1.15x. The 1.45x of item 22 was not the missing cap/weights.
+       The sign is essential on the rough target. MECHANISM Prop. 2's parity between bounded-magnitude rules is REFUTED.
+   (2) Derived per-mode weight (--wrule derived; ran in its small-SNR limit, w ~ C^2 / lam^1.5, normalised, clipped
+       [0.1, 10], no learning): rough DIVERGES (0.164 at 500 -> 1.49 at 5000), smooth 4.5e-4 (3.2x worse than learned, worse
+       than uniform 2.55e-4). The model's per-mode optimum e_k erf(SNR_k) / s_k is NOT what the hypergradient finds: the
+       learned profile is far flatter (2-3x on the slow input modes, 0.9 on the top decile) and far better.
+   (3) Batch 1024 with the budget raised: rem 0.3 -> 0.0443, rem 0.4 -> 0.0428 at 2500 steps (rem 0.2: 0.0815; batch 256 at
+       2500 steps: 0.101, at 5000 steps: 0.0612). With the budget re-set to the batch's break-even, 4x the batch gives 2.35x
+       per step (the model's ~2x) and beats the batch-256 run at twice the samples. The budget constant scales with the
+       batch, as item 22 predicted; open item 2 of MECHANISM section 7 is resolved and the practical lever is real.
+   (4) Per-sample spread tau_k = std_x(z_x,k) / s_k per lambda decile (100 modes per decile, true residual): flat within
+       1.0-1.4x on the input layer and 1.0-1.7x on the hidden layer (slowly rising toward slow modes), both targets, both
+       stages: assumption (S) holds to a factor < 2 over the whole spectrum. Per-batch SNR (mean / (std / sqrt m)) per
+       decile: 0.6-0.9 on every decile, both targets (1.1-1.4 at batch 1024): Lemma 1 (SNR flat in lambda) holds
+       directly. The Kronecker estimate sqrt(m) |g| / sqrt(lam) is off by 4e3-1e5 in scale (normalisation of the probe vs
+       the loss gradient) and is not usable as is. NOTE the per-batch SNR of 0.6-0.9 is much higher than the ~0.2 inferred
+       from the 64-step persistent fraction (item 24): the signal changes within 64 steps, so the time-mean underestimates
+       it. With momentum over ~19 batches the momentum SNR is ~3: the sign of the momentum is right ~99 % of the time,
+       i.e. the sign push's DIRECTION is nearly deterministic at this batch size. Noise handling is therefore NOT where
+       the sign beats the Adam rule in the same basis: both have nearly deterministic directions and bounded magnitudes;
+       the difference is the magnitude PROFILE across modes (sign: 1 on every mode; Adam: |m| / sqrt v ~ 0.5-0.7 varying
+       with the per-mode SNR), and the reason a flat profile wins on rough is the open question, now sharply posed.
+   Status of MECHANISM.md after this: Lemma 1 and (S) confirmed; the budget-as-break-even and its batch scaling confirmed;
+   Prop. 2's ranking GD < ridge-type < sign confirmed, its sign/Adam parity refuted; section 3's per-mode optimum refuted.
 
 25 (this fork). APPROXIMATION CONTROLS AND BASIS TRACKING (job 59749741, 1 node, 12 min; optimizer/tracking.py, --track;
    scale_exact.sh; runs/scale_exact/). Width 4096, both targets: reference fast configuration (blocks 256, bf16 state, two

@@ -124,6 +124,15 @@ the budget is purely the noise limit (a damping).
 
 ## 7. What this does not explain (the open list for the paper)
 
+UPDATE after the open measurements (REPORT 61 item 27, 2026-10-13 14:00): Lemma 1 and assumption (S) are confirmed
+directly (tau_k flat within 1.5x over ten deciles; per-batch SNR 0.6-0.9 on every decile). Item 2 below is RESOLVED
+(budget re-set to the batch's break-even: 4x batch = 2.35x per step). Section 3's per-mode optimum is REFUTED (the
+derived weight diverges on rough; the learned profile is flat and better). Item 1 is SHARPENED: with cap and learned
+weights on both, the sign push beats the Adam rule 1.8x on rough and 1.15x on smooth; at momentum SNR ~3 both directions
+are nearly deterministic, so the difference is the magnitude profile across modes (flat vs ~SNR-dependent), not noise
+handling. Section 2's account of why magnitude rules and the exact ridge lose stands; its account of why the sign in
+particular wins does not, and that is the one open question before the paper.
+
   1. Sign push vs the Adam rule in the same basis, 1.45x on rough: both have |d_k| bounded and E[d_k] ~ SNR_k; the model
      puts them at parity. Candidate: the Adam rule's magnitude m / sqrt(v) carries the noise of v (SNR ~ 0.2 makes v
      noise-dominated), so its effective per-mode length fluctuates by O(1) step to step while the sign's is fixed.
