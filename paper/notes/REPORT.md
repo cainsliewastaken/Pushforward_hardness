@@ -1659,7 +1659,7 @@ Caveats: one seed; baselines untuned (3 fixed lrs, no schedule, beta2 = 0.99); 5
    keeps its sign (the persistent slow input modes early), cut it on modes whose gradient flips (the oscillating fast
    modes). Implemented as --hyper_rule rprop (x1.2 / x0.5 on the log weight, reusing the hypergradient state); the one-step
    hypergradient is the same signal weighted by magnitude at rate 0.01. Not yet run.
-25. SIGN-CORRELATION STEP RULE (job 59749946, 1 node, ~8 min; --hyper_rule signcorr; scale_signcorr.sh; runs/scale_signcorr/).
+26. SIGN-CORRELATION STEP RULE (job 59749946, 1 node, ~8 min; --hyper_rule signcorr; scale_signcorr.sh; runs/scale_signcorr/).
    u_k += 0.05 x EMA_0.98[sign(g_t)(sign(g_t-1) + sign(g_t-2))] in place of the one-step hypergradient. Results: rough 0.1305
    (reference 0.0612), smooth 2.49e-4 (reference 1.41e-4). LOSES 2.1x / 1.8x, and the numbers equal the UNIFORM-weight sign
    push (0.118-0.13 rough, 2.55e-4 smooth; items 13, 22): the rule degenerated to it. Why: the smoothed sign correlations are
