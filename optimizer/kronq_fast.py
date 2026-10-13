@@ -121,10 +121,13 @@ class Basis:
             else: Vr = None
         # new basis U V; factor becomes (nearly) diagonal in it
         if self.U is None:
-            self.U = V; self.Ur = Vr
+            self.U = V; self.Ur = Vr; self.nacc = 0
         else:
-            self.U = torch.bmm(self.U, V)
+            self.U = torch.bmm(self.U, V); self.nacc = getattr(self, 'nacc', 0) + 1
             if self.rem: self.Ur = self.Ur @ Vr
+            if CHOLQR and self.nacc % 10 == 0:                      # re-orthonormalise the accumulated basis (Cholesky-QR drift ~1e-4 per refresh)
+                self.U = cholqr(self.U)
+                if self.rem: self.Ur = cholqr(self.Ur)
         self.F = torch.bmm(torch.bmm(V.transpose(1, 2), self.F), V)
         if self.rem: self.Fr = Vr.T @ self.Fr @ Vr
         self.e = e
