@@ -531,10 +531,13 @@ network's increment-phase weight motion is O(Delta) (Theorem 20), so by the lazy
 in the linearised regime over a fixed horizon when the parameter motion is small relative to the curvature scale of the
 map) its normalised residual E~ converges to kernel regression with the FROZEN kernel K_D(t_1) = K_0 + (identity-phase
 change). Hence the normalised direct error converges to the frozen-kernel error of the increment target, which is the
-quantity the static roughness theory is about: for direct as Delta -> 0 the held-rough statements become FROZEN-KERNEL
-statements (no lift, fixed basis, Prop. 6 exact). "Tight" would be too strong: the floor of the held-rough section decays
-at the rate sigma_R^2 (the top of the rough subspace), the frozen-kernel error decays mode by mode at lambda_k, and the two
-agree only when the rough residual sits in the top rough mode. The Euler
+quantity the static roughness theory is about: for direct as Delta -> 0 the held-rough floor becomes TIGHT, in the precise
+sense of Thm slow(c) of Part I: with the Krylov functional the one-time floor ||E_gamma|| equals the frozen-kernel
+first-order error F(s_gamma), and in the lazy limit the frozen-kernel error IS the error, so the floor and the error
+coincide (up to the identity phase). [A note of 2026-10-12 replacing "tight" by "frozen-kernel statement" argued from a
+FIXED projector seminorm, whose floor decays at sigma_R^2 rather than mode by mode; that argument applied to the wrong
+roughness function and is withdrawn. For a fixed local complexity function the floor is indeed weaker; for the Krylov
+functional it is exact.] The Euler
 network's drive is Delta-independent; its error is the full feature-learning error, below the frozen-kernel value by the
 feature-learning gain on the increment target (Theorem 19's rate comparison, conditional on Lemma 15), so the same
 bound is loose for Euler by exactly that gain, which grows with T and with the increment's roughness (gain law).
