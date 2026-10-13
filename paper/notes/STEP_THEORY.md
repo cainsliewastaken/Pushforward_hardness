@@ -82,6 +82,12 @@ against SOAP b256 isolates the basis from the rule.
 
 ## 4. Why first-order-optimal rules lose: the lift, and the two-regime structure of sign + cap
 
+CORRECTION (same night, LOOKAHEAD_THEORY.md): the claim below that a first-order-optimal rule cannot start a
+zero-leverage mode, and P2 in section 6, hold only without cross-lift; under gradient flow a dead direction's leverage
+changes at rate up to L_phi |theta_dot| through the motion along the gradient (Lemma 1 there). The regime of a mode is
+decided by its residual curvature c_k = <E, f_uu> (the non-Gauss-Newton term), not by its leverage: Theorem 7 there
+replaces the two-regime model of this section, and P2 is withdrawn.
+
 The chain's stage identity: over one step, K_{t+1} - K_t = Cross + Q with Q = Delta_J Delta_J^T / n >= 0, Delta_J the
 change of the Jacobian along the step, second order in the step; Cross first order and sign-indefinite. The spike
 theorem (THEORY 7, 7.1) says a direction is learned only by lifting its leverage. The one-step theorems of section 2 are
@@ -137,7 +143,7 @@ Proofs available with the existing tools:
 * P1 (ridge = LM; Krylov = CG). Thm stepsup(c) in parameter space is the LM step; Thm stepkrylov's V_M step is the
   (M-1)-th CG iterate on (K + gamma) x = E. Algebra; worth stating because it makes the fast-mode part of the optimizer
   a matrix-free solve on the batch, with no factor statistics.
-* P2 (first-order-optimal rules do not start a zero-leverage mode). For any rule whose step is a function of J^T E
+* P2 (WITHDRAWN, see the correction in section 4; replaced by LOOKAHEAD_THEORY Theorem 7) (first-order-optimal rules do not start a zero-leverage mode). For any rule whose step is a function of J^T E
   through a positive map (GD, LM, ridge, any K_P flow with P fixed), d_k = 0 when s_k = 0, and under the lift law the
   lift of that mode is zero; the spike theorem's rate for gradient flow is the exponential one above. Direct from the
   definitions and Thm 17.
