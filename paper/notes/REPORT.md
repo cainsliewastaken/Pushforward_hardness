@@ -1659,3 +1659,35 @@ Caveats: one seed; baselines untuned (3 fixed lrs, no schedule, beta2 = 0.99); 5
    keeps its sign (the persistent slow input modes early), cut it on modes whose gradient flips (the oscillating fast
    modes). Implemented as --hyper_rule rprop (x1.2 / x0.5 on the log weight, reusing the hypergradient state); the one-step
    hypergradient is the same signal weighted by magnitude at rate 0.01. Not yet run.
+
+25 (this fork). APPROXIMATION CONTROLS AND BASIS TRACKING (job 59749741, 1 node, 12 min; optimizer/tracking.py, --track;
+   scale_exact.sh; runs/scale_exact/). Width 4096, both targets: reference fast configuration (blocks 256, bf16 state, two
+   subspace iterations, refresh floor 5) against "exact Kronecker" (full factors, fp32 state, float64 eigh, refresh floor
+   20) and the latter with the statistics horizon halved (beta_stats 0.9). All with the tracking diagnostic every 500 steps.
+   | | rough | smooth |   reference 0.0612 / 1.41e-4;  exact-Kronecker 0.1168 / 4.77e-5;  exact + beta_stats 0.9 0.1142 / 4.74e-5.
+   THE APPROXIMATIONS MATTER, IN OPPOSITE DIRECTIONS: removing them is 3.0x BETTER on smooth (4.8e-5, the best smooth number
+   of the whole line, below SOAP full's 4.5e-5 within noise and 2.5x below the old full KronQ) and 1.9x WORSE on rough
+   (0.117, = the old full-factor KronQ's 0.108: blocks have been better on rough all along). The statistics horizon (0.95
+   vs 0.9) changes nothing.
+   Tracking, what each approximation does (true kernel per layer by Lanczos, top 32; Kronecker modes sampled per decile):
+   (a) FAST-MODE FIDELITY: the energy of the true kernel's top-32 directions on the top-256 Kronecker modes is 0.94-1.00
+       with full factors and 0.05-0.49 with blocks of 256 (reaching 0.97-1.0 only at 65536 blocked modes): the block
+       structure scatters the true top eigenvectors over tens of thousands of modes. The smooth residual lives on those
+       directions; that is the 3x.
+   (b) CURVATURE ACCURACY: the true diagonal curvature of a Kronecker mode over its Kronecker value (sigma_i alpha_j) is
+       0.84-2.5 on every decile with blocks, but 1.6 -> 390 (decile 0 -> 9, layer 1, step 500; 2-16x late) with full
+       factors: the product of two accurate factor eigenvalues underestimates the slow modes' curvature by two orders of
+       magnitude (the EKFAC discrepancy at its extreme), so the cap and the live mask act on wrong numbers exactly on the
+       modes that carry the rough residual. Candidate cause of the 1.9x; --ekfac (the exact diagonal in the Kronecker
+       basis) is the direct fix and is untested with full factors.
+   (c) COUPLING: the fraction of a mode's response shared with other sampled modes rises from ~0.01 (fast) to 0.7-8
+       (slow, layer 1) and to 1e4-1e6 on the slow input-layer modes, for blocks and full factors alike: the Kronecker
+       basis does not decouple the slow modes at all; their responses are dominated by what other modes do. This is the
+       interaction the per-mode model missed, measured per decile.
+   (d) STEP MISPRICING ||J D||^2 / sum lam D^2: layer 1 reference 235 -> 163 along the run, full factors 116 -> 4.2;
+       layer 0: 8.8 -> 2.5 and 3.1 -> 0.8.
+   Wall at 2 per GPU: reference 523 s (eig 395), exact 679 s (eig 439, float64 full eigh every >= 20 steps).
+   Consequence: the "clean" configuration is not one configuration: full factors for the fast modes (smooth) and a correct
+   slow-mode curvature (blocks, or EKFAC) for the rough target. The attribution ladder to run: full factors + EKFAC; full
+   factors with bf16 state; blocks with float64 eigh; both targets (6 runs). Memory of full factors: 11 state/P (not
+   Adam's); the user has set that aside for the controls.
