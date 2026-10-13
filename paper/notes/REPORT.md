@@ -1376,3 +1376,61 @@ Findings.
    other method reaches its first evaluation, and the shared GPUs make the wall times unreliable. At w <= 512, at AdamW's
    wall budget, KronQ b1024 / SOAP reach 1.5-3x lower error than AdamW on the rough target.
 Caveats: one seed; baselines untuned (3 fixed lrs, no schedule, beta2 = 0.99); 5000 steps; see THEORY.md 21(d).
+
+
+13. ABLATION of the fast-path configuration (job 59727605, 1 node, 1 h; optimizer/scale_ablate.sh; runs/scale_ablate/), width
+   4096, both targets, Adam memory, 5000 steps, float32 eigh at refresh 20 + adaptive 0.1, stats every step. Validation MSE:
+   | variant | rough | smooth |
+   | reference: hyper sign push + cap + budget 0.2 | 0.0758 | 1.49e-4 |
+   | no budget | 0.0800 | 1.10e-3 |   | no cap | 0.0798 | 1.88e-4 |   | no hypergradient | (cut off) | 2.82e-4 |
+   | plain sign push (none of the three) | 0.1176 | 1.55e-3 |
+   | rotated Adam rule (SOAP's rule in our basis), lr 1e-3 / 3e-3 | 0.1112 / 0.1105 | 2.14e-4 / 2.00e-4 |
+   | full factors | (cut off by the limit) | (cut off) |
+   Smooth is deterministic (the reference reproduced 1.4949e-4 in two later launches); the rough reference is 0.0758 with
+   float32 eigh and 0.064-0.066 with subspace iteration / float64 eigh (items 11, presets): the eigendecomposition variant
+   is worth 15 % on rough, deterministically, so the three single-rule removals on rough (0.080) are not resolved.
+   Readings: the budget carries 7x on smooth, the hypergradient 1.9x, the cap 1.3x, all three 10x; the rotated Adam rule
+   in our basis (0.111) is WORSE than SOAP b256 in its own basis (0.083-0.095, item 1), so the gain over SOAP on rough is
+   the sign push + budget, not the Gauss-Newton factors. The three rules that work are the three that measure (the real
+   output change, the realised gain of the previous step, the real gradient) rather than model.
+14. PER-MODE LOOKAHEAD RULE (LOOKAHEAD_THEORY.md Thm 7; job 59728694, 1 node, 45 min; optimizer/scale_lookahead.sh;
+   runs/scale_lookahead/). The residual curvature per mode c_ij = <E, f_uu> from factor statistics (Prop. 10; exact
+   autograd check passes at width 64 and 4096 on the last hidden layer; the first layer's estimate is 3-8x low late in
+   training from the dropped downstream term). Measured at width 4096 along the whole run, both targets: fraction of
+   concave modes (lam + c <= 0) 1e-5 to 1e-3 per layer; median |c| / lam ~ 0.01, positive. The learned weight of the
+   reference is 0.3 on the (few) concave modes and decays 0.29 -> 0.05 on the convex ones (Cor. 8(c) in direction).
+   Results (same reference 0.0758 / 1.49e-4): two-regime rule with decay 0.1199 / 8.01e-4; with the remainder controller
+   0.1370 / 0.1576; with sphere sharing (box 3) 0.1210 / 1.12e-2; c := 0 control 0.1190 / 8.17e-4. The rule is the frozen
+   ridge (c changes nothing) and loses in every form; the 8e-4 is what removing the budget does (item 13). Verdict: no
+   per-mode lift regime at this width; the per-mode quadratic model (assumption A1, no interaction) is wrong, not its
+   constants. The theory fork's exact-model test of the FIRST-order lookahead (LIFT_GRADIENT.md, commit 5e070b5: leverage
+   of the slow residual raised 20x, error worse, lift alone diverges) closes the same mechanism at first order.
+   Code notes: a retained .grad on a cached intermediate accumulates every backward through it, the random probe's
+   included (~4000x the loss gradient); --S_mode emp had used such a gradient for its one-time rescale (no reported run
+   used it); fixed by snapshotting before the probe. The squared-overlap transport is wrong for c (cross terms of
+   (p_j . a)^2); c restarts in the new basis at each refresh. The same transport is used for the EKFAC diagonal (--ekfac)
+   and is therefore suspect on slow modes between refreshes.
+15. TAYLOR-RADIUS SCAN (job 59729529, 1 node, 6 min; --radius_scan; optimizer/scale_radius_summary.py; runs/scale_radius/;
+   COLLECTIVE_RULE.md section 2). Reference configuration, width 4096, scans at steps 100 / 500 / 1500 on both hidden
+   layers, TF32 off, seven directions (step, sign, gradient, two Kronecker ridges, random, single mode): leverage and the
+   length s* at which the relative remainder reaches 0.1, in parameter and output units. ROUGH, layer 0, step 500
+   (||E|| = 106 on the batch): leverages span 250x, parameter radii 200x (single mode / gradient 0.01, sign / step 2.2),
+   OUTPUT radii 18-23 for six of the seven directions (random 13.5): the Taylor radius is a sphere in output space of
+   radius 0.19 ||E|| (0.13 at step 1500) = the budget constant. SMOOTH, layer 1, step 500 (||E|| = 13): output radii 26
+   (step), 59 (sign), 532 (gradient), 44-66 (ridges), 3-5 (random, mode): not a sphere, and 2-40 ||E||: the step is
+   completion-limited and the budget acts as a damping (a fifth of the way per step), not a trust region. The sign
+   push's natural length sits at the radius on rough (s*/s0 ~ 1-1.4). Consequence: with the output change per step fixed,
+   directions are ranked by the alignment cos(E, J u) of their output response with the residual (recorded by the scan
+   from commit dd4cf48 on; not yet run); the gradient direction moves the outputs along K E (the fast part of E), the
+   ridge (K + gamma)^{-1} E maximises the alignment; the matrix-free Krylov ridge with the output-space radius is the
+   test that follows (COLLECTIVE_RULE.md section 4).
+16. Surprises of 2026-10-12/13 and where the holes are (chat summary, 00:25): (1) the width-4096 collapse was mispricing of
+   the coherent step (30-380x), (2) the fix is an output-space budget whose constant is the measured output-space radius
+   (item 15), (3) every derived per-mode rule lost (frozen ridge, T-step allocation, LM, lift-aware), (4) the remainder
+   controller loses even measured correctly, (5) decay anneals minibatch noise, (6) stats every step 1.75x, (7) eigh
+   variant 15 %, (8) SOAP's rule in our basis is worse than in SOAP's basis, (9) the rules that work are the ones that
+   measure, (10-11) no concave modes and a near-unit weight on convex slow modes still wins, (12) spread directions go
+   200x further than concentrated ones in parameter units, (13) late-run rises (plain sign 0.134 -> 0.204 over the last
+   2000 steps; frozen-ridge smooth runs double), (14) the optimizer has never computed a Krylov step. Holes: the geometry
+   of the trust region (now measured: output-space sphere on rough), interactions between modes (the Kronecker basis is
+   not the kernel's), and time (minibatch noise, decay, kernel motion rate, the end phase).

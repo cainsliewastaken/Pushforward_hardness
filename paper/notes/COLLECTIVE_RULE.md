@@ -7,6 +7,16 @@ scan that fixes the trust region. Notation as in LOOKAHEAD_THEORY section 0.
 
 ## 1. The collective lookahead objective (derived from Theorem 2, not an optimality theorem)
 
+WITHDRAWN as a step rule (2026-10-13 00:30), on the result of the theory fork (LIFT_GRADIENT.md, commit 5e070b5): the
+first-order form of this objective (steepest descent on grad L - kappa S, S the sharpening gradient of the slow
+residual's leverage, kappa = e Lambda_rem / (N s)) was tested in an exact parameter-space model (width 128, no Kronecker
+basis); it raised the slow residual's leverage 20-25x over gd / momentum / sign and the error at T was WORSE at every
+kappa, and lift alone diverged. Reasons found there: the lift direction is not orthogonal to the descent direction
+(cos(g, S) = +0.1 to +0.3, the lift costs error now), and the radius shrinks with the sharpness the lift creates. With
+the second-order form (the hill criterion, Theorem 7) also empty at width 4096 (REPORT 61 item 14), investing in
+leverage is closed as a mechanism in both orders. The text below is kept as the derivation; sections 2-3 (the trust
+region and the alignment) are what remains live.
+
 Theorem 2(b) of LOOKAHEAD_THEORY, applied at the current stage with the residual's own direction E_hat = E / ||E||: over
 the remaining path Lambda_rem, the most the error can decrease along E_hat is
     ell(E_hat) Lambda_rem + (1/2) L_E Lambda_rem^2,
@@ -71,7 +81,8 @@ output-space geometry (rough) spherical.
     output change AND the lift term of section 1 does not favour the sign direction. That is the next test.
 (c) On the smooth target the question is different: the step is completion-limited, so the rule is a damped Newton
     step in output space, and the Krylov ridge with gamma set by the damping is its exact form.
-(d) The lookahead term: measure ||M_E d||^2 and <J^T E_hat, M_E d> for the sign step against the ridge step at equal
+(d) [superseded by the withdrawal above; the measurement is still a diagnostic of what the sign step does to the
+    leverage, not a rule] The lookahead term: measure ||M_E d||^2 and <J^T E_hat, M_E d> for the sign step against the ridge step at equal
     output change (two Hessian-vector products per direction). If the sign step's leverage gain is larger, that is the
     collective lift the per-mode model could not see and the explanation of its multi-step edge; if not, the edge is
     minibatch averaging (momentum + sign as a denoiser), which none of this covers.
