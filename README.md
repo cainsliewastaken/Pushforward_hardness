@@ -17,7 +17,7 @@ init-only / fixed-projector statements of the earlier drafts. The files to read 
 | Path | What it is | Runs live in |
 |---|---|---|
 | `paper/overleaf/` | **Current paper sections**: `chain_section.tex` (training through time: the chained expansion and the limits of prediction), `chain_appendix.tex` (truncation and error propagation, the n = 200 verifications), `held_rough_error_lean.tex` (the held-rough section with the closure assumption, two-sided band and reduced ignition model cut). `PAPER_OUTLINE.md` says what is kept, replaced and cut; `README.md` says how to splice them into the Overleaf main file. | |
-| `paper/notes/` | `THEORY.md` (every statement, proof and status label; sections 8-20 are the chain), `WRITEUP.md` (consolidated experimental record), `REPORT.md` (the step-by-step log, sections 0-46), `optimizer_ideas.md`, `part6_segflow.md`, `part7_theory.md`, `slow_kernel_growth.md` | |
+| `paper/notes/` | `THEORY.md` (every statement, proof and status label; sections 8-20 are the chain), `WRITEUP.md` (consolidated experimental record), `REPORT.md` (the step-by-step log, sections 0-60), `OPTIMIZER_SUMMARY.md` (what worked and what did not in the optimizer line), `FEASIBILITY.md` (benefit vs online cost of each optimizer component), `optimizer_ideas.md`, `part6_segflow.md`, `part7_theory.md`, `slow_kernel_growth.md` | |
 | `paper/eos_*.tex` | The sharpening / edge-of-stability application section and its bibliography | |
 | `paper/old/` | Superseded drafts, kept for reference: `training_theory_2026-10-07.tex` (full paper build before the chain), `hardness_framework_v3.tex`, `rollout_history_note.tex`, `multistep_training_theory*.tex`, `archive/learned_steppers.tex` | |
 | `chain/` | Lorenz-63 testbed for the held-rough and chain results: GD ground-truth harness (`l63_late.py`, `opt_stepper.py`), kernel / spike / specQ analyses, the exact staged model (`ensemble_model.py`), reduced models, init-only ranker, perturbation (chaos) tests, design sweeps. `HANDOFF.md` is the original brief; `original_upload/` is the experiment exactly as first uploaded on 2026-10-09 (first `l63test.py` / `analyze.py`, sandbox result). | `$SCRATCH/l63_held_rough/runs` (symlink `chain/runs`) |
@@ -39,6 +39,11 @@ and checkpoint trees on scratch and are git-ignored.
 - Optimizer line: SegFlow loses to Adam per FLOP (REPORT.md 36, 40); the Kronecker-eigenbasis
   line (KronSign / Kronecker-Adam, KronRoot) is the open direction, with the reparametrised
   rotations and the basis-refresh schedule under test (REPORT.md 41-46, `optimizer_ideas.md`).
+  At n = 20000 (REPORT.md 58-60): sign push per kernel mode with a Gauss-Newton cap, in the exact
+  (`kadam_front.py`) and Kronecker (`kronq2.py`) bases; per-mode push weights learned online by
+  hypergradient (`kronq3h.py`) match the tuned q x lr optimum without tuning; the derived trust-region
+  Newton step (`trgn.py`) loses. Memory and the Kronecker-vs-exact accuracy gap are the open scaling
+  questions (`OPTIMIZER_SUMMARY.md`, `FEASIBILITY.md`).
 - Multistep: 13 follow-ups recorded in `multistep/results.md`; the KS and 2D-turbulence
   prototypes and the online kappa rule are the newest, untested at scale.
 

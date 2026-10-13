@@ -56,6 +56,7 @@ p.add_argument('--rho', type=float, default=float('inf'), help='front window: mo
 p.add_argument('--beta_mode', default='fixed', choices=['fixed', 'front', 'mode'], help='mode-space momentum: fixed b1; one beta per block critically damping the front band; per-mode critical damping floored at the window edge')
 p.add_argument('--rho_d', type=float, default=0.0, help='beta_mode=mode: damping cut a_front/rho_d (0 = use --rho)')
 p.add_argument('--beta_max', type=float, default=0.995)
+p.add_argument('--centred', type=int, default=0, help='1: train f(theta) - f(theta_0) (target shifted by the initial output; J unchanged)')
 p.add_argument('--q_kappa', type=float, default=0.0, help='>0: set q online, holding the Taylor remainder at q_kappa (q starts at --qmode)')
 p.add_argument('--cap_gn', type=int, default=0, help='1: cap each mode step at the Gauss-Newton step |g_k|/lam_k / (number of blocks)')
 p.add_argument('--tr_kappa', type=float, default=0.0, help='>0: trust-region lr controller holding the nonlinear (Taylor) remainder at kappa x first-order decrease')
@@ -114,7 +115,7 @@ def loss_grad(th):
 def jacobian(th):
     # rows ordered (sample, output) to match f_flat's reshape
     def f1(t, x): return f_flat(t, x[None, :])
-    Jp = torch.func.vmap(torch.func.jacrev(f1), in_dims=(None, 0))(th, X)     # n x 3 x P
+    Jp = torch.cat([torch.func.vmap(torch.func.jacrev(f1), in_dims=(None, 0))(th, X[i:i + 2000]) for i in range(0, X.shape[0], 2000)], 0)   # n x 3 x P, chunked
     return Jp.reshape(N, P)
 
 def ns5(G, steps=5, eps=1e-7):
@@ -206,6 +207,8 @@ def spike_log(step):
             emit(f'dW_pr_l{l}', tot ** 2 / float((e ** 2).sum()), step)
             emit(f'dW_n90_l{l}', int((c < 0.90).sum()) + 1, step); emit(f'dW_n99_l{l}', int((c < 0.99).sum()) + 1, step)
 
+if a.centred:                          # centred outputs f - f(theta_0): same J, targets shifted by the initial output
+    with torch.no_grad(): Y = Y + f_flat(theta, X); Yv = Yv + f_flat(theta, Xv)
 for step in range(1, a.steps + 1):
     fac = ((1 - (step - 1) / a.steps) if a.decay else 1.0) * (min(1.0, step / a.warmup) if a.warmup > 0 else 1.0); lr = a.lr * fac * lrmult
     r, L, g = loss_grad(theta); flop_eq += 3

@@ -11,7 +11,7 @@ R="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 S="${L63_ROOT:-$SCRATCH/l63_held_rough}"
 APPLY=${1:-}
 # optimizer-line scripts (everything else lands in chain/)
-OPT=" segflow segflow_rough segflow_l63 segflow_generic_test segflow_generic_thresholds segflow_summary minibatch_segflow kadam kadam_front kronsign kronsign_v1 kronsign_v3_carrybug kronsign_pre_reparam kronsign_copy_of_otherinstance_1408 kronroot muon_roughness muon_field adam_l63 adam_ablation train_ks train_ks_v2 train_ks_v3 train_ks_pre_kronroot speed_sweep block_sweep block_sweep_v1 tune tune2 tune2_v1 mkfield kr_sweep momentum_modes runlist run_all front_summary spectral_power feature_check width_scaling band_precond_field supply_field supply_step gamma_init lazy_q mode_curvature mode_curvature_path q_summary "
+OPT=" segflow segflow_rough segflow_l63 segflow_generic_test segflow_generic_thresholds segflow_summary minibatch_segflow kadam kadam_front kronsign kronsign_v1 kronsign_v3_carrybug kronsign_pre_reparam kronsign_copy_of_otherinstance_1408 kronroot muon_roughness muon_field adam_l63 adam_ablation train_ks train_ks_v2 train_ks_v3 train_ks_pre_kronroot speed_sweep block_sweep block_sweep_v1 tune tune2 tune2_v1 mkfield kr_sweep momentum_modes runlist run_all front_summary spectral_power feature_check width_scaling band_precond_field supply_field supply_step gamma_init lazy_q mode_curvature mode_curvature_path q_summary front_summary3 trgn kronq kronq2 kronq3h q_grid_summary horizon_q mode_stats "
 n=0
 for f in "$S"/code/*; do
   [ -f "$f" ] || continue
@@ -23,7 +23,9 @@ for f in "$S"/code/*; do
     echo "NEW     $b -> ${dst#$R/}"
   elif [ "$f" -nt "$dst" ] && ! cmp -s "$f" "$dst"; then
     # ignore files whose only difference is the path patch
-    if diff "$f" "$dst" | grep -E '^[<>]' | grep -vqE 'L63_ROOT|sys\.path|readlink|l63_held_rough'; then
+    # count (not grep -q): with pipefail, grep -q's early exit SIGPIPEs diff and silently skipped newer files
+    nd=$(diff "$f" "$dst" | grep -E '^[<>]' | grep -cvE 'L63_ROOT|sys\.path|readlink|l63_held_rough' || true)
+    if [ "$nd" -gt 0 ]; then
       echo "NEWER   $b -> ${dst#$R/}"
     else continue; fi
   else continue; fi

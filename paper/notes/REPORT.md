@@ -1107,3 +1107,75 @@ layer; forward-over-forward jvp):
 Consequence (theory-derived, not yet tested): along training the per-mode Newton step is g_k/(lam_k + h_res) with h_res
 the measured residual curvature, i.e. Levenberg-Marquardt whose damping is not a tuning knob but the measured non-GN
 curvature; at initialisation, negative-curvature modes are moved to the Taylor radius. No exponent q appears.
+
+## 58. Large-n test (n = 20000, H96 d2; job 59720680, 22 min): q vs lr, derived trust-region Newton, lazy model, centring
+
+Train / val RMSE at 3000 steps (FLOP-eq: exact-basis methods ~2.8e6, Adam 9e3, low-rank TR 2.4e4):
+
+| method | rough (Delta 1.0) | smooth (Delta 0.5) |
+|---|---|---|
+| sign + GN cap, q 0, lr 1e-3 / 3e-3 / 1e-2 | 0.497 / 0.196 / **0.102** | 0.0028 / **0.0006** / 0.0007 |
+| sign + GN cap, q -0.25, lr 1e-3 / 3e-3 / 1e-2 | 0.150 / 0.126 / 0.221 | **0.0006** / 0.0010 / 0.0030 |
+| sign + GN cap, q -0.25, lr 3e-3, centred init | **0.0905** (val 0.200) | 0.0011 |
+| trust-region Newton, exact global basis, measured h_r / pure LM / centred | 0.289 / 0.299 / 0.288 | 0.0027 / 0.0026 / 0.0029 |
+| trust-region Newton, low-rank (32 modes) | 0.602 | 0.049 |
+| Adam (best of 3e-3, 1e-2, 3e-2) | 0.410 | 0.029 |
+
+Lazy (frozen-kernel) simulation of the same sign rule (n = 2000): final error falls monotonically as q decreases, to
+q = -1 on both targets, raw and centred (e.g. rough: 1.05 at q 0, 0.90 at -0.25, 0.73 at -0.75).
+
+* q = -0.25 is not special. The best q shifts with lr exactly as the Taylor-radius explanation predicts: q -0.25 wins at
+  lr <= 3e-3 (3.3x at 1e-3 on rough), q 0 wins at lr 1e-2. Tuned (q, lr) pairs reach similar error (rough 0.09-0.13,
+  smooth 0.0006): q and lr are substitutes for one quantity, how far the deep modes move per step, which is limited by
+  the network's Taylor radius (the frozen kernel alone would push to q = -1). Section 56's "q = -0.25 everywhere" was
+  the fixed lr 3e-3.
+* The derived local trust-region Newton step (exact GN + measured residual curvature) loses 3x (rough) and 4x (smooth)
+  per step to sign push: the local quadratic model penalises deep motion that pays off over the run.
+* Centring the initialisation helps sign push on the rough target (0.0905 vs 0.126) and does nothing elsewhere.
+* Overfitting is NOT gone on the rough target: strong optimizers reach train 0.09-0.13 with val 0.20-0.22 (Adam:
+  0.41 / 0.44). P/N = 10k/60k does not prevent it; the rough map needs more data. Rankings by train and by val agree.
+
+## 59. Per-mode push weights learned online by hypergradient (kronq3h.py; job 59721698) and the comparison landscape
+
+KronQ2 (Kronecker sign push + GN cap) with per-mode log-weights u_k updated by the one-step (horizon 1) or traced
+(horizon 100) hypergradient dL_t/du_k = -lr eta (Gr_t)_k z_k, normalised (IDBD / Autostep style); n = 20000, H96 d2,
+3000 steps, 2 seeds. Reference: the 42-cell KronQ2 q x lr grid (best cell rough 0.2184, smooth 0.0030).
+
+| | rough (Delta 1.0) | smooth (Delta 0.5) |
+|---|---|---|
+| hypergradient, scale + shape, horizon 1, base lr 1e-3 / 3e-3 / 1e-2 | 0.242 / 0.237 / 0.217 | 0.0024 / 0.0022 / 0.0024 |
+| hypergradient, shape only (mean removed), horizon 1, lr 3e-3 / 1e-2 | 0.243 / 0.234 | 0.0028 / 0.0033 |
+| q 0 at the same lr 3e-3 / 1e-2 | 0.266 / 0.260 | 0.0051 / 0.0061 |
+| best of the whole q x lr grid | 0.218 | 0.0030 |
+
+* Learned online, the per-mode weights match the exhaustively tuned grid optimum on the rough target and beat it by
+  27 % on the smooth one, and the smooth result is insensitive to the base lr (0.0022-0.0024 over 10x): the
+  hypergradient removes both q and lr tuning here.
+* The per-mode SHAPE is worth 10 % (rough) to 45 % (smooth) over q = 0 at the same lr; the small 300-step test (4 %)
+  understated it.
+* Horizon 1 is as good as or better than horizon 100.
+Comparison with the other instance's tuned baselines (runs/kadam/tune, field20k; seed means): L63 rough n = 20000,
+10k steps (validation RMSE): Kronecker-basis method 0.209, tuned Adam (lr, beta2, warmup) 0.292, Muon 0.335. Field
+problem (n = 20k, widths 512, batch 100, equal steps): Kronecker-basis Adam rule 2.2-3x better than tuned Adam, the
+sign rule 1.4-2.2x. SOAP not yet compared at matched tuning.
+
+## 60. Final q x lr grid and horizon analysis (job 59721274, 2 nodes, 33 min; code/q_grid_summary.py, horizon_q.py)
+
+Exact-basis sign + GN cap, n = 20000, H96 d2, 3000 steps (training error; mid-run hidden-layer Taylor remainder at the
+best q for each lr in brackets):
+* rough: best q per lr runs -0.375 (lr 5e-4) -> 0 (lr 2e-2); remainder at the optimum 0.09-0.15 at every lr; best cell
+  0.0649 at the grid edge (q 0, lr 2e-2).
+* smooth: a broad flat optimum 0.0006-0.0007 along the whole ridge, remainder at the optimum 0.088-0.13 at every lr.
+* KronQ2 (Kronecker basis, 2 seeds): rough best 0.218 (q -0.5, lr 5e-4, grid edge), smooth 0.0030; remainder along the
+  ridge 0.11-0.21 (rough) and 0.012-0.035 (smooth).
+So in the exact basis the optimal ridge is a constant-remainder contour at ~0.1 for BOTH targets; the Kronecker basis
+shifts the level (smooth ~0.02).
+
+Horizon test (best q at fixed lr judged at 300 / 1000 / 3000 steps): the best q does NOT become more negative at longer
+horizons; where it moves, it moves toward q = 0 later (exact rough lr 3e-3: -0.25 -> -0.125; lr 1e-2: -0.125 -> 0;
+smooth lr 1e-3: -0.25 -> -0.125). Together with Section 59 (one-step hypergradient as good as a 100-step trace), the
+benefit of pushing deep modes harder is realised within a few steps, not through a delayed lift.
+CORRECTION to Sections 58 and OPTIMIZER_SUMMARY.md: "the gain comes from multi-step feature learning that no greedy
+criterion sees" is not supported. The local trust-region Newton step lost because its MODEL (GN + interpolated residual
+curvature, GN-on-stiff / GD-on-deep shape) mispredicts the one-step gain of deep pushes; a greedy criterion that
+MEASURES the one-step gain per mode (the hypergradient) finds it. Measure, do not model.
