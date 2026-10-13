@@ -218,13 +218,22 @@ distribution. Then dW_l = dW_l^core + dW_l^bulk with
    dW_l^core = -(h0/n) M^T A    (rank <= rank M <= ny; for the last hidden layer its left singular space is spanned by
                                  the rows of W_out, its right singular space by A^T U: the spike),
    dW_l^bulk = -(1/n) ((S - h0) (.) M)^T A.
-If the preactivation weights of layer l are independent of W_{l+1} (true at initialization), then
-   E_init ||dW_l^bulk||_F^2 / E_init ||dW_l^core||_F^2 = Var(sigma'(z)) / E[sigma'(z)]^2 =: rho(sigma_z),
+If the local-derivative pattern S_iq (a function of layer l's input weights and the activations below) is independent of
+the drive coefficient M_iq (a function of W_{l+1} and the residual history), then for the COEFFICIENT matrices
+   E_init ||(S - h0) (.) M||_F^2 / E_init ||h0 M||_F^2 = Var(sigma'(z)) / E[sigma'(z)]^2 =: rho(sigma_z),
 evaluated at the preactivation scale sigma_z. For tanh: rho = 0.05 (sigma_z 0.5), 0.16 (0.8), 0.27 (1.0), 0.44 (1.3), 0.92 (2.0).
+PRECISION (added 2026-10-12 review). The independence is exact at initialization for the CENTRED residual E = -y (then
+M = U W_out depends on y and W_out only, and W_out is independent of W_l); for the raw residual E = f_0 - y, M depends on
+unit q through f_0 and the independence holds up to a 1/H correction. The ratio for the weight change dW = (S (.) M)^T A
+is NOT given by the same factorisation, because S and A are both functions of the activations below (S = sigma'(z) with
+z = W_l a); the dW-level ratio is a measured consequence, within 10 % of rho on the designs tested and smaller than the
+coefficient ratio (activation table in section 9: tanh 0.01-0.02 in dW vs 0.02-0.05 in the coefficients). The theorem's
+exact content is the rank of the core and the coefficient-level ratio; "spikes form whenever the network learns" rests
+on the rank statement, which needs no independence (Theorem 11').
 Proof. Expand sigma' = h0 + (sigma' - h0); the core term is h0 M, of rank <= rank M. For the bulk, E||(S-h0)(.)M||_F^2 =
-sum_{i,q} E[(S_iq - h0)^2] E[M_iq^2] = Var(sigma') ||M||_F^2 by independence of S_iq (a function of layer-l input weights)
-and M_iq (a function of W_{l+1} and the residual) for each (i,q); the same factorisation holds after multiplying by A
-(a function of the layers below). The core has E||h0 M^T A||^2 = h0^2 E||M^T A||^2.  []
+sum_{i,q} E[(S_iq - h0)^2] E[M_iq^2] = Var(sigma') ||M||_F^2 by independence of S_iq and M_iq for each (i,q) (exact for the
+centred residual, see PRECISION); the core has E||h0 M||^2 = h0^2 E||M||^2. (The earlier sentence "the same factorisation
+holds after multiplying by A" is withdrawn: A and S are correlated.)  []
 "Provided the network is learning": the spike is nonzero iff U != 0, and in a fixed basis |U_k| lambda_k = |E_k(0)|(1 - e^{-lambda_k T})
 >= sqrt(2 Delta L_k) tanh(lambda_k T / 2)^{1/2}, so every mode in which a loss decrease Delta L_k has been achieved
 contributes at least that much drive; learning forces the spike.
