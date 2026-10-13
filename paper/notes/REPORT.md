@@ -1723,6 +1723,22 @@ Caveats: one seed; baselines untuned (3 fixed lrs, no schedule, beta2 = 0.99); 5
    (i) at full length. COROLLARY and prediction: on the rough target the reference runs BELOW the budget for 95 % of the
    run (rem_rho 0.01-0.17 < 0.2), i.e. below the break-even length; a larger base lr or slower decay should improve the
    rough result until the budget binds throughout (the smooth target is already budget-bound). Not yet run.
+29. UNDER-STEPPING TEST (job 59753295, 1 node, 9 min; scale_understep.sh; runs/scale_understep/). Rough target, reference
+   lr 1e-3 / budget 0.2 (0.0612) against lr 2e-3 / 0.2, lr 3e-3 / 0.2, lr 2e-3 / 0.3. ALL THREE COLLAPSE to the mean-output
+   level (0.636-0.650 at step 250, flat to 4000, then 1.3-1574 at 5000). The prediction of item 28 is REFUTED: the
+   reference's natural step being below the output budget for 95 % of the run is not slack. The output budget does not
+   prevent the collapse at lr >= 2e-3 (natural step / residual 0.04-0.27 in those runs: the budget barely binds while
+   the network sits at the mean), so the constraint that binds on the rough target is NOT the output change. It is the
+   per-layer one: the width-4096 collapse was diagnosed (item 4) as saturation of the first hidden layer's
+   pre-activations, and the per-layer trust region is a sphere in pre-activation space (item 20: delta_j = c_l /
+   sqrt(alpha_j), confirmed to +-20 %), which the output budget cannot see when the output layer compensates. On rough
+   the lr decay is what keeps the hidden layers inside their pre-activation radius; on smooth the output budget binds
+   first. Consequence: the length rule the mechanism needs on rough is the per-layer pre-activation budget ||dz_l|| <= r_l
+   (the derived trust region, measured on the batch at one matmul per layer), not the output budget alone; its
+   constant r_l is the pre-activation change at the measured radius, which the radius scan can log (not yet logged).
+   Status of the mechanism statement (item 28): parts (i)-(iii) unchanged; part (iv), the length, is "the output budget
+   where it binds (smooth), the per-layer pre-activation radius where it binds (rough), with the lr decay as its
+   current proxy".
 
 25 (this fork). APPROXIMATION CONTROLS AND BASIS TRACKING (job 59749741, 1 node, 12 min; optimizer/tracking.py, --track;
    scale_exact.sh; runs/scale_exact/). Width 4096, both targets: reference fast configuration (blocks 256, bf16 state, two
