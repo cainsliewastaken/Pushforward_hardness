@@ -26,7 +26,8 @@ import os, sys, json, math, time, argparse
 import numpy as np, torch
 
 p = argparse.ArgumentParser()
-p.add_argument('--opt', required=True, choices=['adamw', 'muon', 'soap', 'kronq', 'kronqf'])
+p.add_argument('--opt', required=True, choices=['adamw', 'muon', 'soap', 'kronq', 'kronqf', 'krylov'])
+p.add_argument('--kr_M', type=int, default=3, help='krylov: CG iterations (Krylov terms) on the batch'); p.add_argument('--kr_mom', type=float, default=0.0, help='krylov: heavy-ball momentum on the scaled step'); p.add_argument('--kr_gamma', type=float, default=1e-3, help='krylov: damping relative to the Rayleigh quotient E^T K E / E^T E'); p.add_argument('--kr_decay', type=int, default=1, help='krylov: 1 = linear decay of the output-space radius rem ||E|| to 0')
 p.add_argument('--width', type=int, default=512); p.add_argument('--depth', type=int, default=2)
 p.add_argument('--p', type=float, default=2.0, help='target roughness exponent (0 smooth, 2 rough)')
 p.add_argument('--steps', type=int, default=5000); p.add_argument('--batch', type=int, default=256)
@@ -106,7 +107,10 @@ if a.centred:
     import copy
     lins0 = copy.deepcopy(lins)
     for q in lins0.parameters(): q.requires_grad_(False)
-KQ = None
+KQ = None; KR = None
+if a.opt == 'krylov':
+    from krylov_step import KrylovStep
+    KR = KrylovStep(lins, a, DEV, torch.nn.functional.gelu)
 if a.opt == 'kronqf':
     from kronq_fast import KronQFast
     KQ = KronQFast(lins, a, DEV, NOUT, torch.nn.functional.gelu, lambda shape: torch.randint(0, 2, shape, device=DEV, generator=gtrain).float() * 2 - 1)
@@ -226,6 +230,7 @@ else:
         st.append(s_)
 def opt_state_bytes():
     if a.opt == 'kronqf': return KQ.state_bytes()
+    if a.opt == 'krylov': return KR.state_bytes()
     if a.opt == 'adamw':
         return sum(nbytes(t) for s in opt.state.values() for t in s.values() if torch.is_tensor(t) and t.numel() > 1)
     if a.opt == 'muon':
@@ -283,7 +288,11 @@ for step in range(1, a.steps + 1):
     if KQ is not None:
         for W in KQ.Wt: W.grad = None
     keep_now = (a.opt == 'kronq' and (need_stats or a.bcurv or a.gnls)) or a.opt == 'kronqf'
-    out = forward(xb, keep=keep_now); loss = mse(out, yb); loss.backward(retain_graph=keep_now)
+    if a.opt == 'krylov':
+        t0 = time.time(); KR.step(step, (decay if a.kr_decay else 1.0), xb, yb, emit if a.diag else None, step % a.eval_every == 0 or step == a.steps); sync(); tm['upd'] += time.time() - t0
+        out = None
+    else:
+        out = forward(xb, keep=keep_now); loss = mse(out, yb); loss.backward(retain_graph=keep_now)
     bc = None; gz_b = None
     if a.opt == 'kronq' and (a.bcurv or a.gnls):   # per-sample backprop signal of a random output combination (unbiased GN probe)
         with torch.enable_grad():
@@ -300,7 +309,7 @@ for step in range(1, a.steps + 1):
     if a.opt == 'kronqf':
         KQ.step(step, lr, out, xb, yb, mse, tm, time.time, emit if a.diag else None)
     with torch.no_grad():
-        if a.opt == 'kronqf': pass
+        if a.opt in ('kronqf', 'krylov'): pass
         elif a.opt == 'adamw':
             for g_ in opt.param_groups: g_['lr'] = lr
             t0 = time.time(); opt.step(); sync(); tm['upd'] += time.time() - t0
