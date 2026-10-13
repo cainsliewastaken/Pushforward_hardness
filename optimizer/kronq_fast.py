@@ -561,6 +561,15 @@ class KronQFast:
                                 emit(f'shape_rf_{name}_l{l}', float((f1 - f0 - Jd).norm() / (Jd.norm() + 1e-30)), step)
                                 emit(f'shape_lev_{name}_l{l}', float(Jd.norm() / (d.norm() + 1e-30)), step)
                     if a.hyper: emit(f'u_q50_l{l}', float(self.u[l].float().median()), step)
+                    # per-decile profile of the actual step (--diag): learned weight, |D| (units of lr eta), |D| / w, and the share of the
+                    # step's Kronecker output energy sum lam D^2 per decile (where the budget is spent)
+                    order = torch.argsort(lam.flatten(), descending=True); n_ = order.numel(); Df = D.flatten(); lamf = lam.flatten()
+                    tot = float((lamf * Df * Df).sum()) + 1e-30; uf = self.u[l].float().flatten() if a.hyper else None
+                    for dec in range(10):
+                        seg = order[dec * n_ // 10:(dec + 1) * n_ // 10]; Dd = Df[seg].abs()
+                        emit(f'prof_Dabs_d{dec}_l{l}', float(Dd.median()), step); emit(f'prof_eshare_d{dec}_l{l}', float((lamf[seg] * Df[seg] ** 2).sum()) / tot, step)
+                        if uf is not None:
+                            emit(f'prof_w_d{dec}_l{l}', float(torch.exp(uf[seg]).median()), step); emit(f'prof_Dw_d{dec}_l{l}', float((Dd / (torch.exp(uf[seg]) + 1e-30)).median()), step)
                     if a.hyper and a.hyper_rule == 'signcorr' and self.sc[l] is not None:
                         order = torch.argsort(lam.flatten(), descending=True); n_ = order.numel(); scf = self.sc[l].float().flatten(); uf = self.u[l].float().flatten()
                         for dec in range(10):
