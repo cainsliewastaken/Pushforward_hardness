@@ -39,6 +39,9 @@ p.add_argument('--compress', type=int, default=0); p.add_argument('--mom_bf16', 
 p.add_argument('--reltol', type=float, default=1e-10); p.add_argument('--beta_stats', type=float, default=0.95)
 p.add_argument('--nval', type=int, default=4096); p.add_argument('--eval_every', type=int, default=250)
 p.add_argument('--seed', type=int, default=1); p.add_argument('--out', required=True)
+p.add_argument('--u_clamp', type=float, default=4.6, help='clamp on the log push weight u (push w = exp(u) in [e^-c, e^c])')
+p.add_argument('--diag', type=int, default=0, help='1: at every eval step log per layer the u distribution, clamp fraction, cap-active fraction, '
+               'step energy on the lowest decile of modes by Kronecker eigenvalue, weight norm, and hidden-activation saturation')
 a = p.parse_args()
 import subprocess
 try: GIT = subprocess.run(['git', '-C', os.path.dirname(os.path.abspath(__file__)), 'rev-parse', '--short', 'HEAD'], capture_output=True, text=True).stdout.strip()
@@ -226,10 +229,22 @@ for step in range(1, a.steps + 1):
                                 den = (r_[:, None] * c_[None, :] / (r_.mean() + 1e-30)).sqrt()
                             else:
                                 s_['hv'].mul_(0.99).add_(hg * hg, alpha=0.01); den = s_['hv'].sqrt()
-                            s_['u'].copy_((s_['u'].float() - a.beta_u * hg / (den + 1e-30)).clamp(-4.6, 4.6))
+                            s_['u'].copy_((s_['u'].float() - a.beta_u * hg / (den + 1e-30)).clamp(-a.u_clamp, a.u_clamp))
                         w = torch.exp(s_['u'].float())
                     Dr = torch.where(live, w * torch.sign(C), torch.zeros_like(C))
-                    Dr = torch.sign(Dr) * torch.minimum(Dr.abs(), Gr.abs() / (lam.clamp(min=1e-30) * max(lr, 1e-30) * L1))
+                    capv = Gr.abs() / (lam.clamp(min=1e-30) * max(lr, 1e-30) * L1)
+                    Dr = torch.sign(Dr) * torch.minimum(Dr.abs(), capv)
+                    if a.diag and (step % a.eval_every == 0 or step == a.steps):
+                        E2 = Dr * Dr; tot = float(E2.sum()) + 1e-30; lf = lam.flatten()
+                        thr = float(lf.kthvalue(max(1, int(0.1 * lf.numel())))[0])
+                        emit(f'e_lowdec_l{l}', float(E2[lam <= thr].sum()) / tot, step)          # step energy on the lowest decile of modes
+                        emit(f'capfrac_l{l}', float((w > capv).float().mean()), step)            # fraction of modes where the GN cap binds
+                        emit(f'livefrac_l{l}', float(live.float().mean()), step)
+                        emit(f'wmean_l{l}', float(w.mean()), step); emit(f'wmax_l{l}', float(w.max()), step)
+                        if a.hyper:
+                            uf = s_['u'].float().flatten(); sub = uf[torch.randperm(uf.numel(), device=DEV)[:200000]]
+                            for qn, qv in zip(('10', '50', '90'), torch.quantile(sub, torch.tensor([0.1, 0.5, 0.9], device=DEV)).tolist()): emit(f'u_q{qn}_l{l}', qv, step)
+                            emit(f'u_clampfrac_l{l}', float((uf.abs() >= a.u_clamp - 1e-3).float().mean()), step)
                     if a.hyper: s_['Dprev'] = Dr.to(s_['u'].dtype)
                 Dw = s_['L'].rot(s_['R'].rot(Dr, 'R', True), 'L', True)
                 lin.weight.sub_(lr * Dw[:, :-1]); lin.bias.sub_(lr * Dw[:, -1])
@@ -237,6 +252,13 @@ for step in range(1, a.steps + 1):
             sync(); tm['upd'] += time.time() - t0
     if step % a.eval_every == 0 or step == a.steps:
         v = val_mse(); emit('val', v, step); emit('wall', time.time() - t_start, step)
+        if a.diag:
+            with torch.no_grad():
+                for l, lin in enumerate(lins): emit(f'wnorm_l{l}', float(lin.weight.norm()), step)
+                h = Xv[:1024]
+                for l, lin in enumerate(lins[:-1]):
+                    z = lin(h); emit(f'sat_l{l}', float((z.abs() > 3).float().mean()), step); emit(f'zrms_l{l}', float(z.pow(2).mean().sqrt()), step)
+                    h = torch.nn.functional.gelu(z)
         if not math.isfinite(v): emit('diverged', 1, step); break
 peak = torch.cuda.max_memory_allocated() if DEV == 'cuda' else 0
 sb = opt_state_bytes()
