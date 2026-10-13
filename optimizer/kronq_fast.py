@@ -151,6 +151,7 @@ class KronQFast:
         self.cres_n = [0] * self.L                                        # samples since the basis last changed: running mean, then EMA (not transportable)
         self.T_eff = 1.0
         self.scan_steps = set(int(x) for x in a.radius_scan.split(',')) if a.radius_scan else set()
+        self.acf_steps = set(int(x) for x in a.acf.split(',')) if a.acf else set(); self.acf_buf = None; self.acf_idx = None; self.acf_t0 = None
         self.eta = [1.0] * self.L; self.refresh_cur = a.refresh; self.emp_scale = [None] * self.L
         self.period = [a.refresh] * self.L; self.next_ref = [1] * self.L; self.rf = [None] * self.L
         self.last_gamma = [None] * self.L; self.kappa = a.lr_kappa if a.lr_kappa > 0 else a.sphere
@@ -333,6 +334,28 @@ class KronQFast:
         else: self.T_eff = max(1.0, 0.5 * (T_rem + 1.0))   # sum of the remaining linear-decay factors over the current one: (T_rem + 1) / 2
         due = [l for l in range(L) if step >= self.next_ref[l]]
         Gr = [W.grad for W in self.Wt]
+        if self.acf_steps:
+            Wn = a.acf_len
+            if step in self.acf_steps and self.acf_buf is None and all(self.S[l].e is not None for l in range(L)):
+                self.acf_idx = []; self.acf_buf = []; self.acf_t0 = step
+                for l in range(L):                                   # 200 modes per lambda decile, random within the decile
+                    lam_ = (self.S[l].e[:, None] * self.A[l].e[None, :]).flatten(); order = torch.argsort(lam_, descending=True); n_ = order.numel()
+                    idx = torch.cat([order[dec * n_ // 10:(dec + 1) * n_ // 10][torch.randperm(max(1, n_ // 10), device=order.device)[:200]] for dec in range(10)])
+                    self.acf_idx.append(idx); self.acf_buf.append(torch.zeros(Wn, idx.numel(), device=self.dev))
+            if self.acf_buf is not None:
+                due = []                                              # hold the basis fixed for the window so a mode stays the same mode
+                t_ = step - self.acf_t0
+                for l in range(L): self.acf_buf[l][t_] = Gr[l].flatten()[self.acf_idx[l]]
+                if t_ == Wn - 1 and emit is not None:
+                    for l in range(L):
+                        G = self.acf_buf[l]; nper = G.shape[1] // 10
+                        for dec in range(10):
+                            g_ = G[:, dec * nper:(dec + 1) * nper]; den = (g_ * g_).mean()
+                            for tau in (1, 2, 4, 8, 16, 32, Wn - 1):
+                                emit(f'acf_d{dec}_l{l}_tau{tau}', float((g_[:-tau] * g_[tau:]).mean() / (den + 1e-30)), self.acf_t0)
+                            # the persistent (signal) fraction from the time mean: mean^2 / mean of squares, per mode, averaged
+                            emit(f'acf_d{dec}_l{l}_sig', float((g_.mean(0) ** 2).mean() / (den + 1e-30)), self.acf_t0)
+                    self.acf_buf = None; self.acf_idx = None
         # loss gradients at the cached intermediates, snapshotted BEFORE the probe backward: a retained .grad accumulates
         # every backward that passes through it (the probe's included, ~m ny / 2 times larger), so it cannot be read later
         hgrad = [h.grad.clone() if h.grad is not None else None for h in self.cache['h']] if self.cres is not None else None
