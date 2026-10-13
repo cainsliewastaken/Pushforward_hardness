@@ -138,6 +138,8 @@ better method per FLOP overall at 25 % more memory than Adam; the sign push's pe
 the FLOP accounting. Also established: keep the lr decay (a constant output-change controller is worse); budget 0.2 not
 0.1; the derived per-mode allocation was not actually tested (weight-space budget never bound; it ran as Newton/T_rem
 and lost); learned u profiles rise toward slow modes and peak before the slowest decile.
+CONTINUITY (REPORT 61 item 10): the saved width-512 field results reproduce exactly with the old script, and today's harness
+gives 4-5x over AdamW at equal steps at that width with KronQ full >= SOAP full; nothing regressed.
 NEXT, if the line continues (needs a yes): (i) a seed and lr-grid repeat of the w = 4096 cells (AdamW at 1e-4; KronQ
 gnls at 3e-3 with budget 0.2); (ii) a SOAP with bf16 moments as the fair Adam-memory opponent; (iii) the derived
 allocation with R = the measured weight-space Taylor radius; (iv) why the Adam-memory KronQ loses on smooth at 4096

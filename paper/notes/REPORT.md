@@ -1342,7 +1342,18 @@ Findings.
        edge (3e-4) at w >= 2048: 1e-4 might improve it on the smooth target.
    Caveats: one seed; analytic FLOPs (the harness's blocked rotations are a Python loop: wall times are 3-5x the FLOP ratio);
    rem rows mixed semantics; no weight decay / warmup / schedule tuning for the baselines.
-10. Equal wall-clock comparison is not meaningful at w >= 2048 here: AdamW finishes 5000 steps in 40-70 s, before any
+10. CONTINUITY CHECK (job 59725665, 1 node, 6 min; optimizer/scale_continuity.sh, scale_continuity_summary.py; runs/scale_continuity/).
+   (A) The other instance's train_ks.py on its field20k_p{0,2}.npz at the saved tuned settings (width 512, batch 100, 6000
+   steps, seed 1) reproduces the saved values to 4 digits: p0 adam 0.3572 / ks-sign 0.1776 / ks-adam 0.1607; p2 adam 11.48 /
+   ks-sign 5.246 / ks-adam 5.225 (2.0-2.2x over tuned Adam at equal steps; the Adam rule slightly ahead on smooth).
+   (B) Today's harness (scale_study.py, online field problem, tanh-squashed targets) at the same width 512 / batch 100 /
+   6000 steps, best of the lr grid, equal steps: smooth: AdamW 2.55e-3, SOAP full 5.3e-4 (4.8x), KronQ full 5.0e-4 (5.1x),
+   KronQ full + rem 0.2 4.5e-4 (5.7x); rough: AdamW 0.508, SOAP full 0.127 (4.0x), KronQ full 0.121 (4.2x), + rem 0.121 (4.2x).
+   So the harness is continuous with the earlier line: at width 512 the Kronecker methods beat AdamW by 4-5x at equal steps
+   (more than the saved 2x: different target normalisation and online data; AdamW's best lr is again the low grid edge),
+   KronQ full is at or slightly ahead of SOAP there, and the budget costs nothing. Nothing regressed; what the scaling and
+   equal-FLOP studies added is that this per-step margin shrinks per FLOP as the width grows (item 9).
+11. Equal wall-clock comparison is not meaningful at w >= 2048 here: AdamW finishes 5000 steps in 40-70 s, before any
    other method reaches its first evaluation, and the shared GPUs make the wall times unreliable. At w <= 512, at AdamW's
    wall budget, KronQ b1024 / SOAP reach 1.5-3x lower error than AdamW on the rough target.
 Caveats: one seed; baselines untuned (3 fixed lrs, no schedule, beta2 = 0.99); 5000 steps; see THEORY.md 21(d).
