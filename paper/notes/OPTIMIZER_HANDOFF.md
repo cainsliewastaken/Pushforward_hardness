@@ -128,12 +128,15 @@ scale. At width 4096 the variant at Adam's memory (b256 + compress, 2.0 state/P)
 rough target and is 32x worse than full KronQ on the smooth one; every memory reduction's cost grows with width; the usable
 lr shrinks with width (3e-3 fails everywhere >= 1024, only 1e-3 works at 4096 and only for full / b1024); and SOAP with
 blocks of 256 (2.5 state/P) is the best method at 4096 on the rough target (0.083 vs KronQ full 0.108) with SOAP full best
-on the smooth one (4.5e-5 vs 1.2e-4). KronQ's lead over SOAP at widths 256-2048 reverses at 4096. DIAGNOSED (job 59723886, REPORT 61 item 4): not the
-hypergradient; the blocked / diagonal factors have no null modes, so in the first refresh windows every mode is sign-pushed
-while the full basis pushes ~6-50 %, the second hidden layer's preactivations blow up (rms 50-185, 100 % GELU saturation by
-step 250), the GN cap then binds everywhere and the run is frozen at the mean predictor. Fixes to test (needs a yes):
-reltol from the sampling noise floor / no push before dim samples, a per-layer step budget from the function-space
-remainder, or the cap from full-factor eigenvalues; ~1 GPU-node x 45 min; if the reductions cannot be made to work at Adam's memory, the line stops here per the criterion.
+on the smooth one (4.5e-5 vs 1.2e-4). KronQ's lead over SOAP at widths 256-2048 reverses at 4096. DIAGNOSED AND FIXED IN ONE VARIANT (jobs 59723886, 59724517; REPORT 61 item 4): the Kronecker curvature model misprices
+the coherent sign step by d_eff(delta) d_eff(a) (small in the full eigenbasis, large for blocks / diagonal sides), the
+per-mode GN cap cannot see it, the second hidden layer's preactivations blow up and saturate within 250 steps, and the
+network ends as the mean predictor. Not the hypergradient, not a gradient mask, not a batch-curvature cap (all tested,
+all fail). A budget on the step's output change (--rem 0.1, one extra forward) restores blocks of 256 to full-factor
+accuracy at w = 4096 (0.1065 vs 0.1077). Next (needs a yes, 1 node x 45 min, 8 runs): at w = 4096 on both targets, the
+Adam-memory variant (b256 + compress) and b64 / diagonal with --rem 0.1 and with --gnls 1 (per-layer line search against
+the exact per-sample GN curvature, cheaper); if b256 + compress reaches full-factor accuracy on both targets the
+scaling criterion is met at Adam's memory and the study's verdict is reversed.
 CAVEAT on the baselines: three fixed lrs, no warmup / schedule / weight decay, beta2 = 0.99 for AdamW, the same lr grid at
 every width. The study decides whether the memory reductions cost accuracy at large width (they do); it does NOT decide
 "beats tuned AdamW / Muon / SOAP" by the standard of section 7 (THEORY.md 21(d)).
