@@ -46,7 +46,7 @@ p.add_argument('--bcurv', type=int, default=0, help='1: live mask and GN cap fro
 p.add_argument('--rem', type=float, default=0.0, help='>0: scale the whole step so that ||f(theta+d) - f(theta)|| <= rem * ||E|| on the batch (extra forward per step)')
 p.add_argument('--rem_ctrl', type=float, default=0.0, help='>0: two-sided controller: scale the whole step by a running factor so that the measured output change '
                '||f(theta+d) - f(theta)|| / ||E|| on the batch is held at this value (replaces --rem and disables the lr decay)')
-p.add_argument('--radius_scan', type=str, default='', help='kronqf: comma-separated steps at which to scan the Taylor radius along several directions (diag)'); p.add_argument('--check_curv', type=int, default=0, help='kronqf: exact autograd check of the residual curvature on a few modes (diag)'); p.add_argument('--alloc2', type=int, default=0, help='kronqf: LOOKAHEAD_THEORY Thm 7 step: ridge with the full curvature lam + c on convex modes, full push (box) on concave ones; no cap/budget/hyper'); p.add_argument('--curv', type=int, default=0, help='kronqf: compute the residual curvature c per mode (for the diagnostics) without using it'); p.add_argument('--cfac', type=float, default=1.0, help='kronqf alloc2: multiplier on the residual curvature (0 = frozen-GN ridge control)'); p.add_argument('--box', type=float, default=1.0, help='kronqf alloc2: per-mode box in units of lr eta; >1 lets the sphere budget sum D^2 <= N bind')
+p.add_argument('--mech', type=int, default=0, help='1: per-step mechanism diagnostics (mechanism.py) every --mech_every steps'); p.add_argument('--mech_every', type=int, default=250); p.add_argument('--refresh_min', type=int, default=1, help='kronqf: floor on the adaptive refresh period'); p.add_argument('--radius_scan', type=str, default='', help='kronqf: comma-separated steps at which to scan the Taylor radius along several directions (diag)'); p.add_argument('--check_curv', type=int, default=0, help='kronqf: exact autograd check of the residual curvature on a few modes (diag)'); p.add_argument('--alloc2', type=int, default=0, help='kronqf: LOOKAHEAD_THEORY Thm 7 step: ridge with the full curvature lam + c on convex modes, full push (box) on concave ones; no cap/budget/hyper'); p.add_argument('--curv', type=int, default=0, help='kronqf: compute the residual curvature c per mode (for the diagnostics) without using it'); p.add_argument('--cfac', type=float, default=1.0, help='kronqf alloc2: multiplier on the residual curvature (0 = frozen-GN ridge control)'); p.add_argument('--box', type=float, default=1.0, help='kronqf alloc2: per-mode box in units of lr eta; >1 lets the sphere budget sum D^2 <= N bind')
 p.add_argument('--alloc', type=int, default=0, help='1: derived per-mode allocation in place of the sign push: D = C / (lam + gamma) / T_rem with gamma solved so that '
                'the layer step length over the remaining T_rem steps equals the budget (T_rem R)^2; no cap, no hypergradient, no live mask')
 p.add_argument('--sphere', type=float, default=0.0, help='>0: Euclidean step. Each layer\'s direction is scaled to Frobenius length R_l, and R_l is set by a '
@@ -276,7 +276,16 @@ def solve_gamma(Cabs, lam, target2, iters=40):
         if v > target2: lo = g
         else: hi = g
     return math.exp(0.5 * (lo + hi))
+MECH = None
+if a.mech:
+    from mechanism import Mechanism
+    MECH = Mechanism(torch.nn.functional.gelu, L1, DEV)
+def params_orig_any():
+    if KQ is not None: return KQ.params_orig()
+    return [t.detach().clone() for lin in lins for t in (lin.weight, lin.bias)]
 for step in range(1, a.steps + 1):
+    mech_now = MECH is not None and (step % a.mech_every == 0 or step == 1)
+    if mech_now: p_before = params_orig_any()
     fac = min(1.0, step / a.warmup) if a.warmup else 1.0
     decay = 1 - (step - 1) / a.steps
     if not a.rem_ctrl and not a.sphere: fac *= decay
@@ -478,6 +487,8 @@ for step in range(1, a.steps + 1):
                             rf, lev = rel_remainder(l, -Dn[:, :-1], -Dn[:, -1], xb, f0)
                             emit(f'shape_rf_{name}_l{l}', rf, step); emit(f'shape_lev_{name}_l{l}', lev, step)
             sync(); tm['upd'] += time.time() - t0
+    if mech_now:
+        t0 = time.time(); MECH.run(p_before, params_orig_any(), xb, yb, mse, emit, step, rotate=(KQ.rotate_grads if KQ is not None else None)); sync(); tm['stats'] += time.time() - t0
     if step % a.eval_every == 0 or step == a.steps:
         v = val_mse(); emit('val', v, step); emit('wall', time.time() - t_start, step)
         if a.diag:

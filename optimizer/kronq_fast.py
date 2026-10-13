@@ -70,6 +70,8 @@ class Basis:
         return out
     def rows_to_basis(self, M):      # U^T M   (M: dim x n)
         return M if self.U is None else self._apply(M, 'L', self.U, self.Ur, True)
+    def rows_from_basis(self, M):    # U M     (M: dim x n)
+        return M if self.U is None else self._apply(M, 'L', self.U, self.Ur, False)
     def rows_to_basis_sq(self, M):   # (U (.) U)^T M   (M: dim x n): the entrywise-squared basis, for second-derivative sums
         return M if self.U is None else self._apply(M, 'L', self.U * self.U, (self.Ur * self.Ur) if self.Ur is not None else None, True)
     def cols_to_basis(self, M):      # M U     (M: n x dim)
@@ -174,6 +176,19 @@ class KronQFast:
             a_aug = torch.cat([h, torch.ones(h.shape[0], 1, device=h.device, dtype=h.dtype)], 1)
             z = self.S[l].cols_from_basis(self.A[l].cols_to_basis(a_aug) @ self.Wt[l].T); zs.append(z); h = self.act(z)
         return zs
+    @torch.no_grad()
+    def params_orig(self):
+        """the trained weights in the original coordinates: [W0, b0, W1, b1, ...], W = U_S Wt U_A^T split into weight and bias."""
+        out = []
+        for l in range(self.L):
+            W = self.S[l].rows_from_basis(self.A[l].cols_from_basis(self.Wt[l].data)); out += [W[:, :-1].contiguous(), W[:, -1].contiguous()]
+        return out
+    @torch.no_grad()
+    def rotate_grads(self, G_aug):
+        """original-coordinate gradients (o x i+1 per layer) -> the current Kronecker basis, with the lam arrays."""
+        R = [self.A[l].cols_to_basis(self.S[l].rows_to_basis(G_aug[l])) for l in range(self.L)]
+        lams = [None if (self.S[l].e is None or self.A[l].e is None) else self.S[l].e[:, None] * self.A[l].e[None, :] for l in range(self.L)]
+        return R, lams
     def check_curv(self, xb, yb, loss_fn, emit, step, nmodes=4, hgrad=None):
         """exact check of the residual curvature: for a few modes (i, j) of each hidden layer, the loss Hessian along the
         mode (a Hessian-vector product; the mode is the (i, j) entry of Wt) minus the exact Gauss-Newton part (a jvp)
@@ -379,7 +394,7 @@ class KronQFast:
                     if old_ok and a.adapt_refresh > 0:              # kronq2: relative change of the first-order decrease g.D
                         D_new, _, _ = self.direction(l, Gr[l], self.C[l].float(), lr, update_state=False); gd_new = float((Gr[l] * D_new).sum())
                         e = abs(gd_new - gd_old) / max(abs(gd_new), 1e-300)
-                        self.period[l] = int(min(max(self.period[l] * min(max(a.adapt_refresh / max(e, 1e-12), 0.5), 2.0), 1), 1000))
+                        self.period[l] = int(min(max(self.period[l] * min(max(a.adapt_refresh / max(e, 1e-12), 0.5), 2.0), a.refresh_min), 1000))
                         if emit is not None: emit(f'refresh_err_l{l}', e, step); emit(f'refresh_period_l{l}', self.period[l], step)
                     elif old_ok and a.eig_adapt:                    # kronsign: double the period while the basis overlap stays above 0.99
                         ov = float(torch.diagonal(VA[0], dim1=1, dim2=2).abs().mean()) if VA is not None else 1.0
