@@ -1509,3 +1509,38 @@ Caveats: one seed; baselines untuned (3 fixed lrs, no schedule, beta2 = 0.99); 5
    Timing: eigendecompositions were 78-96 % of wall in every run of items 13-20 (adaptive refresh at period 1 with the
    batched eigh); the subspace-iteration variant (item 11, 0.064) spends 5x less there. Isolated per-step wall against
    AdamW has not been re-measured since item 11 (24 vs 8 ms).
+21. MECHANISM MEASUREMENT (job 59746635, 1 node, 23 min; optimizer/mechanism.py, --mech; scale_mech.sh, scale_mech_summary.py;
+   runs/scale_mech/). Four rules x two targets, width 4096, 5000 steps, diagnostics every 250 steps on the training batch
+   in original weight coordinates: loss decomposition of the step (actual = first-order + Gauss-Newton + remainder),
+   residual split by the top-32 Ritz pairs of the current kernel (Lanczos, 48 matvecs), leverage of the residual
+   direction before/after with Cross and Q, alignment cos(E, J d), ||J d|| / ||E||, and the minibatch SNR of the gradient
+   from two half-batches (overall and per lambda decile). Fast path in its fast configuration (subspace iteration, refresh
+   floor 5): rough 0.0612 (484 s per 5000 steps at 2 per GPU with the diagnostics), adam rule 0.1114, frozen ridge 0.1162,
+   AdamW 0.3903 (33 s); smooth 1.41e-4 / 2.16e-4 / 8.70e-4 / 8.61e-4.
+   Findings.
+   (a) FIRST ORDER. For every rule the per-step loss change on the batch is first-order plus Gauss-Newton: the remainder is
+       0.2-6 % of the first-order term (sign push 6 %, the largest). No second-order mechanism carries the decrease.
+   (b) NOISE-DOMINATED. The gradient's half-batch SNR ||g1 + g2|| / ||g1 - g2|| is 1.0-1.3 per lambda decile in the
+       Kronecker basis on both hidden layers (top decile 1.5-2.3 on smooth), i.e. per-mode signal ~ 0.17 x the per-mode
+       noise at batch 256; the overall SNR 1-2.5. The per-step batch-loss decrease (1e-2 at step 1000, rough sign push) is
+       ~1000x the per-step validation decrease (1.6e-5): each step mostly fits its own batch. The comparison between
+       rules is therefore about their expected drift under noise, which batch-side quantities cannot resolve; the
+       population-side first-order gain (jvp on validation data with the step) is the measurement that can.
+   (c) PER-STEP GAIN ON ROUGH. Batch decrease per step at steps 250 / 1000: sign 1.85e-2 / 1.11e-2, adam rule 8.0e-3 /
+       7.4e-3, ridge 6.9e-3 / 4.4e-3, AdamW 2.1e-3 / 3.2e-3. The decrease is 2 cosE ||E|| ||J d|| / N - ||J d||^2 / N; the sign
+       push has the largest product cosE x ||J d|| / ||E|| (0.046-0.054 vs adam 0.013-0.042, ridge 0.011-0.017, AdamW
+       0.003-0.012). The frozen ridge had the BEST alignment at the start (0.54 vs sign 0.23) but an output step of
+       0.02-0.07 ||E|| because its T-step length rule (completion / T_eff) never reached the budget: its loss is a length
+       effect, and the claim that the ridge direction is worse is NOT supported by this run. AdamW: alignment 0.07-0.11.
+   (d) RESIDUAL SPLIT. From step 250 on, 0.1-1 % of the residual energy sits on the top-32 kernel modes for every rule and
+       90-100 % of the first-order decrease is on the rest: the top-32 split is too coarse to separate mechanisms.
+   (e) KERNEL MOTION. On rough the leverage of the residual direction grows over the run under every rule (sign 137 ->
+       319, adam 85 -> 220, ridge 109 -> 233, AdamW 10 -> 124) with Cross negative in most diagnostics and Q positive;
+       per-step relative change 2-3 % (0.5 % on smooth): the statistics horizon of ~10-20 steps is the right order. On
+       smooth the leverage falls (67 -> 36) under sign / adam / AdamW.
+   Consequence. The open question is a stochastic one: with per-mode SNR ~ 0.2, the sign of the momentum on a mode is
+   right with probability ~0.6-0.7, the expected push is ~ delta x SNR per mode (a noise-normalised step, as Adam's
+   m / sqrt(v) is), and the differences between sign, Adam rule and ridge are differences in the variance and bias of the
+   drift, not in curvature. Theory to write: the expected step and its population first-order gain under per-mode noise
+   for the three rules; measurement to make: population-side alignment and gain per step (validation jvp), with the
+   ridge given the budget as its length.
