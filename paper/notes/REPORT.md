@@ -1571,3 +1571,21 @@ Caveats: one seed; baselines untuned (3 fixed lrs, no schedule, beta2 = 0.99); 5
        derived answer to (a)-(c): longer averaging exactly where the sign is unreliable, re-set every step so a lifted
        mode shortens its own window. To run: scale_momadapt.sh (reference vs T_max 50 / 200, with and without the
        learned weight; 8 runs).
+23. ONLINE PER-MODE MOMENTUM WINDOW (job 59748427, 1 node, 9 min; --mom_adapt; scale_momadapt.sh; runs/scale_momadapt/).
+   Window per mode = min(noise limit, staleness limit): noise limit (v - m^2) / m^2 from the mode's smoothed de-biased
+   signal estimate (an EMA with window T carries sigma^2 / (2T - 1) of noise; a raw single-mode estimate pins every window
+   at the ceiling); staleness limit = 1 / (|d_k| lam_k / |g_k|) (step over completion length, the per-mode model's
+   gradient-change rate) capped by 2x the layer's adaptive refresh period; floor 2, ceiling 1000 (never binding). Width
+   4096, both targets, fast configuration, 5000 steps:
+   | rule | rough | smooth |   | reference (beta 0.9) | 0.0612 | 1.41e-4 |   | online window + learned weights | 0.0835 | 1.79e-4 |
+   | online window, uniform weights | 0.0988 | 3.26e-4 |
+   Windows: 10-40 steps early (runs track the reference: rough 0.144 vs 0.134 at 1000; smooth 5.6e-4 vs 5.7e-4 at 2000),
+   then 300-700 steps on the slow deciles (rough layer 0: 412 at 2000; smooth layer 1: 344-704), after which the runs
+   fall behind and stall late (smooth 4.7e-4 at 3000-4000 vs 3.7e-4 / 2.8e-4). A fixed 200-step window stalled at the
+   mean-output level in the login-node check. Reading: both online limits are large on slow modes; the per-mode
+   staleness limit is wrong because a slow mode's gradient changes through the motion of every other mode (the 2-3 %
+   per step kernel motion of item 21), not through its own completion, and the refresh-period cap measures basis
+   staleness, not gradient staleness: assumption A1 (no interaction) again, in the time domain. A correct online limit
+   needs a MEASURED per-mode gradient-change rate (e.g. two EMAs of different windows per mode: disagreement beyond the
+   noise model = the signal moved); not built. Momentum 0.9 is near the staleness limit on this problem; the headroom
+   from averaging is bounded by the batch-1024 result (1.24x per step, item 22).
