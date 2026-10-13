@@ -138,7 +138,16 @@ lift's payoff per step is leverage x radius, and the radius shrinks. (e) On the 
 learns in 800 steps (0.657 -> 0.63 for every rule), so it is not a discriminating testbed for the rough problem; on
 the smooth target momentum beats gd 2.2x at the same step length, which is the Krylov acceleration, not lift.
 
-Verdict for the theory. The first-order lookahead (S as a gradient correction) is withdrawn as a step rule. What
+UPDATE (2026-10-13 00:40, from the other fork: REPORT 61 items 14-15, COLLECTIVE_RULE.md): the second-order criterion
+below is ALSO empty at width 4096: the fraction of concave modes is 1e-5 to 1e-3 per layer, |c| / lambda ~ 0.01, and the
+two-regime rule lost in every form (c changes nothing against the frozen ridge). The Taylor-radius scan there finds the
+radius to be a sphere in OUTPUT space of radius ~0.19 ||E|| on the rough target (the budget constant), i.e. the remainder
+depends on a direction only through its output response. So on the evidence at this width the per-mode / parameter-
+space lookahead is closed at both orders, and the per-step problem is the first-order one in the output metric (the
+Krylov ridge under an output-space trust region, their next test). Section 1's viewpoint stands only as a statement
+about what the kernel basis cannot contain; it has no measured mechanism behind it at width 4096.
+
+Verdict for the theory (as written before the update). The first-order lookahead (S as a gradient correction) is withdrawn as a step rule. What
 survives is the second-order criterion of LOOKAHEAD_THEORY Theorem 7: on a mode with lambda + c < 0 the lift and the
 loss decrease are the same motion (the self-lift case of Prop. 4), so there is no error-now to pay and no separate
 radius to buy; those are the only directions on which investing in leverage is free, and the sign push with the
