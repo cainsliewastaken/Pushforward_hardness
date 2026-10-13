@@ -38,6 +38,9 @@ class exact_fp32:
         torch.backends.cuda.matmul.allow_tf32 = False; torch.set_float32_matmul_precision('highest')
     def __exit__(self, *e):
         torch.backends.cuda.matmul.allow_tf32 = self.t; torch.set_float32_matmul_precision(self.p)
+def gelu_dd(z):
+    """second derivative of the exact GELU z Phi(z): phi(z) (2 - z^2)."""
+    return torch.exp(-0.5 * z * z) * (2.0 - z * z) * 0.3989422804014327
 def safe_eigh(F):
     """eigh of a (batch of) symmetric matrices with a float64 CPU fallback when cusolver fails to converge."""
     Fs = 0.5 * (F + F.transpose(-1, -2))
@@ -67,6 +70,8 @@ class Basis:
         return out
     def rows_to_basis(self, M):      # U^T M   (M: dim x n)
         return M if self.U is None else self._apply(M, 'L', self.U, self.Ur, True)
+    def rows_to_basis_sq(self, M):   # (U (.) U)^T M   (M: dim x n): the entrywise-squared basis, for second-derivative sums
+        return M if self.U is None else self._apply(M, 'L', self.U * self.U, (self.Ur * self.Ur) if self.Ur is not None else None, True)
     def cols_to_basis(self, M):      # M U     (M: n x dim)
         return M if self.U is None else self._apply(M, 'R', self.U, self.Ur, True)
     def cols_from_basis(self, M):    # M U^T   (M: n x dim)
@@ -137,6 +142,9 @@ class KronQFast:
         self.Dprev = [None] * self.L; self.z_tr = [None] * self.L   # eligibility traces (--horizon > 1)
         self.V2 = [torch.zeros_like(W, dtype=bf) for W in self.Wt] if a.rule == 'adam' else None
         self.lamx = [None] * self.L if a.ekfac else None
+        self.cres = [None] * self.L if (a.alloc2 or a.curv) else None   # residual curvature per mode c_ij = <E, f_uu> (LOOKAHEAD_THEORY Prop. 10)
+        self.cres_n = [0] * self.L                                        # samples since the basis last changed: running mean, then EMA (not transportable)
+        self.T_eff = 1.0
         self.eta = [1.0] * self.L; self.refresh_cur = a.refresh; self.emp_scale = [None] * self.L
         self.period = [a.refresh] * self.L; self.next_ref = [1] * self.L; self.rf = [None] * self.L
         self.last_gamma = [None] * self.L; self.kappa = a.lr_kappa if a.lr_kappa > 0 else a.sphere
@@ -146,7 +154,7 @@ class KronQFast:
     def parameters(self): return self.Wt
     # ---------------- forward in the rotated parametrisation
     def forward(self, x, keep=False):
-        h = x; at_list = []; zt_list = []
+        h = x; at_list = []; zt_list = []; h_list = []
         for l in range(self.L):
             a_aug = torch.cat([h, torch.ones(h.shape[0], 1, device=h.device, dtype=h.dtype)], 1)
             at = self.A[l].cols_to_basis(a_aug)                  # a~ = U_A^T [a;1]  (rows are samples)
@@ -154,7 +162,8 @@ class KronQFast:
             if keep: zt.retain_grad(); at_list.append(at); zt_list.append(zt)
             z = self.S[l].cols_from_basis(zt)                      # z = U_S z~
             h = self.act(z) if l < self.L - 1 else z
-        if keep: self.cache = dict(at=at_list, zt=zt_list)
+            if keep and l < self.L - 1: h.retain_grad(); h_list.append(h)
+        if keep: self.cache = dict(at=at_list, zt=zt_list, h=h_list)
         return h
     @torch.no_grad()
     def preacts(self, x):
@@ -164,6 +173,45 @@ class KronQFast:
             a_aug = torch.cat([h, torch.ones(h.shape[0], 1, device=h.device, dtype=h.dtype)], 1)
             z = self.S[l].cols_from_basis(self.A[l].cols_to_basis(a_aug) @ self.Wt[l].T); zs.append(z); h = self.act(z)
         return zs
+    def check_curv(self, xb, yb, loss_fn, emit, step, nmodes=4, hgrad=None):
+        """exact check of the residual curvature: for a few modes (i, j) of each hidden layer, the loss Hessian along the
+        mode (a Hessian-vector product; the mode is the (i, j) entry of Wt) minus the exact Gauss-Newton part (a jvp)
+        against the factorised estimate cres[l][i, j]; also lam[i, j] against the exact GN part."""
+        from torch.autograd.functional import hvp
+        a = self.a
+        for l in range(self.L - 1):
+            if self.cres is None or self.cres[l] is None or self.S[l].e is None: continue
+            lam = self.S[l].e[:, None] * self.A[l].e[None, :] * (2.0 / self.nout); o, i = self.Wt[l].shape
+            idx = [(0, 0), (0, i // 2), (o // 2, 0)] + [(int(torch.randint(o, (1,))), int(torch.randint(i, (1,)))) for _ in range(nmodes - 3)]
+            W0 = self.Wt[l].data.clone()
+            with exact_fp32(), torch.enable_grad():
+                for (ii, jj) in idx:
+                    v = torch.zeros_like(W0); v[ii, jj] = 1.0
+                    _, Hv = hvp(lambda Wl: loss_fn(self.forward_with(xb, l, Wl), yb), W0, v)
+                    d2 = float(Hv[ii, jj])
+                    _, Jv = jvp(lambda Wl: self.forward_with(xb, l, Wl), (W0,), (v,))
+                    gn = float((Jv * Jv).sum()) * 2.0 / (self.nout * xb.shape[0])
+                    emit(f'curvcheck_l{l}_i{ii}_j{jj}_c_true', d2 - gn, step); emit(f'curvcheck_l{l}_i{ii}_j{jj}_c_est', float(self.cres[l][ii, jj]), step)
+                    emit(f'curvcheck_l{l}_i{ii}_j{jj}_gn_true', gn, step); emit(f'curvcheck_l{l}_i{ii}_j{jj}_lam_est', float(lam[ii, jj]), step)
+                    # brute force of the formula with autograd for dL/dh and dense bases
+                    Sb = self.S[l]; Ab = self.A[l]
+                    US = torch.block_diag(*[Sb.U[k] for k in range(Sb.nf)] + ([Sb.Ur] if Sb.Ur is not None else [])) if Sb.U is not None else torch.eye(o, device=W0.device)
+                    hcur = xb
+                    for ll in range(l): hcur = self.act(self.S[ll].cols_from_basis(self.A[ll].cols_to_basis(torch.cat([hcur, torch.ones(hcur.shape[0], 1, device=hcur.device)], 1)) @ self.Wt[ll].detach().T))
+                    a_aug = torch.cat([hcur, torch.ones(hcur.shape[0], 1, device=hcur.device)], 1); at_ = Ab.cols_to_basis(a_aug)
+                    z_ = Sb.cols_from_basis(at_ @ W0.T); h_ = self.act(z_).requires_grad_(True); hh = h_
+                    for ll in range(l + 1, self.L):
+                        a2 = torch.cat([hh, torch.ones(hh.shape[0], 1, device=hh.device)], 1); zz = self.S[ll].cols_from_basis(self.A[ll].cols_to_basis(a2) @ self.Wt[ll].detach().T)
+                        hh = self.act(zz) if ll < self.L - 1 else zz
+                    gh, = torch.autograd.grad(loss_fn(hh, yb), h_)
+                    c_bf = float(((US[:, ii] ** 2)[None, :] * gh * gelu_dd(z_) * (at_[:, jj] ** 2)[:, None]).sum())
+                    emit(f'curvcheck_l{l}_i{ii}_j{jj}_c_bf', c_bf, step)
+                    # the vectorised product on the current cache, before EMA and transport
+                    zc = Sb.cols_from_basis(self.cache['zt'][l].detach()); rc = hgrad[l] * gelu_dd(zc); atc = self.cache['at'][l].detach()
+                    newc = Sb.rows_to_basis_sq(rc.T @ (atc * atc)); emit(f'curvcheck_l{l}_i{ii}_j{jj}_c_vec', float(newc[ii, jj]), step)
+                    emit(f'curvcheck_l{l}_i{ii}_j{jj}_c_vecdense', float(((US ** 2).T @ (rc.T @ (atc * atc)))[ii, jj]), step)
+                    emit(f'curvcheck_l{l}_i{ii}_j{jj}_gh_ratio', float((gh - hgrad[l]).norm() / (gh.norm() + 1e-30)), step)
+                    emit(f'curvcheck_l{l}_i{ii}_j{jj}_at_ratio', float((at_ - atc).norm() / (at_.norm() + 1e-30)), step)
     def forward_with(self, x, lw, Wl):
         """forward using Wl in place of Wt[lw] (functional; for jvp)."""
         h = x
@@ -196,6 +244,23 @@ class KronQFast:
             if a.sphere > 0: D = D * (math.sqrt(D.numel()) / (float(D.norm()) + 1e-30))
             self.last_gamma[l] = gam / lmax
             return D, lam, live
+        if a.alloc2:                                  # LOOKAHEAD_THEORY Thm 7: full-curvature ridge on convex modes, full-radius push on concave ones
+            c = self.cres[l].float() if (self.cres is not None and self.cres[l] is not None) else torch.zeros_like(lam)
+            cur = lam + a.cfac * c; beta = a.box; unit = max(lr * self.eta[l], 1e-30) * self.T_eff
+            def D_of(mu):
+                conv = cur + mu > 0
+                Dc = (Cf / (cur + mu).clamp(min=1e-30) / unit).clamp(-beta, beta)
+                return torch.where(conv, Dc, beta * torch.sign(Cf))
+            mu = 0.0; D = D_of(0.0); N = float(D.numel())
+            if beta > 1 and float((D * D).sum()) > N:       # sphere budget sum D^2 <= N binds: raise the damping mu
+                lo, hi = -30.0, 30.0
+                for _ in range(40):
+                    g_ = 0.5 * (lo + hi); Dm = D_of(math.exp(g_))
+                    if float((Dm * Dm).sum()) > N: lo = g_
+                    else: hi = g_
+                mu = math.exp(hi); D = D_of(mu)
+            self.last_gamma[l] = mu / lmax
+            return D, lam, torch.ones_like(live)
         if a.rule == 'adam':
             V2 = self.V2[l]; V2f = V2.float() * a.b2 + (g * g) * (1 - a.b2)
             if update_state: self.V2[l] = V2f.to(V2.dtype)
@@ -216,8 +281,15 @@ class KronQFast:
         a = self.a; L = self.L; dev = self.dev
         need_stats = (step - 1) % max(1, a.stats_every) == 0
         self.t_step = step
+        T_rem = a.steps - step + 1                      # effective steps left in units of the current lr (linear decay to 0 unless a controller holds lr)
+        if a.rem_ctrl or a.sphere: self.T_eff = float(T_rem)
+        else: self.T_eff = max(1.0, 0.5 * (T_rem + 1.0))   # sum of the remaining linear-decay factors over the current one: (T_rem + 1) / 2
         due = [l for l in range(L) if step >= self.next_ref[l]]
         Gr = [W.grad for W in self.Wt]
+        # loss gradients at the cached intermediates, snapshotted BEFORE the probe backward: a retained .grad accumulates
+        # every backward that passes through it (the probe's included, ~m ny / 2 times larger), so it cannot be read later
+        hgrad = [h.grad.clone() if h.grad is not None else None for h in self.cache['h']] if self.cres is not None else None
+        ztgrad = [zt.grad.clone() if zt.grad is not None else None for zt in self.cache['zt']] if a.S_mode == 'emp' else None
         diag_now = emit is not None and (step % a.eval_every == 0 or step == a.steps)
         # ---- statistics in the current basis
         if need_stats or a.gnls:
@@ -227,7 +299,7 @@ class KronQFast:
                     eps = self.draw_eps(out.shape)
                     gzt = torch.autograd.grad((out * eps).sum(), self.cache['zt'], retain_graph=True)
                 if a.S_mode == 'emp':
-                    gzt_e = [zt.grad for zt in self.cache['zt']]
+                    gzt_e = ztgrad
             if need_stats:
                 for l in range(L):
                     at = self.cache['at'][l].detach()
@@ -240,11 +312,20 @@ class KronQFast:
                     self.A[l].update(at, a.beta_stats)
                     if not self.S[l].diag: self.S[l].update(d, a.beta_stats)
                     else: self.S[l].update(d, a.beta_stats)
+                    if self.cres is not None and l < L - 1 and hgrad[l] is not None:
+                        # c_ij = sum_x sum_a (q_i)_a^2 (dL/dh_x)_a act''(z_xa) (a~_xj)^2: the mode's second derivative on the residual
+                        zt_ = self.cache['zt'][l]; z_ = self.S[l].cols_from_basis(zt_.detach()); dlh = hgrad[l]
+                        r_ = dlh * gelu_dd(z_); newc = self.S[l].rows_to_basis_sq(r_.T @ (at * at)); self.cres_n[l] += 1
+                        w_ = max(1.0 / self.cres_n[l], 1 - a.beta_stats)
+                        if self.cres[l] is None: self.cres[l] = newc.to(torch.bfloat16 if a.compress else torch.float32)
+                        else: self.cres[l] = (self.cres[l].float() * (1 - w_) + newc * w_).to(self.cres[l].dtype)
                     if a.ekfac:                              # exact GN diagonal in the current basis: E[d~_i^2 a~_j^2]
                         new = (d * d).T @ (at * at) / at.shape[0]
                         if self.lamx[l] is None: self.lamx[l] = new.to(torch.bfloat16 if a.compress else torch.float32)
                         else: self.lamx[l] = (self.lamx[l].float() * a.beta_stats + new * (1 - a.beta_stats)).to(self.lamx[l].dtype)
             if tm is not None: tm['stats'] += t() - t0
+        if a.check_curv and emit is not None and step in (2, a.steps // 2):   # after the first refresh (step 1) the modes are the eigenbasis
+            self.check_curv(xb, yb, loss_fn, emit, step, hgrad=hgrad)
         # ---- refresh of the bases (per-layer period; adaptive by the g.D criterion of kronq2 or the overlap criterion of kronsign)
         if due:
             t0 = t() if t else None
@@ -265,6 +346,7 @@ class KronQFast:
                         self.Dprev[l] = None; self.z_tr[l] = None
                     if self.V2 is not None: self.V2[l] = tr(self.V2[l].float(), True).to(self.V2[l].dtype)
                     if self.lamx is not None and self.lamx[l] is not None: self.lamx[l] = tr(self.lamx[l].float(), True).to(self.lamx[l].dtype)
+                    if self.cres is not None: self.cres[l] = None; self.cres_n[l] = 0   # (p_j . a)^2 has cross terms under a basis change: restart in the new basis
                     if old_ok and a.adapt_refresh > 0:              # kronq2: relative change of the first-order decrease g.D
                         D_new, _, _ = self.direction(l, Gr[l], self.C[l].float(), lr, update_state=False); gd_new = float((Gr[l] * D_new).sum())
                         e = abs(gd_new - gd_old) / max(abs(gd_new), 1e-300)
@@ -308,6 +390,12 @@ class KronQFast:
                     if diag_now: emit(f'gnls_alpha_l{l}', alpha, step); emit(f'gnls_qratio_l{l}', q / (float((lam * D * D).sum()) + 1e-30), step)
                 if diag_now:
                     emit(f'livefrac_l{l}', float(live.float().mean()), step); emit(f'wnorm_l{l}', float(self.Wt[l].norm()), step)
+                    if self.cres is not None and self.cres[l] is not None:
+                        cur_ = lam + self.cres[l].float(); conc = cur_ <= 0; emit(f'frac_concave_l{l}', float(conc.float().mean()), step)
+                        emit(f'c_over_lam_q50_l{l}', float((self.cres[l].float().abs() / lam.clamp(min=1e-30)).median()), step)
+                        if a.hyper and conc.any() and (~conc).any():
+                            emit(f'u_q50_concave_l{l}', float(self.u[l].float()[conc].median()), step); emit(f'u_q50_convex_l{l}', float(self.u[l].float()[~conc].median()), step)
+                    if a.alloc2: emit(f'alloc2_mu_over_lmax_l{l}', self.last_gamma[l], step)
                     if a.alloc and self.last_gamma[l] is not None: emit(f'alloc_gamma_over_lmax_l{l}', self.last_gamma[l], step); emit(f'alloc_fitfrac_l{l}', float((lam > self.last_gamma[l] * float(lam.max())).float().mean()), step)
                     if l == (1 if L > 2 else 0):               # shape of the Taylor radius: remainder and leverage along five directions at the step's length
                         lmax_ = float(lam.max()); dirs = {'step': D, 'grad': g, 'rand': torch.randn_like(g),
