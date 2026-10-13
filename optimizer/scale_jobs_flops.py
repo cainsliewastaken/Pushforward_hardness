@@ -12,6 +12,12 @@ def P_of(w): return NIN * w + w + w * w + w + w * NOUT + NOUT
 def cost(opt, w, block=0, diag=False, rem=False, gnls=False):
     """FLOPs per step in units of F0 = 6 P m (forward + backward)."""
     P = P_of(w); F0 = 6 * P * M; sq = 2 * w ** 3
+    if opt == 'kronqf':                                                  # reparametrised: rotations of activations and signals in the forward/backward
+        bb = block if block else w
+        c = 1.0 + 2 * (2 * 2 * M * w * bb) / F0 + 0.05                       # two square layers x (a~ in forward + z~ back, and the two in backward), block-diagonal
+        if rem: c += 1.0 / 3
+        if gnls: c += 1.3
+        return c
     if opt == 'adamw': c = 1.0
     elif opt == 'muon': c = 1.0 + 60 * w ** 3 / F0                       # NS5 on the two w x w matrices (fp32 count)
     elif diag: c = 1.2

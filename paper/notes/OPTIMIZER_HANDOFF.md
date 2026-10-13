@@ -209,3 +209,15 @@ hypergradient), scale}. The other instance's KAdam / KronSign / SOAP tuning is i
   the function-space remainder.
 * When a design choice is not derived, say so; several "theory-based" predictions here failed because the second-order
   term was treated as pure error. Measure the quantities the theory leaves open (signs, levels) rather than modelling them.
+
+## 10. Inventory of the optimizer options vs the scaling harness (2026-10-12 evening; user review)
+
+The scaling harness (scale_study.py --opt kronq, written 2026-10-12 morning) re-implemented KronQ with a fraction of the
+options of kronq2 / kronq3h / train_ks (kronsign) / kadam_front. Missing and material: --reparam (train in the rotated
+basis: no w^3 rotations per step; the per-step cost falls from ~58 F0 (full) / 3.6 F0 (blocks) to ~1-2 F0), --lowrank,
+--rule adam (the Kronecker-basis Adam rule that won on the field problem), --lr_kappa / --check_every (the remainder
+controller), --adapt_refresh, --eig qr (warm start), --rot_dtype / --tf32, separate --stats_every, --S_mode, --last_S,
+--q, --b1, --centred, --horizon, --hyper_shape, soft sign, topk. Also statistics were accumulated from one batch per
+refresh only. All are now in optimizer/kronq_fast.py (--opt kronqf), with batched block operations; the old branch is
+kept for continuity. First width-4096 test: runs/scale_fast (job 59726146). The equal-FLOP study must be redone with
+the kronqf cost model (scale_jobs_flops.py).
