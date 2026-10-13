@@ -151,6 +151,7 @@ class KronQFast:
         self.cres = [None] * self.L if (a.alloc2 or a.curv) else None   # residual curvature per mode c_ij = <E, f_uu> (LOOKAHEAD_THEORY Prop. 10)
         self.cres_n = [0] * self.L                                        # samples since the basis last changed: running mean, then EMA (not transportable)
         self.T_eff = 1.0
+        self.xv_fresh = None   # (x, y) fresh batch for --rem_val, set by the harness each step
         self.zbud = [float(x) for x in a.zbud.split(',')] if a.zbud else []
         self.scan_steps = set(int(x) for x in a.radius_scan.split(',')) if a.radius_scan else set()
         self.tracker = None
@@ -607,6 +608,18 @@ class KronQFast:
                     sc = 1.0 - a.rem / rho
                     for l in range(L): self.Wt[l].data.add_(sc * lr * self.eta[l] * Dws[l])
                 if diag_now: emit('rem_rho', rho, step)
+            if a.rem_val > 0 and self.xv_fresh is not None:   # REPORT 61 item 30: the budget on a FRESH batch (the cross-kernel effect, Cor. 24a)
+                xv_, yv_ = self.xv_fresh; sc_b = (1.0 - a.rem / rho) if (a.rem > 0 and rho > a.rem) else 0.0   # fraction already undone by the batch budget
+                steps_taken = [(1.0 - sc_b) * lr * self.eta[l] * Dws[l] for l in range(L)]                   # the step as applied so far
+                f1v = self.forward(xv_)
+                for l in range(L): self.Wt[l].data.add_(steps_taken[l])                                       # back to the pre-step point
+                f0v = self.forward(xv_)
+                for l in range(L): self.Wt[l].data.sub_(steps_taken[l])
+                rho_v = float((f1v - f0v).norm() / ((f0v - yv_).norm() + 1e-30))
+                if rho_v > a.rem_val:
+                    scv = 1.0 - a.rem_val / rho_v
+                    for l in range(L): self.Wt[l].data.add_(scv * steps_taken[l])
+                if diag_now: emit('remv_rho', rho_v, step)
             if self.kappa > 0 and step % a.check_every == 0:   # per-layer eta from the function-space remainder (round-robin)
                 l = (step // a.check_every) % L; d = -lr * self.eta[l] * Dws[l]
                 W_now = self.Wt[l].data.clone(); W_pre = W_now - d                           # the pre-step point

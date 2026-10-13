@@ -1739,6 +1739,27 @@ Caveats: one seed; baselines untuned (3 fixed lrs, no schedule, beta2 = 0.99); 5
    Status of the mechanism statement (item 28): parts (i)-(iii) unchanged; part (iv), the length, is "the output budget
    where it binds (smooth), the per-layer pre-activation radius where it binds (rough), with the lr decay as its
    current proxy".
+30. PER-LAYER PRE-ACTIVATION BUDGET (job 59753730, 1 node, 12 min; --zbud; scale_zbud.sh; runs/scale_zbud/). The radius scan
+   now logs the relative pre-activation change ||dz|| / ||z|| at the rf = 0.1 radius along each direction: along the actual
+   step, rough 0.08-0.15 (layer 0) and 0.022-0.024 (layer 1); smooth 0.04-0.05 and 0.07-0.12. Runs with the step scaled per
+   layer to those radii: rough lr 1e-3: 0.111 (reference 0.0612: 1.8x WORSE); rough lr 2e-3: diverges (val 35 at step 250,
+   3e5 at 1000); rough lr 2e-3 at half the radii: diverges (1e5); smooth lr 1e-3: 9.0e-4 (reference 1.41e-4: 6x worse).
+   Two facts. (a) The reference operates FAR beyond the rf = 0.1 radius on the hidden layer: its relative pre-activation
+   change at step 250 is 0.51 on layer 1 (20x the measured radius) and it trains well; the budget at the radius throttles
+   layer 1 twentyfold early and the run is slower. The first-order Taylor radius in pre-activation units is NOT the
+   constraint the method obeys on rough. (b) In the lr 2e-3 runs both batch-measured quantities were within budget (dz / z
+   0.02-0.16 on the hidden layers after scaling; the output budget scaling the batch output change to 0.2 ||E_B|| every
+   step) and the VALIDATION outputs still diverged (val 35 -> 3e5 while the batch output change was held). The motion that
+   destroys the network is invisible to the training batch: it lies in the null space of the batch Jacobian (the layer has
+   1.7e7 parameters, the batch 6.5e4 output values; the sign push moves every live mode, including the ~1.6e7 batch-null
+   ones, at full length, and the learned weights are 2-6x on the slowest deciles). The collapse of items 4 and 29 is
+   therefore a GENERALISATION failure, not a Taylor-remainder one: the constraint that binds on rough is the accumulated
+   motion in directions the batch does not see, which the lr decay anneals.
+   This is Theorem 24 / Corollary 24a's content exactly: the full-set residual changes by the CROSS kernel K_{full,B} g_B,
+   and a step's null-space component (zero batch effect) has a nonzero full-set effect. The derived length rule for rough
+   is therefore a budget on the HELD-OUT output change (one forward on a fresh batch per step, 0.33 F0), not on the batch
+   output change and not on the pre-activation change. Implemented as --rem_val (budget measured on a fresh batch; the
+   training-batch budget kept as well). Not yet run.
 
 25 (this fork). APPROXIMATION CONTROLS AND BASIS TRACKING (job 59749741, 1 node, 12 min; optimizer/tracking.py, --track;
    scale_exact.sh; runs/scale_exact/). Width 4096, both targets: reference fast configuration (blocks 256, bf16 state, two
