@@ -1603,3 +1603,20 @@ Caveats: one seed; baselines untuned (3 fixed lrs, no schedule, beta2 = 0.99); 5
    or the averaging premise itself is weak (batch 1024, which halves the noise, gave only 1.24x per step: item 22). The
    measurement that decides: the per-mode gradient autocorrelation vs lag along the run (a sample of modes, lags to 64),
    which gives the window with no model; not run.
+24. GRADIENT AUTOCORRELATION PER MODE (job 59749119, 1 node, 9 min; --acf; scale_acf.sh; runs/scale_acf/). Reference run,
+   200 modes per lambda decile, basis held for 64 steps at steps 250 / 1000 / 2500 / 4000: R(tau) = <g_t g_t+tau> / <g^2>
+   and sig = (time mean)^2 / mean square (the persistent fraction; its noise floor is ~1/64).
+   SMOOTH: R(1) = 0.01-0.10 on every decile of both layers, R(tau >= 2) = 0 +- 0.03, sig 0.01-0.03 at every stage: each
+   mode's gradient is white noise with a persistent part at or below the floor; no per-mode lifetime is resolvable. Top
+   decile: R(2..4) = -0.1 to -0.3 (oscillation: the fast modes sit at the stability edge the cap leaves them at).
+   ROUGH, layer 0 at step 250: the SLOW input modes carry a persistent signal: d9 R(tau) = 0.45 flat to lag 63, sig 0.41;
+   d7 0.31 -> 0.10, sig 0.26; d5 0.13 -> 0.02, sig 0.08; d0-d3 at the floor. By step 1000 every decile is at the floor
+   (sig 0.01-0.02), and layer 1 is white at every stage (R(2) = -0.1 to -0.2 on all deciles at 250: oscillation).
+   Reading: (a) the same momentum window for every mode is right everywhere except the first few hundred steps of the
+   rough target on the input layer, where the slow modes' gradients persist for > 64 steps and a long window would raise
+   their SNR (the online-window run of item 23 had its windows capped at 10-20 there by the refresh-period proxy, i.e.
+   short exactly where long was safe, and long late where everything is white); (b) the per-mode momentum has headroom
+   only in that early window; (c) the regime is 97-99 % noise per mode for most of the run, and the sign push's fixed
+   per-mode step bounds the random walk at +-delta per step while the drift accumulates linearly (signSGD-type
+   robustness) - the first candidate explanation of its margin consistent with items 21-24; testable from recorded
+   gradients and steps (drift vs random-walk amplitude per mode for sign vs the Adam rule).
