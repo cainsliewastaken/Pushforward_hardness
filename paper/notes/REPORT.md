@@ -1777,6 +1777,22 @@ Caveats: one seed; baselines untuned (3 fixed lrs, no schedule, beta2 = 0.99); 5
    with df_v = f(theta + d) - f(theta) on the fresh batch (the same two forwards as the held-out budget; no constant).
    Implemented as --ls_val (alpha clipped to [0, 1]). Not yet run. Prediction: lr-insensitive, >= the reference on both
    targets, and the batch budget becomes unnecessary.
+32. HELD-OUT LINE SEARCH (job 59757043, 1 node, 10 min; --ls_val, no batch budget; scale_lsval.sh; runs/scale_lsval/).
+   alpha = <E_v, -df_v> / ||df_v||^2 on a fresh batch, clipped to [0, 1]. Rough: lr 1e-3 0.1174, 2e-3 0.1159, 3e-3 0.1143
+   (reference 0.0612); smooth lr 1e-3 8.4e-4 (reference 1.41e-4). Learning-rate INSENSITIVE (the three rough runs agree
+   within 3 %: the robustness property holds, and lr >= 2e-3 no longer collapses), but 1.9x worse on rough and 6x worse on
+   smooth. Why: the held-out alignment of a step is 0.01-0.06 and the nominal step's held-out output change 0.3-2 x the
+   residual, so the per-step quadratic optimum is alpha = 0.01-0.1 and the step is cut to a few percent of the residual,
+   against the 0.2 the batch budget allows. The budget sits at the per-step BREAK-EVEN (2c, zero held-out gain per step by
+   the quadratic model) and that run makes 2-6x more progress than the run at the per-step OPTIMUM (c). So the per-step
+   quadratic model, on the batch or on held-out data, does not predict multi-step progress; the useful length is
+   between c and 2c (the reference's natural step early is 1.5-1.9 c) and the per-step model cannot say where. This is the
+   same lesson as the lookahead line (items 14, 17): greedy per-step optimality under-steps, here by 4-10x.
+   COST AND VERDICT. The fresh batch costs two forwards (0.67 F0 on top of the fast path's 2.1 F0) and one batch of memory;
+   the held-out budget at that cost reproduced the reference (+1.5 %, item 31) and the line search made it worse. Neither
+   is worth an extra pass. The per-layer budget (item 30) also lost. The length rule to keep is the free one (batch output
+   budget + schedule), with the derived bracket c <= rho <= 2c as its explanation and the batch-scaling of the constant
+   (item 27) as its one practical consequence. The length line is closed.
 
 25 (this fork). APPROXIMATION CONTROLS AND BASIS TRACKING (job 59749741, 1 node, 12 min; optimizer/tracking.py, --track;
    scale_exact.sh; runs/scale_exact/). Width 4096, both targets: reference fast configuration (blocks 256, bf16 state, two

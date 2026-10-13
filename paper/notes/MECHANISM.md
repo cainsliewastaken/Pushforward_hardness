@@ -164,6 +164,19 @@ cross kernel K_{full,B} g_B, and a step with zero batch effect can have any full
 GENERALISATION constraint, which the lr decay anneals; its derived form is a budget on the held-out output change (one
 forward on a fresh batch per step; --rem_val), and that is the last untested element of the length rule.
 
+## 7c. The length, closed (REPORT 61 items 31-32, 2026-10-13 16:20)
+
+The held-out budget reproduces the reference at lr 1e-3 and collapses at lr >= 2e-3 like the batch budget: the budget's
+VALUE 0.2 sits at the early held-out break-even 2c (c ~ 0.1 the held-out alignment). The held-out line search (rho = c,
+the per-step quadratic optimum) is lr-insensitive but 2-6x worse: the per-step model under-steps by 4-10x, because the
+run's progress is the accumulated drift of many steps, not the per-step gain. The length is therefore bracketed, c <=
+rho <= 2c, by two one-step quantities the theory names (the quadratic optimum and the break-even on the population
+residual, Cor. 24a), and the per-step theory does not fix it inside the bracket; the reference's schedule puts it at
+1.5-1.9 c early and below c late. Every measured alternative (per-layer radius, held-out budget, held-out line search)
+costs more and is not better. Part (iv) of the mechanism statement is: the length is the batch output budget where it
+binds and the schedule where it does not, the constant being the break-even set by the noise level (rising with the
+batch), and the per-step theory brackets it without determining it.
+
 ## 8. Where it goes in the paper
 
 Section 21's "measurements organised by the identities" becomes: the kernel's eigenbasis (Theorem 2), the batch drive
