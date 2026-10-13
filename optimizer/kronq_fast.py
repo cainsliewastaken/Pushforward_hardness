@@ -152,6 +152,7 @@ class KronQFast:
         self.cres_n = [0] * self.L                                        # samples since the basis last changed: running mean, then EMA (not transportable)
         self.T_eff = 1.0
         self.scan_steps = set(int(x) for x in a.radius_scan.split(',')) if a.radius_scan else set()
+        self.tracker = None
         self.acf_steps = set(int(x) for x in a.acf.split(',')) if a.acf else set(); self.acf_buf = None; self.acf_idx = None; self.acf_t0 = None
         self.eta = [1.0] * self.L; self.refresh_cur = a.refresh; self.emp_scale = [None] * self.L
         self.period = [a.refresh] * self.L; self.next_ref = [1] * self.L; self.rf = [None] * self.L
@@ -547,6 +548,11 @@ class KronQFast:
                         emit(f'Tk_q50_l{l}', float(Tk.median()), step)
                         for dec in range(10): emit(f'Tk_q50_d{dec}_l{l}', float(Tk[order[dec * n_ // 10:(dec + 1) * n_ // 10]].median()), step)
                 Dws.append(D)
+            if getattr(a, 'track', 0) and diag_now and step % a.track_every == 0:
+                if self.tracker is None:
+                    from tracking import Tracker; self.tracker = Tracker(self)
+                t1 = t() if t else None; self.tracker.run(xb, emit, step, Dws)
+                if tm is not None: tm['stats'] += t() - t1
             # ---- step length controllers
             g_all = 1.0
             if a.rem > 0 or self.kappa > 0:
