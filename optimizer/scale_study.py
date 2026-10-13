@@ -40,6 +40,9 @@ p.add_argument('--reltol', type=float, default=1e-10); p.add_argument('--beta_st
 p.add_argument('--nval', type=int, default=4096); p.add_argument('--eval_every', type=int, default=250)
 p.add_argument('--seed', type=int, default=1); p.add_argument('--out', required=True)
 p.add_argument('--u_clamp', type=float, default=4.6, help='clamp on the log push weight u (push w = exp(u) in [e^-c, e^c])')
+p.add_argument('--gmask', type=float, default=0.0, help='>0: push only modes with |G_ij| > gmask * rms(G) (gradient-energy mask, basis independent)')
+p.add_argument('--bcurv', type=int, default=0, help='1: live mask and GN cap from the CURRENT batch Kronecker curvature (extra backward per step)')
+p.add_argument('--rem', type=float, default=0.0, help='>0: scale the whole step so that ||f(theta+d) - f(theta)|| <= rem * ||E|| on the batch (extra forward per step)')
 p.add_argument('--diag', type=int, default=0, help='1: at every eval step log per layer the u distribution, clamp fraction, cap-active fraction, '
                'step energy on the lowest decile of modes by Kronecker eigenvalue, weight norm, and hidden-activation saturation')
 a = p.parse_args()
@@ -171,7 +174,19 @@ for step in range(1, a.steps + 1):
     sync(); t0 = time.time()
     need_stats = a.opt in ('soap', 'kronq') and (step - 1) % a.refresh == 0
     for q in lins.parameters(): q.grad = None
-    out = forward(xb, keep=need_stats and a.opt == 'kronq'); loss = mse(out, yb); loss.backward(retain_graph=need_stats and a.opt == 'kronq')
+    keep_now = a.opt == 'kronq' and (need_stats or a.bcurv)
+    out = forward(xb, keep=keep_now); loss = mse(out, yb); loss.backward(retain_graph=keep_now)
+    bc = None
+    if a.opt == 'kronq' and a.bcurv:        # current-batch Kronecker curvature per mode: diag(U_S^T S_b U_S) x diag(U_A^T A_b U_A)
+        with torch.enable_grad():
+            eps_b = torch.randint(0, 2, out.shape, device=DEV, generator=gtrain).float() * 2 - 1
+            gz_b = torch.autograd.grad((out * eps_b).sum(), [zs_cache[l] for l in range(L1)], retain_graph=need_stats)
+        bc = []
+        for l, s_ in enumerate(st):
+            if s_['L'].U is None: bc.append(None); continue
+            at_b = torch.cat([acts_cache[l], torch.ones(acts_cache[l].shape[0], 1, device=DEV)], 1)
+            dA = (s_['R'].rot(at_b, 'R', False) ** 2).mean(0); dS = (s_['L'].rot(gz_b[l].T, 'L', False) ** 2).mean(1)
+            bc.append((dS[:, None] * dA[None, :]) * (2.0 / NOUT))
     sync(); tm['fb'] += time.time() - t0
     with torch.no_grad():
         if a.opt == 'adamw':
@@ -220,6 +235,13 @@ for step in range(1, a.steps + 1):
                     Dr = (C / bc1) / ((s_['v'] / bc2).sqrt() + 1e-8)
                 else:
                     lam = s_['L'].e[:, None] * s_['R'].e[None, :] * (2.0 / NOUT); lmax = float(lam.max()); live = lam > a.reltol * lmax   # GN eigenvalue of the mean-squared loss
+                    if bc is not None and bc[l] is not None:
+                        lam = bc[l]; lmax = float(lam.max()); live = lam > a.reltol * lmax
+                    if a.gmask > 0:
+                        gl = Gr.abs() > a.gmask * Gr.pow(2).mean().sqrt()
+                        if a.diag and (step % a.eval_every == 0 or step == a.steps):
+                            emit(f'glive_l{l}', float(gl.float().mean()), step); emit(f'glive_and_live_l{l}', float((gl & live).float().mean()), step)
+                        live = live & gl
                     w = torch.ones_like(lam)
                     if a.hyper:
                         if s_['Dprev'] is not None:
@@ -249,6 +271,13 @@ for step in range(1, a.steps + 1):
                 Dw = s_['L'].rot(s_['R'].rot(Dr, 'R', True), 'L', True)
                 lin.weight.sub_(lr * Dw[:, :-1]); lin.bias.sub_(lr * Dw[:, -1])
                 if a.wd: lin.weight.mul_(1 - lr * a.wd)
+                if a.rem > 0: s_['Dw_last'] = Dw
+            if a.opt == 'kronq' and a.rem > 0:   # step budget from the output change on the batch: ||f(theta + d) - f(theta)|| <= rem ||E||
+                df = (forward(xb) - out).norm(); En = (out - yb).norm(); rho = float(df / (En + 1e-30))
+                if rho > a.rem:
+                    sc = 1.0 - a.rem / rho       # undo the fraction of the step beyond the budget
+                    for s_, lin in zip(st, lins): lin.weight.add_(sc * lr * s_['Dw_last'][:, :-1]); lin.bias.add_(sc * lr * s_['Dw_last'][:, -1])
+                if a.diag and (step % a.eval_every == 0 or step == a.steps): emit('rem_rho', rho, step)
             sync(); tm['upd'] += time.time() - t0
     if step % a.eval_every == 0 or step == a.steps:
         v = val_mse(); emit('val', v, step); emit('wall', time.time() - t_start, step)
