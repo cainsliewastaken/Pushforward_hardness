@@ -120,6 +120,18 @@ Estimated ~9 GPU-hours total (width 4096 runs ~5-10 min each); ~30-40 min on 4 n
 user's explicit yes). Analyse: accuracy vs state memory per optimizer and width; equal wall-clock comparison; the
 accuracy cost of each memory reduction as width grows.
 
+### Pending decisions (awaiting the user, as of 2026-10-12 evening)
+
+1. **Scaling-study allocation, requested but not approved yet:** account m5326, QOS interactive, 4 GPU nodes (16 GPUs,
+   3 runs per GPU), 1 hour limit, released automatically by chaining `scancel` after the launcher finishes; expected
+   use ~30-40 min (~9 GPU-hours). Commands (fill in the job id):
+   `salloc --no-shell -A m5326 -C gpu -q interactive -N 4 -t 01:00:00 --image=nersc/pytorch:26.01.01 -J l63_scale`, then
+   `nohup bash -c 'srun --jobid=<id> --overlap -N 4 --ntasks-per-node=1 --gpus-per-node=4 shifter --image=nersc/pytorch:26.01.01 bash optimizer/scale_launch.sh 3 > $SCRATCH/l63_held_rough/runs/scale/all.log 2>&1; echo "exit=$?" > $SCRATCH/l63_held_rough/runs/scale/all.log.done; scancel <id>' &`.
+   Do not launch without a fresh explicit yes (the global rules require it per run).
+2. **Pushing** commits 1ce5411 and 569bcbe (and later ones) to origin: not yet approved.
+3. **Removing** `$SCRATCH/l63_held_rough/code` and `report/`: only after the other pre-repository session has ended and
+   `scripts/sync_l63_code.sh` reports nothing to copy; needs the user's OK. The run tree `runs/` stays.
+
 ## 6. Open questions, in priority order
 
 1. Scaling study (above): does KronQ keep an advantage over tuned AdamW / Muon / SOAP at <= Adam's memory and equal
