@@ -459,7 +459,11 @@ class KronQFast:
                     bk = 1 - 1.0 / Tk; C.copy_((C.float() * bk + g * (1 - bk)).to(C.dtype)); self.Tk_log[l] = Tk
                 else: C.mul_(a.b1).add_(g.to(C.dtype), alpha=1 - a.b1)
                 Cf = C.float()
-                if a.hyper and a.rule != 'adam' and self.Dprev[l] is not None:        # kronq3h one-step / traced hypergradient on u
+                if a.hyper and a.hyper_rule == 'rprop' and self.Dprev[l] is not None:   # sign-consistency rule: grow the mode's step while
+                    sp = torch.sign(self.Dprev[l].float()); sg = torch.sign(g)              # the gradient keeps its sign, cut it when it flips
+                    un = self.u[l].float() + torch.where(sp * sg > 0, torch.full_like(g, math.log(a.rprop_up)), torch.where(sp * sg < 0, torch.full_like(g, math.log(a.rprop_down)), torch.zeros_like(g)))
+                    self.u[l] = un.clamp(-a.u_clamp, a.u_clamp).to(self.u[l].dtype)
+                elif a.hyper and a.rule != 'adam' and self.Dprev[l] is not None:        # kronq3h one-step / traced hypergradient on u
                     Dp = self.Dprev[l].float() if not a.dprev_bits else self.Dprev[l].float() * torch.exp(self.u[l].float())
                     if a.horizon > 1:
                         gam = 1 - 1.0 / a.horizon

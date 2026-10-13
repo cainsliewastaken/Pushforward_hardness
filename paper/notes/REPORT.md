@@ -1635,3 +1635,27 @@ Caveats: one seed; baselines untuned (3 fixed lrs, no schedule, beta2 = 0.99); 5
    per step while the drift accumulates linearly, which a magnitude-scaled step does not: the candidate explanation of the
    sign push's margin that is consistent with items 13-23, to be tested on the recorded gradients (drift vs random-walk
    amplitude per mode for sign against the Adam rule), not with a sweep.
+24. GRADIENT AUTOCORRELATION PER MODE (job 59749119, 1 node, 9 min; --acf; scale_acf.sh; runs/scale_acf/). Reference run,
+   both targets; at steps 250 / 1000 / 2500 / 4000 the rotated gradient on 200 modes per lambda decile recorded for 64 steps
+   with the basis held; R(tau) = <g_t g_t+tau> / <g^2> per decile, and the persistent fraction sig = time-mean^2 / mean square.
+   (a) WHITE NOISE ALMOST EVERYWHERE. Smooth target, all deciles, both layers, all four stages: R(1) = 0.01-0.10, R(tau >= 2)
+       = 0 within noise, sig = 0.01-0.03 (the estimator's own floor for 64 samples): each mode's gradient is white step to
+       step with a persistent part of at most ~1 % of its mean square. Rough target from step 1000 on: the same.
+   (b) THE EXCEPTION, AND IT IS THE ROUGH TARGET'S SIGNAL. Rough, step 250, input layer: the slow deciles carry a persistent
+       gradient: d9 R(tau) = 0.44 flat to tau = 63, sig = 0.41; d7 0.30 / 0.26; d5 0.10 / 0.08; d0-d3 white. Per-batch
+       SNR ~ 0.8 on the slowest input modes early in the run, so their sign is right ~80 % of the time without averaging;
+       by step 1000 it is consumed (sig 0.01-0.02). This is the held-rough part being learned through the input layer's
+       low-variance modes, and it is the one place a per-mode treatment has something to act on (a larger push, not a
+       longer window: the sign is already reliable there).
+   (c) OSCILLATION ON THE FAST MODES (edge of stability). Top decile, both targets, both layers: R(2), R(4) = -0.1 to -0.5
+       (rough l0 step 250: R(2) = -0.51), i.e. the gradient reverses every 2-4 steps: the push on the fastest modes
+       overshoots their completion point. At step 250 on rough, layer 1 shows R(2) = -0.1 to -0.2 on EVERY decile (the
+       budget binds and the whole step is at the stability edge); later only the top decile. The cap (completion / L with
+       the Kronecker lambda) does not prevent it because the Kronecker curvature underprices the coherent step; the learned
+       weight lowers the top decile only slowly (0.9 vs 1.0).
+   Consequences. The per-mode momentum window (item 23) had nothing to act on: with white gradients and sig ~ 1 % no
+   window is better than another, and the same window for every mode is right. The two per-mode structures that DO exist
+   are (b) and (c), and both call for a per-mode STEP SIZE driven by sign consistency: grow the push on modes whose gradient
+   keeps its sign (the persistent slow input modes early), cut it on modes whose gradient flips (the oscillating fast
+   modes). Implemented as --hyper_rule rprop (x1.2 / x0.5 on the log weight, reusing the hypergradient state); the one-step
+   hypergradient is the same signal weighted by magnitude at rate 0.01. Not yet run.
