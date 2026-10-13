@@ -22,6 +22,7 @@ import math, torch
 from torch.func import jvp
 
 EIG_DTYPE = None
+CHOLQR = True
 def solve_gamma(Cabs, lam, target2, iters=40):
     """gamma with sum (Cabs / (lam + gamma))^2 = target2 (decreasing in gamma); bisection in log gamma."""
     lo, hi = -30.0, 30.0
@@ -41,6 +42,16 @@ class exact_fp32:
 def gelu_dd(z):
     """second derivative of the exact GELU z Phi(z): phi(z) (2 - z^2)."""
     return torch.exp(-0.5 * z * z) * (2.0 - z * z) * 0.3989422804014327
+def cholqr(Y, passes=3):
+    """orthonormalise the columns of Y (batched ... x n x k) by CholeskyQR2: G = Y^T Y in float64, V = Y L^-T, twice.
+    Falls back to QR if the Gram is not positive definite. 10x+ faster than batched QR on the GPU."""
+    V = Y
+    for _ in range(passes):
+        G = (V.transpose(-1, -2).double() @ V.double()); G = G + 1e-12 * G.diagonal(dim1=-2, dim2=-1).mean(-1)[..., None, None] * torch.eye(G.shape[-1], device=G.device, dtype=G.dtype)
+        L, info = torch.linalg.cholesky_ex(G)
+        if int(info.max()) != 0: return torch.linalg.qr(Y)[0]
+        V = torch.linalg.solve_triangular(L, V.double().transpose(-1, -2), upper=False).transpose(-1, -2).to(Y.dtype)
+    return V
 def safe_eigh(F):
     """eigh of a (batch of) symmetric matrices with a float64 CPU fallback when cusolver fails to converge."""
     Fs = 0.5 * (F + F.transpose(-1, -2))
@@ -101,11 +112,11 @@ class Basis:
             else: Vr = None
         else:
             V = torch.eye(self.b, device=self.dev).expand(self.nf, self.b, self.b).clone()
-            for _ in range(iters): V, _ = torch.linalg.qr(torch.bmm(self.F, V))
+            for _ in range(iters): V = cholqr(torch.bmm(self.F, V)) if CHOLQR else torch.linalg.qr(torch.bmm(self.F, V))[0]
             e = torch.einsum('kbc,kbd,kdc->kc', V, self.F, V).clamp(min=0).reshape(-1)
             if self.rem:
                 Vr = torch.eye(self.rem, device=self.dev)
-                for _ in range(iters): Vr, _ = torch.linalg.qr(self.Fr @ Vr)
+                for _ in range(iters): Vr = cholqr(self.Fr @ Vr) if CHOLQR else torch.linalg.qr(self.Fr @ Vr)[0]
                 e = torch.cat([e, torch.diagonal(Vr.T @ self.Fr @ Vr).clamp(min=0)])
             else: Vr = None
         # new basis U V; factor becomes (nearly) diagonal in it
@@ -151,6 +162,7 @@ class KronQFast:
         self.cres = [None] * self.L if (a.alloc2 or a.curv) else None   # residual curvature per mode c_ij = <E, f_uu> (LOOKAHEAD_THEORY Prop. 10)
         self.cres_n = [0] * self.L                                        # samples since the basis last changed: running mean, then EMA (not transportable)
         self.T_eff = 1.0
+        self.nref = [0] * self.L
         self.xv_fresh = None   # (x, y) fresh batch for --rem_val, set by the harness each step
         self.zbud = [float(x) for x in a.zbud.split(',')] if a.zbud else []
         self.scan_steps = set(int(x) for x in a.radius_scan.split(',')) if a.radius_scan else set()
@@ -435,7 +447,9 @@ class KronQFast:
                     old_ok = self.S[l].e is not None and self.A[l].e is not None
                     if a.adapt_refresh > 0 and old_ok:
                         D_old, _, _ = self.direction(l, Gr[l], self.C[l].float(), lr, update_state=False); gd_old = float((Gr[l] * D_old).sum())
-                    VS = self.S[l].refresh(a.eig_iters)
+                    self.nref[l] += 1
+                    if a.S_every > 1 and self.S[l].U is not None and (self.nref[l] % a.S_every) != 0: VS = None   # S side refreshed every k-th time
+                    else: VS = self.S[l].refresh(a.eig_iters)
                     if a.A0_fixed and l == 0 and self.A[0].U is not None: VA = None            # T3: the input layer's A basis is computed once and never refreshed
                     else: VA = self.A[l].refresh(a.eig_iters)
                     if emit is not None:                                                        # refresh need per side: mean |diagonal| of the basis change
