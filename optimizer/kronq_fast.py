@@ -135,8 +135,8 @@ class KronQFast:
         """lins: list of nn.Linear (their weights are replaced by rotated Wt); a: args; L_act: activation for hidden layers."""
         self.a, self.dev, self.nout, self.L = a, dev, nout, len(lins); self.act = L_act; self.draw_eps = draw_eps
         self.Wt = [torch.nn.Parameter(torch.cat([lin.weight.detach(), lin.bias.detach()[:, None]], 1).clone()) for lin in lins]
-        self.A = [Basis(lin.weight.shape[1] + 1, a.block, a.max_dim, dev) for lin in lins]
-        self.S = [Basis(lin.weight.shape[0], a.block, (0 if (a.last_S == 'identity' and l == self.L - 1) else a.max_dim), dev) for l, lin in enumerate(lins)]
+        self.A = [Basis(lin.weight.shape[1] + 1, a.block, (0 if a.A_identity else a.max_dim), dev) for lin in lins]
+        self.S = [Basis(lin.weight.shape[0], a.block, (0 if (a.S_identity or (a.last_S == 'identity' and l == self.L - 1)) else a.max_dim), dev) for l, lin in enumerate(lins)]
         bf = torch.bfloat16 if a.compress else torch.float32
         self.C = [torch.zeros_like(W, dtype=torch.bfloat16 if a.mom_bf16 else torch.float32) for W in self.Wt]
         self.u = [torch.zeros_like(W, dtype=bf) for W in self.Wt] if a.hyper else None
@@ -378,10 +378,11 @@ class KronQFast:
         ztgrad = [zt.grad.clone() if zt.grad is not None else None for zt in self.cache['zt']] if a.S_mode == 'emp' else None
         diag_now = emit is not None and (step % a.eval_every == 0 or step == a.steps or step in self.scan_steps)
         # ---- statistics in the current basis
+        probe_now = a.gnls or (need_stats and (not a.S_identity or bool(due) or any(S_.F is None for S_ in self.S)))   # T1: probe only at refresh steps
         if need_stats or a.gnls:
             t0 = t() if t else None
             with torch.enable_grad():
-                if a.S_mode == 'mc' or a.gnls or (a.S_mode == 'emp' and need_stats and any(sc is None for sc in self.emp_scale)):
+                if probe_now and (a.S_mode == 'mc' or a.gnls or (a.S_mode == 'emp' and need_stats and any(sc is None for sc in self.emp_scale))):
                     eps = self.draw_eps(out.shape)
                     gzt = torch.autograd.grad((out * eps).sum(), self.cache['zt'], retain_graph=True)
                 if a.S_mode == 'emp':
@@ -394,10 +395,9 @@ class KronQFast:
                         if self.emp_scale[l] is None:       # rescale the empirical signal to the GN trace once (from the probe)
                             self.emp_scale[l] = float(gzt[l].detach().pow(2).sum().sqrt() / (d.pow(2).sum().sqrt() + 1e-30))
                         d = d * self.emp_scale[l]
-                    else: d = gzt[l].detach()
+                    else: d = gzt[l].detach() if probe_now else None
                     self.A[l].update(at, a.beta_stats)
-                    if not self.S[l].diag: self.S[l].update(d, a.beta_stats)
-                    else: self.S[l].update(d, a.beta_stats)
+                    if probe_now: self.S[l].update(d, a.beta_stats)
                     if diag_now and emit is not None and l < L - 1 and self.S[l].e is not None and self.A[l].e is not None and hgrad is not None and hgrad[l] is not None:
                         # per-sample spread of the mode's gradient term (MECHANISM Lemma 1 / assumption S): z_x,ij = d~_x,i a~_x,j, true residual
                         zt_ = self.cache['zt'][l].detach(); z_ = self.S[l].cols_from_basis(zt_)
