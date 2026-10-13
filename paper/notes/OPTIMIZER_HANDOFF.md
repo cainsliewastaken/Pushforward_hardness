@@ -1,3 +1,6 @@
+> 2026-10-13: superseded in part. The current statement of the method, its mechanism (derived / measured / refuted) and the
+> open items is paper/notes/OPTIMIZER_THEORY.md; the day's data are REPORT.md section 61 items 13-32. Read those first.
+
 # Optimizer line: big-picture summary and handoff (written 2026-10-12)
 
 For a model or person continuing this work. Read with `THEORY.md` (chain: sections 8-20), `REPORT.md` (step log;

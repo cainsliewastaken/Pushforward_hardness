@@ -1362,6 +1362,10 @@ is corrected accordingly.
 
 ## 21. Optimizers in the chain's terms: what is covered and what is not (added 2026-10-12)
 
+UPDATE 2026-10-13: the consolidated statement of what the optimizer line established, derived and refuted is
+paper/notes/OPTIMIZER_THEORY.md (mechanism: MECHANISM.md Lemma 1 + Prop. 2; trust region: TRUST_REGION.md; refuted
+lookahead/lift: LOOKAHEAD_THEORY.md, LIFT_GRADIENT.md; data: REPORT.md section 61 items 13-32). Read that before this section.
+
 The optimizer line (OPTIMIZER_HANDOFF.md, REPORT 53-60) uses the identities of this document as a design language. This
 section states precisely which of its claims are theorems here and which are measurements, so that neither document
 overstates the other.
