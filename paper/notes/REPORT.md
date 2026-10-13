@@ -1620,3 +1620,18 @@ Caveats: one seed; baselines untuned (3 fixed lrs, no schedule, beta2 = 0.99); 5
    per-mode step bounds the random walk at +-delta per step while the drift accumulates linearly (signSGD-type
    robustness) - the first candidate explanation of its margin consistent with items 21-24; testable from recorded
    gradients and steps (drift vs random-walk amplitude per mode for sign vs the Adam rule).
+24. GRADIENT AUTOCORRELATION PER MODE (job 59749119, 1 node, 9 min; --acf; scale_acf.sh; runs/scale_acf/). Reference run,
+   200 modes per lambda decile, basis held for 64 steps at steps 250 / 1000 / 2500 / 4000; R(tau) = <g_t g_t+tau> / <g^2>
+   and the persistent fraction sig = (time mean)^2 / mean square. SMOOTH: R(1) = 0.01-0.10 on every decile and layer,
+   R(tau >= 2) = 0 within noise, sig 0.01-0.03 (the estimate's own floor); the top decile shows R(2..4) = -0.1 to -0.3
+   (oscillation at the stability edge). ROUGH: the same everywhere EXCEPT layer 0's slow deciles at step 250: R(tau) = 0.3-0.45
+   flat out to lag 63 and sig 0.26-0.41 on deciles 7-9 (0.08 on decile 5), gone by step 1000 (sig 0.01-0.02). Reading: each
+   mode's gradient is white noise with a persistent part of 1-3 % at every stage, for slow and fast modes alike; the one
+   exception is the slow input modes early on the rough target, where the signal is strong and persistent (the held-rough
+   part being learned through the input layer) and needs no averaging. There is no per-mode lifetime to set a window by:
+   the same window for every mode is right, the 10-step momentum is at the noise/lag trade-off, and the per-mode window
+   (item 23) had nothing to gain. What the measurement adds: the optimizer works on gradients that are 97-99 % noise per
+   mode and extracts the rest by accumulation; a fixed-size per-mode step (sign) bounds the noise's random walk at +-delta
+   per step while the drift accumulates linearly, which a magnitude-scaled step does not: the candidate explanation of the
+   sign push's margin that is consistent with items 13-23, to be tested on the recorded gradients (drift vs random-walk
+   amplitude per mode for sign against the Adam rule), not with a sweep.
