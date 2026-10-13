@@ -43,6 +43,10 @@ p.add_argument('--u_clamp', type=float, default=4.6, help='clamp on the log push
 p.add_argument('--gmask', type=float, default=0.0, help='>0: push only modes with |G_ij| > gmask * rms(G) (gradient-energy mask, basis independent)')
 p.add_argument('--bcurv', type=int, default=0, help='1: live mask and GN cap from the CURRENT batch Kronecker curvature (extra backward per step)')
 p.add_argument('--rem', type=float, default=0.0, help='>0: scale the whole step so that ||f(theta+d) - f(theta)|| <= rem * ||E|| on the batch (extra forward per step)')
+p.add_argument('--rem_ctrl', type=float, default=0.0, help='>0: two-sided controller: scale the whole step by a running factor so that the measured output change '
+               '||f(theta+d) - f(theta)|| / ||E|| on the batch is held at this value (replaces --rem and disables the lr decay)')
+p.add_argument('--alloc', type=int, default=0, help='1: derived per-mode allocation in place of the sign push: D = C / (lam + gamma) / T_rem with gamma solved so that '
+               'the layer step length over the remaining T_rem steps equals the budget (T_rem R)^2; no cap, no hypergradient, no live mask')
 p.add_argument('--gnls', type=int, default=0, help='1: per-layer line search of the sign step against the EXACT per-sample GN curvature on the batch, '
                'q = (2/(m NOUT)) sum_x (gz(x)^T dW a(x))^2 (needs --bcurv-style per-sample gz; one matmul per layer); scale = min(1, g.D / (lr q))')
 p.add_argument('--diag', type=int, default=0, help='1: at every eval step log per layer the u distribution, clamp fraction, cap-active fraction, '
@@ -170,8 +174,19 @@ def emit(metric, value, step=None): rows.append(dict(git=GIT, args=' '.join(sys.
 tm = dict(fb=0.0, stats=0.0, eig=0.0, upd=0.0)
 def sync(): torch.cuda.synchronize() if DEV == 'cuda' else None
 t_start = time.time(); emit('val', val_mse(), 0); emit('wall', 0.0, 0)
+g_scale = 1.0          # two-sided controller state (--rem_ctrl): multiplier on the whole step
+def solve_gamma(Cabs, lam, target2, iters=40):
+    """gamma such that sum (Cabs / (lam + gamma))^2 = target2 (decreasing in gamma); bisection in log gamma."""
+    lo, hi = -30.0, 30.0
+    for _ in range(iters):
+        g = 0.5 * (lo + hi); v = float((Cabs / (lam + math.exp(g))).pow(2).sum())
+        if v > target2: lo = g
+        else: hi = g
+    return math.exp(0.5 * (lo + hi))
 for step in range(1, a.steps + 1):
-    fac = min(1.0, step / a.warmup) if a.warmup else 1.0; fac *= 1 - (step - 1) / a.steps; lr = a.lr * fac
+    fac = min(1.0, step / a.warmup) if a.warmup else 1.0
+    if not a.rem_ctrl: fac *= 1 - (step - 1) / a.steps
+    lr = a.lr * fac
     xb, yb = draw(a.batch, gtrain)
     sync(); t0 = time.time()
     need_stats = a.opt in ('soap', 'kronq') and (step - 1) % a.refresh == 0
@@ -238,6 +253,27 @@ for step in range(1, a.steps + 1):
                     Dr = (C / bc1) / ((s_['v'] / bc2).sqrt() + 1e-8)
                 else:
                     lam = s_['L'].e[:, None] * s_['R'].e[None, :] * (2.0 / NOUT); lmax = float(lam.max()); live = lam > a.reltol * lmax   # GN eigenvalue of the mean-squared loss
+                    if a.alloc:
+                        # derived T-step allocation (frozen-kernel, isotropic budget): per-step length x_k / T_rem with x_k = C_k / (lam_k + gamma),
+                        # gamma from sum x_k^2 = (T_rem R)^2, R = lr sqrt(#modes) (the sign push's per-step length); the controller scales R.
+                        T_rem = max(10, a.steps - step + 1); R = lr * math.sqrt(lam.numel())
+                        gam = solve_gamma(C.abs(), lam, (T_rem * R) ** 2)
+                        Dr = C / (lam + gam) / T_rem / max(lr, 1e-30)          # in units of lr, like the sign push (the step is -lr * Dw)
+                        if a.diag and (step % a.eval_every == 0 or step == a.steps):
+                            emit(f'alloc_gamma_l{l}', gam, step); emit(f'alloc_gamma_over_lmax_l{l}', gam / lmax, step)
+                            emit(f'alloc_fitfrac_l{l}', float((lam > gam).float().mean()), step)
+                        if a.diag and (step % a.eval_every == 0 or step == a.steps):
+                            ld = (Dr.abs() / (Dr.pow(2).mean().sqrt() + 1e-30) + 1e-30).log().flatten(); lf = lam.flatten()
+                            order = lf.argsort(); nb = 10; n_ = lf.numel()
+                            for b_ in range(nb):
+                                idx = order[b_ * n_ // nb:(b_ + 1) * n_ // nb]
+                                emit(f'ld_bin{b_}_l{l}', float(ld[idx].mean()), step); emit(f'lam_bin{b_}_l{l}', float(lf[idx].mean()), step)
+                        if a.hyper: s_['Dprev'] = None
+                        Dw = s_['L'].rot(s_['R'].rot(Dr, 'R', True), 'L', True)
+                        lin.weight.sub_(lr * Dw[:, :-1]); lin.bias.sub_(lr * Dw[:, -1])
+                        if a.wd: lin.weight.mul_(1 - lr * a.wd)
+                        if a.rem > 0 or a.rem_ctrl > 0: s_['Dw_last'] = Dw
+                        continue
                     if bc is not None and bc[l] is not None:
                         lam = bc[l]; lmax = float(lam.max()); live = lam > a.reltol * lmax
                     if a.gmask > 0:
@@ -262,6 +298,12 @@ for step in range(1, a.steps + 1):
                     if a.diag and (step % a.eval_every == 0 or step == a.steps):
                         E2 = Dr * Dr; tot = float(E2.sum()) + 1e-30; lf = lam.flatten()
                         thr = float(lf.kthvalue(max(1, int(0.1 * lf.numel())))[0])
+                        # per-mode weight profile against the eigenvalue: mean log(|D| / rms|D|) per lambda decile (tests the peaked-profile prediction)
+                        ld = (Dr.abs() / (Dr.pow(2).mean().sqrt() + 1e-30) + 1e-30).log().flatten(); order = lf.argsort(); nb = 10; n_ = lf.numel()
+                        for b_ in range(nb):
+                            idx = order[b_ * n_ // nb:(b_ + 1) * n_ // nb]
+                            emit(f'ld_bin{b_}_l{l}', float(ld[idx].mean()), step); emit(f'lam_bin{b_}_l{l}', float(lf[idx].mean()), step)
+                            if a.hyper: emit(f'u_bin{b_}_l{l}', float(s_['u'].float().flatten()[idx].mean()), step)
                         emit(f'e_lowdec_l{l}', float(E2[lam <= thr].sum()) / tot, step)          # step energy on the lowest decile of modes
                         emit(f'capfrac_l{l}', float((w > capv).float().mean()), step)            # fraction of modes where the GN cap binds
                         emit(f'livefrac_l{l}', float(live.float().mean()), step)
@@ -282,15 +324,25 @@ for step in range(1, a.steps + 1):
                         emit(f'gnls_alpha_l{l}', alpha, step)
                         qk = float((lam * Dr * Dr).sum()) if a.opt == 'kronq' else float('nan')     # the Kronecker model's curvature along the same step
                         emit(f'gnls_qratio_l{l}', q / (qk + 1e-30), step)
+                if a.rem_ctrl > 0: Dw = g_scale * Dw          # two-sided controller: running multiplier on the whole step
                 lin.weight.sub_(lr * Dw[:, :-1]); lin.bias.sub_(lr * Dw[:, -1])
                 if a.wd: lin.weight.mul_(1 - lr * a.wd)
-                if a.rem > 0: s_['Dw_last'] = Dw
-            if a.opt == 'kronq' and a.rem > 0:   # step budget from the output change on the batch: ||f(theta + d) - f(theta)|| <= rem ||E||
+                if a.rem > 0 or a.rem_ctrl > 0: s_['Dw_last'] = Dw
+            if a.opt == 'kronq' and (a.rem > 0 or a.rem_ctrl > 0):   # measured output change of the step on the batch, relative to the residual
+                if a.alloc and a.rem_ctrl > 0 and g_scale != 1.0:      # alloc applied its step unscaled above; apply the controller's extra factor now
+                    for s_, lin in zip(st, lins):
+                        lin.weight.sub_((g_scale - 1.0) * lr * s_['Dw_last'][:, :-1]); lin.bias.sub_((g_scale - 1.0) * lr * s_['Dw_last'][:, -1]); s_['Dw_last'] = g_scale * s_['Dw_last']
                 df = (forward(xb) - out).norm(); En = (out - yb).norm(); rho = float(df / (En + 1e-30))
-                if rho > a.rem:
-                    sc = 1.0 - a.rem / rho       # undo the fraction of the step beyond the budget
+                target = a.rem if a.rem > 0 else a.rem_ctrl
+                if rho > 2.0 * target:                       # safety: undo the fraction of the step beyond twice the target
+                    sc = 1.0 - 2.0 * target / rho
                     for s_, lin in zip(st, lins): lin.weight.add_(sc * lr * s_['Dw_last'][:, :-1]); lin.bias.add_(sc * lr * s_['Dw_last'][:, -1])
-                if a.diag and (step % a.eval_every == 0 or step == a.steps): emit('rem_rho', rho, step)
+                elif a.rem > 0 and rho > a.rem:              # one-sided budget (--rem): undo the fraction beyond the budget
+                    sc = 1.0 - a.rem / rho
+                    for s_, lin in zip(st, lins): lin.weight.add_(sc * lr * s_['Dw_last'][:, :-1]); lin.bias.add_(sc * lr * s_['Dw_last'][:, -1])
+                if a.rem_ctrl > 0:                           # damped multiplicative update of the running factor toward the target
+                    g_scale *= min(2.0, max(0.5, (a.rem_ctrl / max(rho, 1e-12)) ** 0.5))
+                if a.diag and (step % a.eval_every == 0 or step == a.steps): emit('rem_rho', rho, step); emit('g_scale', g_scale, step)
             sync(); tm['upd'] += time.time() - t0
     if step % a.eval_every == 0 or step == a.steps:
         v = val_mse(); emit('val', v, step); emit('wall', time.time() - t_start, step)
