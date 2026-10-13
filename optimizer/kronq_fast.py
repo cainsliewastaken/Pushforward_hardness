@@ -414,7 +414,11 @@ class KronQFast:
                 g = Gr[l]; C = self.C[l]
                 if a.mom_adapt:                               # per-mode window from the mode's own signal-to-noise (user, 2026-10-13)
                     V2 = self.V2[l]; v = V2.float() * a.b2 + (g * g) * (1 - a.b2); self.V2[l] = v.to(V2.dtype)
-                    m2 = C.float() ** 2; Tk = ((v - m2).clamp(min=0) / (m2 + 1e-30)).clamp(a.mom_T_min, a.mom_T_max)
+                    # de-biased signal estimate: an EMA with window T carries noise variance sigma^2 / (2T - 1), so
+                    # m^2 = (C^2 (2T - 1) - v) / (2T - 2) with T the window used so far (else a short window locks itself in)
+                    Tprev = self.Tk_log[l] if self.Tk_log[l] is not None else torch.full_like(g, 1.0 / (1 - a.b1))
+                    C2 = C.float() ** 2; m2 = ((C2 * (2 * Tprev - 1) - v) / (2 * Tprev - 2)).clamp(min=0)
+                    Tk = ((v - m2).clamp(min=0) / (m2 + 1e-30)).clamp(a.mom_T_min, a.mom_T_max)
                     bk = 1 - 1.0 / Tk; C.copy_((C.float() * bk + g * (1 - bk)).to(C.dtype)); self.Tk_log[l] = Tk
                 else: C.mul_(a.b1).add_(g.to(C.dtype), alpha=1 - a.b1)
                 Cf = C.float()
