@@ -1220,21 +1220,37 @@ Findings.
    for every variant including full, on both targets; at 4096 only lr 1e-3 works and only for full and b1024. The claim
    "insensitive to the base lr over 10x" (REPORT 59, H96, n = 20000) does not hold at width; the 2-point grid has its
    optimum at the edge, so the reductions may be recoverable at lr 3e-4 or 1e-4 (not run).
-4. Mechanism (hypothesis, not measured; revised after discussion): the online component at fault is most likely the
-   per-mode hypergradient, which has no step budget. u moves by beta_u = 0.01 per step in the direction of the normalised
-   one-step hypergradient; on a mode along which the step does not change the gradient (an inert direction) the sign is
-   persistent, so u climbs to the clamp 4.6 (push 100x the base lr) within ~460 steps, which is when every collapse happens
-   (steps 250-500). Nothing sums the per-mode weights: no trust region, no function-space remainder (the kronq2 per-layer
-   lr controller is NOT in scale_study.py), only the clamp and the GN cap. The effective per-entry step is lr w, not lr,
-   which is why the stability threshold sits below AdamW's and falls with width (more modes, more inert ones). Blocking
-   and diagonal sides make it worse because their Kronecker eigenvalue estimates mix directions of different true
-   curvature, so the GN cap no longer protects the inert modes; the failure order (diagonal at 2048; b64, b256,
-   compressed at 4096; full and b1024 survive) fits a loss of curvature information. The null-mode exclusion
-   (reltol 1e-10) excludes almost nothing even in the full basis and is a second-order factor.
-   Test (6 runs, w = 4096, p = 2, lr 1e-3, ~1 GPU-node x 45 min): b256 with --hyper 0, with the u clamp at +-1, with
-   beta_u 1e-3, as run; full as control; log per layer the u distribution, the step energy on the lowest decile of modes,
-   and the hidden-activation saturation fraction. Hypergradient off / clamped trains normally -> fix is a per-layer budget
-   on sum w^2 tied to the function-space remainder; still collapses -> the blocked curvature estimate is the fault.
+4. Mechanism, MEASURED (job 59723886, 1 GPU node, 13 min, 2026-10-12; optimizer/scale_diag.sh, scale_diag_summary.py;
+   runs/scale_diag/). Six KronQ runs at w = 4096, p = 2, lr 1e-3 with per-layer diagnostics every 250 steps: blocks of 256
+   with the hypergradient OFF, with the u clamp at +-1, with beta_u 1e-3, and as run; full factors as run (control); and
+   diagonal sides > 1024 with the hypergradient off.
+   * The hypergradient is NOT the cause (my previous hypothesis, withdrawn): all four b256 variants collapse identically
+     (val 0.636 by step 250-1000), including hyper OFF (w = 1 everywhere); in the as-run and clamped runs u stays within
+     +-0.25 (10-90 % quantiles) and the clamp fraction is ~0 throughout. The step budget is not where the fault is.
+   * What collapses is the second hidden layer's preactivations in the first 250 steps. Blocked runs: zrms of layer 1 is
+     53-63 at step 250 and 100-185 by step 500-1000, saturation fraction (|z| > 3) 1.00 from step 250; layer 0 zrms 2.3-5.6,
+     saturation 11-31 %. Full run: zrms 0.14-0.4 in both hidden layers, saturation < 1e-3, throughout. Once layer 1 is
+     fully saturated (GELU linear or zero everywhere) the gradient through it is gone, the GN cap binds on every mode
+     (capfrac -> 1.0 by step 1500 in every collapsed run) and the output layer settles on the mean: the fixed point.
+     The diagonal-side run is the extreme case: zrms(l1) = 32 and saturation 1.0 at step 250, cap binding on 100 % of
+     modes from step 250, weight norms of layers 1-2 frozen at their step-250 values for the remaining 4750 steps.
+   * Where the blow-up comes from: the null-mode exclusion. In the full basis 35-47 % of the modes of layers 0 and 1 are
+     excluded at step 250 (livefrac 0.53-0.54; the 4097 x 4097 EMA factor built from a few batches of 256 is rank
+     deficient) and the step energy on the lowest decile of modes is 0 in layers 0-1; in the blocked basis livefrac = 1.00
+     (a 256 x 256 block from the same samples is full rank), every mode gets the sign push, and the lowest decile carries
+     its full 10 % share. In the first refresh window the full factor has rank <= 256 of 4097 (one batch), so the full
+     basis pushes ~6 % of the modes while the blocked basis pushes all of them: a step with ~16x the energy, in a basis
+     whose block eigenvalues underestimate the true curvature of the mixed modes, so the GN cap (|Gr| / (lam lr L)) does
+     not bind where it should (capfrac 0.04-0.18 in layers 1-2 at step 250 in the blocked runs vs 0.0004-0.003 in full).
+     The preactivations of layer 1 are blown up before the factors have converged, and the saturation is irreversible.
+   * This is a design flaw of the blocked / one-sided variants as built: their eigenvalue estimates carry no information
+     about which directions the data has not yet populated, and nothing in the update bounds the step by its effect on
+     the function (the function-space remainder controller of kronq2 is not in the harness). Candidate fixes, untested:
+     (a) exclude modes below the sampling noise floor of each block factor (reltol set from the number of samples in
+     the EMA, not 1e-10), or do not push until the factors have seen >= dim samples; (b) a per-layer step budget from the
+     function-space remainder (one jvp), which would have cut the lr in the first window; (c) the GN cap computed with the
+     full-factor eigenvalues where affordable (blocks only for the rotation). The lr dependence of the stability threshold
+     (3e-3 fails everywhere >= 1024, even for full) says (b) is needed regardless of blocking.
 5. Equal wall-clock comparison is not meaningful at w >= 2048 here: AdamW finishes 5000 steps in 40-70 s, before any
    other method reaches its first evaluation, and the shared GPUs make the wall times unreliable. At w <= 512, at AdamW's
    wall budget, KronQ b1024 / SOAP reach 1.5-3x lower error than AdamW on the rough target.
