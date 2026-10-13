@@ -1278,7 +1278,37 @@ Findings.
    So at equal FLOPs the Kronecker methods beat AdamW 2-3.5x on the rough target at both widths and lose to it on the smooth
    target at w = 4096. A proper equal-FLOP study needs step counts set per method from the cost model, evals every 50
    steps, a larger budget (AdamW is still improving at 5000 steps), and a budget constant that is not hand-set per target.
-7. Equal wall-clock comparison is not meaningful at w >= 2048 here: AdamW finishes 5000 steps in 40-70 s, before any
+7. STEP-LENGTH RULE AND PER-MODE RULE at w = 4096 (job 59725179, 1 node, 16 min; optimizer/scale_alloc.sh; runs/scale_alloc/),
+   Adam-memory KronQ (b256 + compressed state) throughout, lr 1e-3, 5000 steps, equal steps:
+   | per-mode rule | step-length rule | rough | smooth | state/P |
+   | hypergradient | one-sided budget --rem 0.1 (ran at 0.2, see item 8) + linear lr decay | 0.106 | 1.55e-4 | 1.96 |
+   | hypergradient | two-sided controller holding the output change at 0.1, no decay | 0.128 | 3.1e-4 | 1.96 |
+   | hypergradient | controller at 0.03, no decay | 0.114 | 9.5e-4 | 1.96 |
+   | derived allocation (--alloc) | controller 0.1 | 0.663 (z_1 rms 2.9e4: diverged) | 9.2e-4 | 1.46 |
+   | derived allocation | controller 0.03 | 0.125 | 2.1e-3 | 1.46 |
+   | derived allocation | --rem 0.1 (at 0.2) + decay | 0.115 | 1.26e-3 | 1.46 |
+   Findings. (a) The decay is not waste: holding the output change at a constant fraction of the residual to the end is
+   worse than the decaying step on both targets (fresh batches: a constant relative step sets a noise floor; the decay
+   is the annealing). The claim in KRONQ_STEP_NOTE that the late slack "throws away the radius" is withdrawn.
+   (b) The budget constant 0.2 (not 0.1) on the output change brings the Adam-memory variant to 1.55e-4 on the smooth target,
+   within 30 % of full KronQ (1.2e-4) and SOAP b256 (1.1e-4), and 0.106 on rough (= full). So the smooth gap of item 5 was
+   the budget constant, not the compression.
+   (c) The derived allocation as implemented did NOT test the derivation: its cutoff gamma came out at 1e-12 lam_max all
+   run (the weight-space budget (T_rem R)^2 with R = lr sqrt(N) was never binding), so the rule degenerated to the Newton
+   direction g / (lam T_rem) scaled by the output controller: trust-region Newton again (REPORT 58), and it loses in every
+   pairing (10-20 % rough, 2-7x smooth) and diverges with the controller at 0.1. To test the derivation the budget R must be
+   the weight-space Taylor radius (isotropic form of Thm 16), which is what the derivation assumes and what no run has
+   measured at this width. Without the hypergradient state the variant is 1.46 state/P.
+   (d) Weight profiles (u binned by lambda decile, square layer, step 5000): the learned u rises from the stiffest modes
+   (-1.2 to -1.8 in log) toward the slow ones in every run; with the tighter controller it peaks in the 2nd-4th slowest
+   deciles and falls slightly at the slowest (rough: +0.99, +1.01, +0.87, ...; smooth: +1.24, +1.40, +1.46, +1.48, +1.46,
+   +1.42, +1.32, +1.15, +0.86, +0.15), the interior peak the ridge solution predicts; with the looser budget it is monotone
+   to the slowest decile. The learned rule is "more push to slower modes up to a cutoff".
+8. CODE NOTE (budget semantics). From 2026-10-12 20:27 to 20:42 (commits a36fd54, 6e29d3a) the one-sided --rem undid a step
+   only down to 2 x rem when the raw step exceeded 2 x rem, i.e. ran at an effective 0.2; restored to exact semantics in
+   d1a6b96. Affected: the scale_alloc rem rows (reported above as "ran at 0.2") and the scale_flops rem rows started in that
+   window (flagged by git hash in scale_flops_summary.py); the gnls rows are unaffected.
+9. Equal wall-clock comparison is not meaningful at w >= 2048 here: AdamW finishes 5000 steps in 40-70 s, before any
    other method reaches its first evaluation, and the shared GPUs make the wall times unreliable. At w <= 512, at AdamW's
    wall budget, KronQ b1024 / SOAP reach 1.5-3x lower error than AdamW on the rough target.
 Caveats: one seed; baselines untuned (3 fixed lrs, no schedule, beta2 = 0.99); 5000 steps; see THEORY.md 21(d).

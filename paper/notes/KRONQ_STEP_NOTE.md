@@ -72,3 +72,15 @@ sum_ij x_ij^2 <= (T_rem R)^2: a ridge regression, x_ij = g_ij / (lam_ij + gamma)
   (Logged in --diag as u_bin / ld_bin per lambda decile from 2026-10-12.)
 * The width-4096 failure was the step LENGTH (Kronecker model misprices the coherent sign step by d_eff(delta) d_eff(a)),
   not the per-mode shape; fixed by pricing the step on the batch (--rem, --gnls, --rem_ctrl).
+
+## Results of the comparison (job 59725179, 2026-10-12 20:46; REPORT 61 item 7)
+
+* The derived allocation as run was NOT a test of the derivation: the weight-space budget was never binding (gamma ~ 1e-12
+  lam_max), so the rule was Newton / T_rem inside an output trust region, which loses to the hypergradient sign push in
+  every pairing and diverges with the controller at 0.1. A real test needs R = the weight-space Taylor radius.
+* The two-sided controller without decay is worse than the one-sided budget with decay on both targets: the decay is the
+  annealing against minibatch noise, not wasted radius (withdraws the "slack" remark above).
+* Budget 0.2 on the output change (not 0.1): Adam-memory KronQ reaches 0.106 rough / 1.55e-4 smooth at w = 4096 (full
+  KronQ 0.108 / 1.2e-4; SOAP b256 0.083 / 1.1e-4).
+* The learned u profile vs lambda decile rises toward slow modes and, with the tighter budget, peaks before the slowest
+  decile: qualitatively the ridge solution.
