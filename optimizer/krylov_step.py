@@ -44,10 +44,13 @@ class KrylovStep:
         d = vjp_fn(x); nKx = float(Kx.norm()); cap = a.rem * nE * lr_fac
         sc = min(1.0, cap / (nKx + 1e-30))
         cosE = float((E * Kx).sum() / (nE * nKx + 1e-30))
-        for i, (pi, di) in enumerate(zip(self.params, d)):
-            upd = -sc * di
-            if self.mom is not None: self.mom[i].mul_(a.kr_mom).add_(upd); upd = self.mom[i]
-            pi.add_(upd)
+        upds = [-sc * di for di in d]
+        if self.mom is not None:                       # heavy ball on the scaled step, then the trust region on the accumulated update (one jvp)
+            for i in range(len(upds)): self.mom[i].mul_(a.kr_mom).add_(upds[i])
+            with torch.enable_grad(): Jm = jvp(lambda *q: self.fwd(q, xb), ps, tuple(self.mom))[1]
+            scm = min(1.0, cap / (float(Jm.norm()) + 1e-30)); upds = [scm * m_ for m_ in self.mom]
+            if emit is not None and diag: emit('kr_mom_scale', scm, step)
+        for pi, upd in zip(self.params, upds): pi.add_(upd)
         if emit is not None and diag:
             emit('kr_cosE', cosE, step); emit('kr_scale', sc, step); emit('kr_Kx_over_E', nKx / (nE + 1e-30), step)
             emit('kr_cg_res', math.sqrt(rr) / (nE + 1e-30), step); emit('kr_gamma_over_ray', self.gamma_rel, step)
