@@ -435,7 +435,12 @@ class KronQFast:
                     old_ok = self.S[l].e is not None and self.A[l].e is not None
                     if a.adapt_refresh > 0 and old_ok:
                         D_old, _, _ = self.direction(l, Gr[l], self.C[l].float(), lr, update_state=False); gd_old = float((Gr[l] * D_old).sum())
-                    VS = self.S[l].refresh(a.eig_iters); VA = self.A[l].refresh(a.eig_iters)
+                    VS = self.S[l].refresh(a.eig_iters)
+                    if a.A0_fixed and l == 0 and self.A[0].U is not None: VA = None            # T3: the input layer's A basis is computed once and never refreshed
+                    else: VA = self.A[l].refresh(a.eig_iters)
+                    if emit is not None:                                                        # refresh need per side: mean |diagonal| of the basis change
+                        if VA is not None and VA[0] is not None: emit(f'refresh_ovA_l{l}', float(torch.diagonal(VA[0], dim1=1, dim2=2).abs().mean()), step)
+                        if VS is not None and VS[0] is not None: emit(f'refresh_ovS_l{l}', float(torch.diagonal(VS[0], dim1=1, dim2=2).abs().mean()), step)
                     tr = lambda T, sq=False: self.A[l].transport(self.S[l].transport(T, VS, 'L', sq), VA, 'R', sq)
                     self.Wt[l].data = tr(self.Wt[l].data); self.C[l] = tr(self.C[l].float()).to(self.C[l].dtype)
                     Gr[l] = tr(Gr[l])
