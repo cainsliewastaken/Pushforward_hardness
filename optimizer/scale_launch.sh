@@ -1,8 +1,8 @@
 #!/bin/bash
 # Run the scaling-study job list on all nodes of an allocation: one srun task per node, SLOTS runs per GPU,
-# static round-robin over the (longest-first) list. usage (inside srun, one task per node): scale_launch.sh SLOTS
-SLOTS=${1:-3}
-HERE="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"; F=$SCRATCH/l63_held_rough/runs/scale
+# static round-robin over the (longest-first) list. usage (inside srun, one task per node): scale_launch.sh SLOTS [RUNDIR]
+SLOTS=${1:-3}; RUNDIR=${2:-scale}
+HERE="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"; F=$SCRATCH/l63_held_rough/runs/$RUNDIR
 NODE=${SLURM_NODEID:-0}; NN=${SLURM_NNODES:-1}; TOT=$((NN * 4 * SLOTS))
 for w in $(seq 0 $((4 * SLOTS - 1))); do
   slot=$((NODE * 4 * SLOTS + w))
