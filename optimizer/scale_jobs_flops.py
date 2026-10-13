@@ -33,6 +33,7 @@ for w in (4096, 2048, 1024):
         add('kronq', '1e-3', block=0)
         add('kronq', '1e-3', '--block 1024 --gnls 1', block=1024, gnls=True)
         for lr in ('1e-3', '3e-3'):
+            add('kronq', lr, '--block 256 --gnls 1', block=256, gnls=True)
             add('kronq', lr, '--block 256 --compress 1 --mom_bf16 1 --gnls 1', block=256, gnls=True)
             add('kronq', lr, '--block 256 --compress 1 --mom_bf16 1 --gnls 1 --gmask 1e-3', block=256, gnls=True)
             add('kronq', lr, '--block 256 --compress 1 --mom_bf16 1 --rem 0.1', block=256, rem=True)
