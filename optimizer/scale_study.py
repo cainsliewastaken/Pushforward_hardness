@@ -472,11 +472,14 @@ for step in range(1, a.steps + 1):
         v = val_mse(); emit('val', v, step); emit('wall', time.time() - t_start, step)
         if a.diag:
             with torch.no_grad():
-                for l, lin in enumerate(lins): emit(f'wnorm_l{l}', float(lin.weight.norm()), step)
-                h = Xv[:1024]
-                for l, lin in enumerate(lins[:-1]):
-                    z = lin(h); emit(f'sat_l{l}', float((z.abs() > 3).float().mean()), step); emit(f'zrms_l{l}', float(z.pow(2).mean().sqrt()), step)
-                    h = torch.nn.functional.gelu(z)
+                if KQ is not None:                                   # fast path: the trained weights are KQ.Wt (rotated), lins is untouched
+                    for l in range(len(lins)): emit(f'wnorm_l{l}', float(KQ.Wt[l].norm()), step)
+                    zs = KQ.preacts(Xv[:1024])
+                else:
+                    for l, lin in enumerate(lins): emit(f'wnorm_l{l}', float(lin.weight.norm()), step)
+                    h = Xv[:1024]; zs = []
+                    for l, lin in enumerate(lins[:-1]): z = lin(h); zs.append(z); h = torch.nn.functional.gelu(z)
+                for l, z in enumerate(zs): emit(f'sat_l{l}', float((z.abs() > 3).float().mean()), step); emit(f'zrms_l{l}', float(z.pow(2).mean().sqrt()), step)
         if not math.isfinite(v): emit('diverged', 1, step); break
 peak = torch.cuda.max_memory_allocated() if DEV == 'cuda' else 0
 sb = opt_state_bytes()

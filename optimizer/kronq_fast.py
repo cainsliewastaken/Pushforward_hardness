@@ -30,6 +30,14 @@ def solve_gamma(Cabs, lam, target2, iters=40):
         if v > target2: lo = g
         else: hi = g
     return math.exp(0.5 * (lo + hi))
+class exact_fp32:
+    """TF32 off inside: the remainder f(W+d) - f(W) - J d is below TF32 rounding at small steps, so the controller and the
+    shape diagnostic must measure it with full fp32 matmuls."""
+    def __enter__(self):
+        self.t = torch.backends.cuda.matmul.allow_tf32; self.p = torch.get_float32_matmul_precision()
+        torch.backends.cuda.matmul.allow_tf32 = False; torch.set_float32_matmul_precision('highest')
+    def __exit__(self, *e):
+        torch.backends.cuda.matmul.allow_tf32 = self.t; torch.set_float32_matmul_precision(self.p)
 def safe_eigh(F):
     """eigh of a (batch of) symmetric matrices with a float64 CPU fallback when cusolver fails to converge."""
     Fs = 0.5 * (F + F.transpose(-1, -2))
@@ -148,6 +156,14 @@ class KronQFast:
             h = self.act(z) if l < self.L - 1 else z
         if keep: self.cache = dict(at=at_list, zt=zt_list)
         return h
+    @torch.no_grad()
+    def preacts(self, x):
+        """hidden-layer preactivations z = U_S Wt U_A^T [h;1] from the trained (rotated) weights, for the diagnostics."""
+        h = x; zs = []
+        for l in range(self.L - 1):
+            a_aug = torch.cat([h, torch.ones(h.shape[0], 1, device=h.device, dtype=h.dtype)], 1)
+            z = self.S[l].cols_from_basis(self.A[l].cols_to_basis(a_aug) @ self.Wt[l].T); zs.append(z); h = self.act(z)
+        return zs
     def forward_with(self, x, lw, Wl):
         """forward using Wl in place of Wt[lw] (functional; for jvp)."""
         h = x
@@ -190,10 +206,10 @@ class KronQFast:
         if a.hyper: w = w * torch.exp(self.u[l].float())
         sgn = torch.sign(Cf) if a.sign_floor <= 0 else Cf / (Cf.abs() + a.sign_floor * float(Cf.abs().max()) + 1e-30)
         D = torch.where(live, w * sgn, torch.zeros_like(g))
+        if a.sphere > 0: D = D * (math.sqrt(D.numel()) / (float(D.norm()) + 1e-30))   # unit-rms direction (length lr eta sqrt(N)), then the cap
         if a.cap:
             capv = g.abs() / (lam.clamp(min=1e-30) * max(lr * self.eta[l], 1e-30) * L)
             D = torch.sign(D) * torch.minimum(D.abs(), capv)
-        if a.sphere > 0: D = D * (math.sqrt(D.numel()) / (float(D.norm()) + 1e-30))   # unit-rms direction: the step length is lr eta sqrt(N)
         return D, lam, live
     # ---------------- one optimizer step; call after loss.backward() on forward(xb, keep=need_keep)
     def step(self, step, lr, out, xb, yb, loss_fn, tm=None, t=None, emit=None):
@@ -297,13 +313,14 @@ class KronQFast:
                         lmax_ = float(lam.max()); dirs = {'step': D, 'grad': g, 'rand': torch.randn_like(g),
                                                           'ridge2': g / (lam + 1e-2 * lmax_), 'ridge4': g / (lam + 1e-4 * lmax_)}
                         nrm = float(lr * self.eta[l] * D.norm()); W_now = self.Wt[l].data
-                        f0 = self.forward_with(xb, l, W_now)
-                        for name, Dir in dirs.items():
-                            d = -Dir * (nrm / (float(Dir.norm()) + 1e-30))
-                            _, Jd = jvp(lambda Wl: self.forward_with(xb, l, Wl), (W_now,), (d,))
-                            f1 = self.forward_with(xb, l, W_now + d)
-                            emit(f'shape_rf_{name}_l{l}', float((f1 - f0 - Jd).norm() / (Jd.norm() + 1e-30)), step)
-                            emit(f'shape_lev_{name}_l{l}', float(Jd.norm() / (d.norm() + 1e-30)), step)
+                        with exact_fp32():
+                            f0 = self.forward_with(xb, l, W_now)
+                            for name, Dir in dirs.items():
+                                d = -Dir * (nrm / (float(Dir.norm()) + 1e-30))
+                                _, Jd = jvp(lambda Wl: self.forward_with(xb, l, Wl), (W_now,), (d,))
+                                f1 = self.forward_with(xb, l, W_now + d)
+                                emit(f'shape_rf_{name}_l{l}', float((f1 - f0 - Jd).norm() / (Jd.norm() + 1e-30)), step)
+                                emit(f'shape_lev_{name}_l{l}', float(Jd.norm() / (d.norm() + 1e-30)), step)
                     if a.hyper: emit(f'u_q50_l{l}', float(self.u[l].float().median()), step)
                 Dws.append(D)
             # ---- step length controllers
@@ -320,9 +337,10 @@ class KronQFast:
             if self.kappa > 0 and step % a.check_every == 0:   # per-layer eta from the function-space remainder (round-robin)
                 l = (step // a.check_every) % L; d = -lr * self.eta[l] * Dws[l]
                 W_now = self.Wt[l].data.clone(); W_pre = W_now - d                           # the pre-step point
-                f0 = self.forward_with(xb, l, W_pre)
-                _, Jd = jvp(lambda Wl: self.forward_with(xb, l, Wl), (W_pre,), (d,))
-                f1 = self.forward_with(xb, l, W_now)
+                with exact_fp32():                                                           # TF32 noise would pin eta at its floor
+                    f0 = self.forward_with(xb, l, W_pre)
+                    _, Jd = jvp(lambda Wl: self.forward_with(xb, l, Wl), (W_pre,), (d,))
+                    f1 = self.forward_with(xb, l, W_now)
                 lin = float(Jd.norm())
                 if lin > 0:
                     rf = float((f1 - f0 - Jd).norm()) / lin; self.rf[l] = rf if self.rf[l] is None else 0.7 * self.rf[l] + 0.3 * rf
