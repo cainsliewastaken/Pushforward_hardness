@@ -43,6 +43,8 @@ p.add_argument('--u_clamp', type=float, default=4.6, help='clamp on the log push
 p.add_argument('--gmask', type=float, default=0.0, help='>0: push only modes with |G_ij| > gmask * rms(G) (gradient-energy mask, basis independent)')
 p.add_argument('--bcurv', type=int, default=0, help='1: live mask and GN cap from the CURRENT batch Kronecker curvature (extra backward per step)')
 p.add_argument('--rem', type=float, default=0.0, help='>0: scale the whole step so that ||f(theta+d) - f(theta)|| <= rem * ||E|| on the batch (extra forward per step)')
+p.add_argument('--gnls', type=int, default=0, help='1: per-layer line search of the sign step against the EXACT per-sample GN curvature on the batch, '
+               'q = (2/(m NOUT)) sum_x (gz(x)^T dW a(x))^2 (needs --bcurv-style per-sample gz; one matmul per layer); scale = min(1, g.D / (lr q))')
 p.add_argument('--diag', type=int, default=0, help='1: at every eval step log per layer the u distribution, clamp fraction, cap-active fraction, '
                'step energy on the lowest decile of modes by Kronecker eigenvalue, weight norm, and hidden-activation saturation')
 a = p.parse_args()
@@ -174,13 +176,14 @@ for step in range(1, a.steps + 1):
     sync(); t0 = time.time()
     need_stats = a.opt in ('soap', 'kronq') and (step - 1) % a.refresh == 0
     for q in lins.parameters(): q.grad = None
-    keep_now = a.opt == 'kronq' and (need_stats or a.bcurv)
+    keep_now = a.opt == 'kronq' and (need_stats or a.bcurv or a.gnls)
     out = forward(xb, keep=keep_now); loss = mse(out, yb); loss.backward(retain_graph=keep_now)
-    bc = None
-    if a.opt == 'kronq' and a.bcurv:        # current-batch Kronecker curvature per mode: diag(U_S^T S_b U_S) x diag(U_A^T A_b U_A)
+    bc = None; gz_b = None
+    if a.opt == 'kronq' and (a.bcurv or a.gnls):   # per-sample backprop signal of a random output combination (unbiased GN probe)
         with torch.enable_grad():
             eps_b = torch.randint(0, 2, out.shape, device=DEV, generator=gtrain).float() * 2 - 1
             gz_b = torch.autograd.grad((out * eps_b).sum(), [zs_cache[l] for l in range(L1)], retain_graph=need_stats)
+    if a.opt == 'kronq' and a.bcurv:        # current-batch Kronecker curvature per mode: diag(U_S^T S_b U_S) x diag(U_A^T A_b U_A)
         bc = []
         for l, s_ in enumerate(st):
             if s_['L'].U is None: bc.append(None); continue
@@ -269,6 +272,16 @@ for step in range(1, a.steps + 1):
                             emit(f'u_clampfrac_l{l}', float((uf.abs() >= a.u_clamp - 1e-3).float().mean()), step)
                     if a.hyper: s_['Dprev'] = Dr.to(s_['u'].dtype)
                 Dw = s_['L'].rot(s_['R'].rot(Dr, 'R', True), 'L', True)
+                if a.opt == 'kronq' and a.gnls:   # exact-GN line search along the step: alpha = min(1, g.D / (lr q)), q from the per-sample probe
+                    at_b = torch.cat([acts_cache[l], torch.ones(acts_cache[l].shape[0], 1, device=DEV)], 1)
+                    sx = (gz_b[l] * (at_b @ Dw.T)).sum(1)                       # gz(x)^T dW a(x) per sample
+                    q = float((sx * sx).mean()) * (2.0 / NOUT); gD = float((Gw * Dw).sum())
+                    alpha = min(1.0, gD / (lr * q + 1e-30)) if gD > 0 else 1.0
+                    Dw = alpha * Dw
+                    if a.diag and (step % a.eval_every == 0 or step == a.steps):
+                        emit(f'gnls_alpha_l{l}', alpha, step)
+                        qk = float((lam * Dr * Dr).sum()) if a.opt == 'kronq' else float('nan')     # the Kronecker model's curvature along the same step
+                        emit(f'gnls_qratio_l{l}', q / (qk + 1e-30), step)
                 lin.weight.sub_(lr * Dw[:, :-1]); lin.bias.sub_(lr * Dw[:, -1])
                 if a.wd: lin.weight.mul_(1 - lr * a.wd)
                 if a.rem > 0: s_['Dw_last'] = Dw
