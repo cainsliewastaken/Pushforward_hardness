@@ -145,7 +145,7 @@ class KronQFast:
         self.V2 = [torch.zeros_like(W, dtype=bf) for W in self.Wt] if a.rule == 'adam' else None
         self.lamx = [None] * self.L if a.ekfac else None
         if a.mom_adapt and self.V2 is None: self.V2 = [torch.zeros(W.shape, device=dev, dtype=torch.bfloat16 if a.compress else torch.float32) for W in self.Wt]
-        self.Tk_log = [None] * self.L
+        self.Tk_log = [None] * self.L; self.m2s = [None] * self.L   # smoothed de-biased signal^2 per mode (mom_adapt)
         self.cres = [None] * self.L if (a.alloc2 or a.curv) else None   # residual curvature per mode c_ij = <E, f_uu> (LOOKAHEAD_THEORY Prop. 10)
         self.cres_n = [0] * self.L                                        # samples since the basis last changed: running mean, then EMA (not transportable)
         self.T_eff = 1.0
@@ -391,6 +391,7 @@ class KronQFast:
                         else: self.hv[l] = tr(self.hv[l], True)
                         self.Dprev[l] = None; self.z_tr[l] = None
                     if self.V2 is not None: self.V2[l] = tr(self.V2[l].float(), True).to(self.V2[l].dtype)
+                    if self.m2s[l] is not None: self.m2s[l] = tr(self.m2s[l].float(), True).to(self.m2s[l].dtype)
                     if self.lamx is not None and self.lamx[l] is not None: self.lamx[l] = tr(self.lamx[l].float(), True).to(self.lamx[l].dtype)
                     if self.cres is not None: self.cres[l] = None; self.cres_n[l] = 0   # (p_j . a)^2 has cross terms under a basis change: restart in the new basis
                     if old_ok and a.adapt_refresh > 0:              # kronq2: relative change of the first-order decrease g.D
@@ -417,7 +418,10 @@ class KronQFast:
                     # de-biased signal estimate: an EMA with window T carries noise variance sigma^2 / (2T - 1), so
                     # m^2 = (C^2 (2T - 1) - v) / (2T - 2) with T the window used so far (else a short window locks itself in)
                     Tprev = self.Tk_log[l] if self.Tk_log[l] is not None else torch.full_like(g, 1.0 / (1 - a.b1))
-                    C2 = C.float() ** 2; m2 = ((C2 * (2 * Tprev - 1) - v) / (2 * Tprev - 2)).clamp(min=0)
+                    C2 = C.float() ** 2; m2_inst = (C2 * (2 * Tprev - 1) - v) / (2 * Tprev - 2)        # unbiased, very noisy per step
+                    if self.m2s[l] is None: self.m2s[l] = m2_inst.clamp(min=0).to(C.dtype)
+                    else: self.m2s[l] = (self.m2s[l].float() * a.mom_snr_beta + m2_inst * (1 - a.mom_snr_beta)).to(C.dtype)
+                    m2 = self.m2s[l].float().clamp(min=0)
                     Tk = ((v - m2).clamp(min=0) / (m2 + 1e-30)).clamp(a.mom_T_min, a.mom_T_max)
                     bk = 1 - 1.0 / Tk; C.copy_((C.float() * bk + g * (1 - bk)).to(C.dtype)); self.Tk_log[l] = Tk
                 else: C.mul_(a.b1).add_(g.to(C.dtype), alpha=1 - a.b1)
