@@ -1809,8 +1809,8 @@ Caveats: one seed; baselines untuned (3 fixed lrs, no schedule, beta2 = 0.99); 5
    (b) WALL CORRECTION. In isolation the reference configuration (subspace iteration, adaptive refresh with floor 5) is
        82 ms per step over the first 600 steps, 88 % of it in the per-refresh subspace iterations (the batched QR), i.e.
        25x AdamW's 3.3 ms, not the 2-3x stated in items 11 and 28 (which held for a fixed refresh every 20 steps: 24 ms).
-       Over 5000 steps the adaptive period grows and the average is ~90 ms / step (scale_profile j0: 449 s) against
-       AdamW's 6.6 ms: ~14x. T1 halves the refresh cost (one side), T2 removes it (5 s / 600 steps: 2.5x AdamW) and loses
+       Over 5000 steps the adaptive period grows and the average is 70 ms / step (scale_profile j0: 349 s, 84 % in refreshes) against
+       AdamW's 6.6 ms: ~10x. T1 halves the refresh cost (one side), T2 removes it (5 s / 600 steps: 2.5x AdamW) and loses
        the rough target. So the cost that matters is the refresh frequency x the per-refresh factorisation cost, and the
        accuracy that matters comes from the A side's basis being fresh. The plan's T3 (fixed input-layer A), T4 (global
        top-k subspace per side with the complement in coordinates) and a refresh-floor control are the right next tests;
