@@ -152,6 +152,18 @@ particular wins does not, and that is the one open question before the paper.
 Each of 1, 2 and 5 is one measurement with the existing diagnostics (mechanism.py: per-mode tau_k from the per-sample
 projections; the per-step length of the Adam rule's effective step).
 
+## 7b. The length on the rough target (REPORT 61 items 29-30, 2026-10-13 15:00)
+
+Neither the output budget nor the per-layer pre-activation radius is the constraint that binds on rough: raising lr to
+2e-3 collapses the run while both batch-measured budgets hold, and the reference itself runs 20x beyond the rf = 0.1
+pre-activation radius on the hidden layer. What diverges is the VALIDATION output while the batch output is held: the
+step's component in the null space of the batch Jacobian (1.7e7 parameters per layer against 6.5e4 batch outputs; the
+sign push moves every live mode at full length, with 2-6x weights on the slowest deciles) is invisible to every
+batch-measured quantity and changes the function elsewhere. This is Corollary 24a: the full-set residual moves by the
+cross kernel K_{full,B} g_B, and a step with zero batch effect can have any full-set effect. So on rough the length is a
+GENERALISATION constraint, which the lr decay anneals; its derived form is a budget on the held-out output change (one
+forward on a fresh batch per step; --rem_val), and that is the last untested element of the length rule.
+
 ## 8. Where it goes in the paper
 
 Section 21's "measurements organised by the identities" becomes: the kernel's eigenbasis (Theorem 2), the batch drive
