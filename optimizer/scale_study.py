@@ -47,6 +47,10 @@ p.add_argument('--rem_ctrl', type=float, default=0.0, help='>0: two-sided contro
                '||f(theta+d) - f(theta)|| / ||E|| on the batch is held at this value (replaces --rem and disables the lr decay)')
 p.add_argument('--alloc', type=int, default=0, help='1: derived per-mode allocation in place of the sign push: D = C / (lam + gamma) / T_rem with gamma solved so that '
                'the layer step length over the remaining T_rem steps equals the budget (T_rem R)^2; no cap, no hypergradient, no live mask')
+p.add_argument('--sphere', type=float, default=0.0, help='>0: Euclidean step. Each layer\'s direction is scaled to Frobenius length R_l, and R_l is set by a '
+               'controller holding the measured relative Taylor remainder r_f = ||f(th+d) - f(th) - J d|| / ||J d|| of that layer\'s step at this value '
+               '(one jvp + one forward, round-robin over layers every --sphere_every steps). The lr decay is replaced by decaying the target.')
+p.add_argument('--sphere_every', type=int, default=10)
 p.add_argument('--gnls', type=int, default=0, help='1: per-layer line search of the sign step against the EXACT per-sample GN curvature on the batch, '
                'q = (2/(m NOUT)) sum_x (gz(x)^T dW a(x))^2 (needs --bcurv-style per-sample gz; one matmul per layer); scale = min(1, g.D / (lr q))')
 p.add_argument('--diag', type=int, default=0, help='1: at every eval step log per layer the u distribution, clamp fraction, cap-active fraction, '
@@ -175,6 +179,25 @@ tm = dict(fb=0.0, stats=0.0, eig=0.0, upd=0.0)
 def sync(): torch.cuda.synchronize() if DEV == 'cuda' else None
 t_start = time.time(); emit('val', val_mse(), 0); emit('wall', 0.0, 0)
 g_scale = 1.0          # two-sided controller state (--rem_ctrl): multiplier on the whole step
+R_l = [None] * L1      # --sphere: per-layer Euclidean step length (initialised from the first step's own length)
+def layer_jvp(l, dW, db, x):
+    """(f(x), J_l [dW, db]): forward-mode derivative of the network output w.r.t. layer l's weight and bias along (dW, db)."""
+    from torch.func import jvp
+    def f_l(Wl, bl):
+        h = x
+        for k, lin in enumerate(lins):
+            z = torch.nn.functional.linear(h, Wl, bl) if k == l else lin(h)
+            h = torch.nn.functional.gelu(z) if k < L1 - 1 else z
+        return h
+    return jvp(f_l, (lins[l].weight.detach(), lins[l].bias.detach()), (dW, db))
+def rel_remainder(l, dW, db, x, f0):
+    """relative Taylor remainder r_f and leverage ||J d|| / ||d|| of the step (dW, db) in layer l, on inputs x (f0 = f(x) before the step)."""
+    with torch.no_grad():
+        f_lin, Jd = layer_jvp(l, dW, db, x)
+        W0, b0 = lins[l].weight.clone(), lins[l].bias.clone()
+        lins[l].weight.add_(dW); lins[l].bias.add_(db); f1 = forward(x); lins[l].weight.copy_(W0); lins[l].bias.copy_(b0)
+        rf = float((f1 - f0 - Jd).norm() / (Jd.norm() + 1e-30)); lev = float(Jd.norm() / (torch.sqrt(dW.pow(2).sum() + db.pow(2).sum()) + 1e-30))
+    return rf, lev
 def solve_gamma(Cabs, lam, target2, iters=40):
     """gamma such that sum (Cabs / (lam + gamma))^2 = target2 (decreasing in gamma); bisection in log gamma."""
     lo, hi = -30.0, 30.0
@@ -185,7 +208,8 @@ def solve_gamma(Cabs, lam, target2, iters=40):
     return math.exp(0.5 * (lo + hi))
 for step in range(1, a.steps + 1):
     fac = min(1.0, step / a.warmup) if a.warmup else 1.0
-    if not a.rem_ctrl: fac *= 1 - (step - 1) / a.steps
+    decay = 1 - (step - 1) / a.steps
+    if not a.rem_ctrl and not a.sphere: fac *= decay
     lr = a.lr * fac
     xb, yb = draw(a.batch, gtrain)
     sync(); t0 = time.time()
@@ -257,6 +281,7 @@ for step in range(1, a.steps + 1):
                         # derived T-step allocation (frozen-kernel, isotropic budget): per-step length x_k / T_rem with x_k = C_k / (lam_k + gamma),
                         # gamma from sum x_k^2 = (T_rem R)^2, R = lr sqrt(#modes) (the sign push's per-step length); the controller scales R.
                         T_rem = max(10, a.steps - step + 1); R = lr * math.sqrt(lam.numel())
+                        if a.sphere and R_l[l] is not None: R = R_l[l] * decay          # the sphere's radius is the budget
                         gam = solve_gamma(C.abs(), lam, (T_rem * R) ** 2)
                         Dr = C / (lam + gam) / T_rem / max(lr, 1e-30)          # in units of lr, like the sign push (the step is -lr * Dw)
                         if a.diag and (step % a.eval_every == 0 or step == a.steps):
@@ -270,9 +295,12 @@ for step in range(1, a.steps + 1):
                                 emit(f'ld_bin{b_}_l{l}', float(ld[idx].mean()), step); emit(f'lam_bin{b_}_l{l}', float(lf[idx].mean()), step)
                         if a.hyper: s_['Dprev'] = None
                         Dw = s_['L'].rot(s_['R'].rot(Dr, 'R', True), 'L', True)
+                        if a.sphere:
+                            if R_l[l] is None: R_l[l] = float(lr * Dw.norm())
+                            Dw = Dw * (R_l[l] * decay / (lr * float(Dw.norm()) + 1e-30))
                         lin.weight.sub_(lr * Dw[:, :-1]); lin.bias.sub_(lr * Dw[:, -1])
                         if a.wd: lin.weight.mul_(1 - lr * a.wd)
-                        if a.rem > 0 or a.rem_ctrl > 0: s_['Dw_last'] = Dw
+                        if a.rem > 0 or a.rem_ctrl > 0 or a.sphere: s_['Dw_last'] = Dw
                         continue
                     if bc is not None and bc[l] is not None:
                         lam = bc[l]; lmax = float(lam.max()); live = lam > a.reltol * lmax
@@ -325,9 +353,12 @@ for step in range(1, a.steps + 1):
                         qk = float((lam * Dr * Dr).sum()) if a.opt == 'kronq' else float('nan')     # the Kronecker model's curvature along the same step
                         emit(f'gnls_qratio_l{l}', q / (qk + 1e-30), step)
                 if a.rem_ctrl > 0: Dw = g_scale * Dw          # two-sided controller: running multiplier on the whole step
+                if a.sphere and a.opt == 'kronq':             # Euclidean step: scale the direction to the layer's radius (decayed)
+                    if R_l[l] is None: R_l[l] = float(lr * Dw.norm())
+                    Dw = Dw * (R_l[l] * decay / (lr * float(Dw.norm()) + 1e-30))
                 lin.weight.sub_(lr * Dw[:, :-1]); lin.bias.sub_(lr * Dw[:, -1])
                 if a.wd: lin.weight.mul_(1 - lr * a.wd)
-                if a.rem > 0 or a.rem_ctrl > 0: s_['Dw_last'] = Dw
+                if a.rem > 0 or a.rem_ctrl > 0 or a.sphere: s_['Dw_last'] = Dw
             if a.opt == 'kronq' and (a.rem > 0 or a.rem_ctrl > 0):   # measured output change of the step on the batch, relative to the residual
                 if a.alloc and a.rem_ctrl > 0 and g_scale != 1.0:      # alloc applied its step unscaled above; apply the controller's extra factor now
                     for s_, lin in zip(st, lins):
@@ -343,6 +374,30 @@ for step in range(1, a.steps + 1):
                 if a.rem_ctrl > 0:                           # damped multiplicative update of the running factor toward the target
                     g_scale *= min(2.0, max(0.5, (a.rem_ctrl / max(rho, 1e-12)) ** 0.5))
                 if a.diag and (step % a.eval_every == 0 or step == a.steps): emit('rem_rho', rho, step); emit('g_scale', g_scale, step)
+            if a.opt == 'kronq' and a.sphere and step % a.sphere_every == 0:
+                # radius controller: measure the relative Taylor remainder of ONE layer's step (round-robin) and move its radius toward the target
+                l = (step // a.sphere_every) % L1; s_ = st[l]
+                if s_.get('Dw_last') is not None:
+                    dW, db = -lr * s_['Dw_last'][:, :-1], -lr * s_['Dw_last'][:, -1]
+                    with torch.no_grad():
+                        lins[l].weight.sub_(dW); lins[l].bias.sub_(db)              # evaluate the remainder at the pre-step point
+                        f0 = forward(xb); rf, lev = rel_remainder(l, dW, db, xb, f0)
+                        lins[l].weight.add_(dW); lins[l].bias.add_(db)
+                    target = a.sphere * max(decay, 0.05)
+                    R_l[l] *= min(2.0, max(0.5, (target / max(rf, 1e-12)) ** 0.5))
+                    if a.diag and (step % a.eval_every < a.sphere_every or step == a.steps):
+                        emit(f'rf_step_l{l}', rf, step); emit(f'lev_step_l{l}', lev, step); emit(f'R_l{l}', R_l[l], step)
+            if a.opt == 'kronq' and a.diag and (step % a.eval_every == 0 or step == a.steps):
+                # shape of the Taylor radius in the square layer: relative remainder and leverage along three unit directions at the current step length
+                l = 1 if L1 > 2 else 0; s_ = st[l]
+                if s_.get('Dw_last') is not None:
+                    with torch.no_grad():
+                        Dl = s_['Dw_last']; nrm = float(lr * Dl.norm()); f0 = forward(xb)
+                        Gd = torch.cat([lins[l].weight.grad, lins[l].bias.grad[:, None]], 1); Rd = torch.randn_like(Dl)
+                        for name, Dir in (('step', Dl), ('grad', Gd), ('rand', Rd)):
+                            Dn = Dir * (nrm / (float(Dir.norm()) + 1e-30))
+                            rf, lev = rel_remainder(l, -Dn[:, :-1], -Dn[:, -1], xb, f0)
+                            emit(f'shape_rf_{name}_l{l}', rf, step); emit(f'shape_lev_{name}_l{l}', lev, step)
             sync(); tm['upd'] += time.time() - t0
     if step % a.eval_every == 0 or step == a.steps:
         v = val_mse(); emit('val', v, step); emit('wall', time.time() - t_start, step)
