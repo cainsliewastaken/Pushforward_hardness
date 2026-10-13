@@ -28,6 +28,13 @@ A3. Per-stage sign condition as an operator (Cor. 43(ii), Cor. 50, Thm 46(a)). S
     and lambda_min of the accumulated increment on W. Outcomes: nonnegative after the transient -> (S) holds per stage on
     the residual's subspace and Thm 46(a) applies; negative on a set of stages -> record where (expected: late, lambda_1
     drift) and whether the negative part is small relative to the lift.
+A5. The transverse fraction of the lift (Theorem 51, THEORY 22). Along a run: a(t) = <E, Delta E>/||E||^2 with
+    Delta = K(t) - K_0, w = Delta E - a E, tau = ||w||/(a ||E||), A(T) = int a; the exact identity for E(T), the bound (b),
+    the sufficient condition (c) and the measured ||E(T)||/||E_lazy(T)||. Decides whether "feature learning beats the lazy
+    bound" holds on the testbed through the targeted-lift mechanism (tau small) and what the gain e^{-A} is. Run at
+    n = 200 on 2026-10-12 (chain/lazy_comparison.py; numbers in THEORY 22); to redo at large n with the chain's fine stages,
+    where the integral is exact, and to bound tau from the stage targets (the one derivation that would make the lazy
+    comparison unconditional).
 A4. Thm 36 first-order check. Same run: evaluate ||E_lazy(T)||^2 - 2 int <E_lazy(2T-u), Delta(u) E_lazy(u)> du and the
     remainder bound against ||E(T)||^2. Expected: the remainder bound is useless (D large) and the first-order term is
     sign-correct; this is a sanity check on the withdrawn all-orders claim, not a result.

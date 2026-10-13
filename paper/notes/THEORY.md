@@ -1407,3 +1407,89 @@ overstates the other.
     weight decay, beta2 = 0.99 for AdamW, and the same grid at every width although AdamW's optimum shifts with width. Its
     result decides whether KronQ's memory reductions cost accuracy at width 4096; it does not decide "beats tuned AdamW /
     Muon / SOAP" in the sense of the literature cited in the handoff's section 7, and should not be reported as doing so.
+
+## 22. Can "feature learning beats the lazy bound at T" be proved? (written 2026-10-12, after the user's question)
+
+Short answer: not from positivity of the lift, because it is false in that generality; what is true, and proved below, is an
+exact decomposition of the error at T into a multiplicative GAIN from the part of the lift that acts along the current
+residual and a remainder from the part that acts across it, with the comparison holding whenever the second is small
+against the first. This replaces the pair of hypotheses (S) and (P) of Theorem 36 by one quantity per stage.
+
+COUNTEREXAMPLE (positive lift, monotone spectrum, error LARGER than lazy). N = 2, K_0 = diag(1, 0), E_0 = (1, 0),
+K = K_0 + Delta with Delta = eps [[1, -1], [-1, 1]] (PSD, time-independent, so K >= K_0 at all times and every sorted
+eigenvalue is nondecreasing: (S) holds globally and Weyl applies). E_lazy(T) = (e^{-T}, 0). K has eigenvalues
+mu_1 ~ 1 + eps and mu_2 ~ eps with the slow eigenvector ~ (eps, 1), so ||E(T)||^2 ~ e^{-2(1+eps)T} + eps^2 e^{-2 eps T}
+> e^{-2T} = ||E_lazy(T)||^2 as soon as T > -ln(eps)/(1 - eps) (eps = 0.01: T > 4.7; at T = 10 the actual error is 200x the
+lazy one). The lift ROTATES the slow eigenvector onto the residual and the residual's component along it decays at the
+small rate. Hence no theorem of the form "K(t) >= K_0 (or per-stage PSD increments) implies ||E(T)|| <= ||E_lazy(T)||" can
+hold; (P) or something like it is necessary, not a technicality. In the decomposition below the example has a = eps and
+||w|| = eps ||E|| at t = 0: the transverse action equals the lift along the residual (tau = 1).
+
+THEOREM 51 (lazy comparison through the lift's action on the residual; exact).  Let E' = -K(t) E, Delta(t) = K(t) - K_0,
+E_lazy(t) = e^{-K_0 t} E_0, and split the action of the accumulated increment on the current residual into its component
+along the residual and the rest:
+      Delta(t) E(t) = a(t) E(t) + w(t),     a = <E, Delta E> / ||E||^2,     <w, E> = 0,     A(t) = int_0^t a.
+Then
+      E(T) = e^{-A(T)} [ E_lazy(T)  -  int_0^T e^{-K_0 (T-u)} e^{A(u)} w(u) du ]          (exact),
+and therefore
+  (a) if w = 0 on [0, T] (the lift acts along the residual), E(T) = e^{-A(T)} E_lazy(T): feature learning beats the lazy
+      error by the factor e^{-A(T)} exactly, and A(T) >= 0 as soon as the accumulated increment is positive ON THE RESIDUAL
+      DIRECTION (a per-direction statement, which Theorem 13 gives on any direction whose feature change exceeds twice its
+      initial features; no operator positivity, no monotone spectrum, no Weyl);
+  (b) in general  ||E(T)|| <= e^{-A(T)} ||E_lazy(T)|| + e^{-A(T)} int_0^T e^{A(u)} ||w(u)|| du;
+  (c) feature learning beats the lazy bound at T, ||E(T)|| <= ||E_lazy(T)||, whenever
+          int_0^T e^{A(u)} ||w(u)|| du  <=  (e^{A(T)} - 1) ||E_lazy(T)||;
+  (d) with the transverse fraction tau(u) = ||w(u)|| / (a(u) ||E(u)||) (the tangent of the angle between Delta E and E,
+      where a > 0), Gronwall gives  ||E(T)|| <= e^{-A(T)} [ ||E_lazy(T)|| + ||E_0|| (e^{int_0^T a tau} - 1) ],  so for
+      tau <= tau_max the comparison holds whenever  e^{tau_max A(T)} - 1 <= (||E_lazy(T)|| / ||E_0||) (e^{A(T)} - 1).
+Proof. Put E~ = e^{A} E. Then E~' = e^{A}(a E + E') = e^{A}(a E - K_0 E - Delta E) = -K_0 E~ - e^{A} w, a linear equation with
+forcing; variation of constants gives the identity. (a) is the identity with w = 0; (b) is the triangle inequality with
+||e^{-K_0 s}|| <= 1; (c) rearranges (b); (d): ||E~(T)|| <= ||E_lazy(T)|| + int a tau ||E~|| and ||E_lazy|| <= ||E_0||, then
+Gronwall.  []
+
+What the theorem says. The lift helps exactly through a(t), the Rayleigh quotient of the accumulated increment on the
+current residual, and the only thing that can hurt is w, the part of the kernel's new action that turns the residual
+toward other directions. In the moving frame (section 18) w is the leakage seen from the residual's own direction; in the
+chain (section 8, Theorem 11) the lift's action on the residual is Q_s E = (1/n) dPsi_s (dPsi_s^T E), along the stage
+targets dPsi_s, which are built from the integrated residual of earlier stages, so w is small exactly when the residual
+keeps its direction across stages — the content of (P), now as a measurable per-stage number tau rather than a
+hypothesis about eigenvectors. The counterexample is the case tau = 1 with a non-targeted lift.
+Relation to Theorem 36: (S) is reduced to a >= 0, a scalar on the residual direction (which Cor. 43's per-direction check
+DOES establish for the accumulated increment on the support of E(T), and Theorem 13 gives on every visited direction);
+(P) is replaced by the transverse condition (c). Nothing is assumed about eigenvector persistence or sorted eigenvalues.
+Relation to Theorem 48: (c) is a comparison with the LAZY trajectory; Theorem 48 brackets the error by the initial energy
+on the unfit set and does not refer to the lazy trajectory at all. The two are different statements; (c) is the one the
+sentence "feature learning beats the lazy bound" means.
+What remains to prove for an unconditional statement: a bound on tau from the chain, i.e. that the targeted lift's action
+on the residual stays within a small angle of the residual. The spike structure gives w = (1/n) sum_s [ dPsi_s (dPsi_s^T E)
+- <E, dPsi_s dPsi_s^T E>/||E||^2 E ] + (cross terms), and the first term is small when dPsi_s^T E is dominated by stages
+whose target is aligned with the current residual; the residual front moves slowly (Prop. 8a: d log k*/d log t ~ 0.2), so
+the alignment persists over a decade of time — a measurement, listed in EXPERIMENTS.md as A5, not yet a proof.
+  (c') propagated form of (c): split w by the K_0 spectrum at lambda_c = 10/T into w_slow (lambda <= lambda_c) and w_fast; since
+      ||e^{-K_0 s} w_fast|| <= e^{-lambda_c s} ||w_fast||, the comparison holds whenever
+          int_0^T e^{A(u)} [ ||w_slow(u)|| + e^{-lambda_c (T-u)} ||w_fast(u)|| ] du  <=  (e^{A(T)} - 1) ||E_lazy(T)||.
+MEASUREMENT [n = 200, sweepA: 36 GD runs, H in {32, 96, 256}, depth 1-4, Delta in {0.1, 0.5, 1.0}, T = 3000; K(t) at 30 snapshots;
+chain/lazy_comparison.py; medians with 10-90 % over runs]:
+   t        ||E||/||E_lazy||    gain e^{-A}        cond (c)      cond (c')        tau        slow fraction of w
+   10       0.89 [0.56, 0.97]   0.84 [0.49, 0.96]   5.2           1.5 [0.75, 2.6]   5.9        0.97
+   30       0.71 [0.36, 0.91]   0.65 [0.29, 0.88]   5.8           2.8 [1.4, 4.6]    8.9        0.78
+   100      0.53 [0.18, 0.87]   0.35 [0.15, 0.80]   6.7           2.0 [0.72, 3.6]   11         0.94
+   300      0.24 [0.12, 0.72]   0.24 [0.09, 0.65]   7.9           1.6 [0.48, 4.2]   16         0.92
+   1000     0.13 [0.04, 0.48]   0.11 [0.04, 0.70]   7.4           1.0 [0.23, 4.1]   24         0.96
+   3000     0.11 [0.02, 0.30]   0.07 [0.01, 0.86]   7.9           1.6 [0.19, ...]   48         0.53
+   ||E(T)|| <= ||E_lazy(T)|| in 36/36 runs; (c') holds at T in 16/36; (c) in 0/36. a(t) < 0 until t ~ 0.3-0.4 (the unlearning
+   phase of 12.1) and positive after; the exact identity reproduces E(T) to 5-30 % with the 30-snapshot quadrature (worse at T).
+What the numbers say. (i) Feature learning beats the lazy bound on every run, by 2-10x at T. (ii) The gain e^{-A(T)} along the
+residual accounts for it: it tracks the measured ratio to 10-30 % at every time (0.84 vs 0.89, 0.65 vs 0.71, 0.24 vs 0.24,
+0.11 vs 0.13, 0.07 vs 0.11), so the mechanism of the advantage is the Rayleigh quotient of the accumulated increment on the
+current residual, integrated: a theorem-shaped quantity. (iii) The transverse action is NOT small: tau = 6-50, i.e. most of
+what the lifted kernel does to the residual is to rotate it, and 50-97 % of w lies in the slow modes of K_0, where the lazy
+propagator does not damp it. The net effect of w on the norm is nevertheless near zero, so the transverse integral
+int e^{-K_0(T-u)} e^{A} w du is small by CANCELLATION (w changes direction along the run as the stage targets move), not by
+damping; the norm bounds (c) and (c') throw the cancellation away and are therefore too crude: (c) never holds, (c') in
+16/36 at T and in 60-80 % of runs at intermediate times. (iv) Consequently: the exact identity and the gain are the
+statement to make; the sufficient conditions certify the comparison on part of the testbed; an unconditional proof needs
+the chain to control the transverse integral as a vector (its cancellation), not its norm, which is a statement about how
+the stage targets rotate the residual, i.e. the leakage of section 19 seen from the residual. Listed as A5.
+Status of the sentence "feature learning beats the lazy bound at T": FALSE in general (counterexample), TRUE on the testbed
+in 36/36 runs, EXPLAINED by e^{-A} to 10-30 %, CERTIFIED by (c') in 16/36, and not proved unconditionally.
