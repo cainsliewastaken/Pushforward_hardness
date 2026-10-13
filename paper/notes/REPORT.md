@@ -1659,6 +1659,17 @@ Caveats: one seed; baselines untuned (3 fixed lrs, no schedule, beta2 = 0.99); 5
    keeps its sign (the persistent slow input modes early), cut it on modes whose gradient flips (the oscillating fast
    modes). Implemented as --hyper_rule rprop (x1.2 / x0.5 on the log weight, reusing the hypergradient state); the one-step
    hypergradient is the same signal weighted by magnitude at rate 0.01. Not yet run.
+25. SIGN-CORRELATION STEP RULE (job 59749946, 1 node, ~8 min; --hyper_rule signcorr; scale_signcorr.sh; runs/scale_signcorr/).
+   u_k += 0.05 x EMA_0.98[sign(g_t)(sign(g_t-1) + sign(g_t-2))] in place of the one-step hypergradient. Results: rough 0.1305
+   (reference 0.0612), smooth 2.49e-4 (reference 1.41e-4). LOSES 2.1x / 1.8x, and the numbers equal the UNIFORM-weight sign
+   push (0.118-0.13 rough, 2.55e-4 smooth; items 13, 22): the rule degenerated to it. Why: the smoothed sign correlations are
+   small but positive on every mode (+0.01 to +0.05 at lag 1, the ~1 % persistent part and the momentum's own correlation),
+   so an integrating rule with no restoring term drives every weight to the clamp (exp(4.6) = 99 by step 1000-2500 on
+   both layers); the budget then rescales the whole step and the per-mode shape is gone. The per-mode structure of item
+   24 is in the trace (slow input modes +0.14-0.16 vs +0.05 on fast ones at step 250; top decile lag-2 -0.07 on layer 1)
+   but it is a 2-3x contrast on a 0.05 baseline, which the one-step hypergradient already turns into 2-3x weights on the
+   slow input modes and 0.9 on the top decile (item 19). Verdict: the one-step hypergradient stays; no rule built on the
+   gradient's sign statistics has beaten it, and the per-mode time structure it could use is small. Closed.
 
 25 (this fork). APPROXIMATION CONTROLS AND BASIS TRACKING (job 59749741, 1 node, 12 min; optimizer/tracking.py, --track;
    scale_exact.sh; runs/scale_exact/). Width 4096, both targets: reference fast configuration (blocks 256, bf16 state, two
