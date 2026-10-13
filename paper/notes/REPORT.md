@@ -1434,3 +1434,27 @@ Caveats: one seed; baselines untuned (3 fixed lrs, no schedule, beta2 = 0.99); 5
    2000 steps; frozen-ridge smooth runs double), (14) the optimizer has never computed a Krylov step. Holes: the geometry
    of the trust region (now measured: output-space sphere on rough), interactions between modes (the Kronecker basis is
    not the kernel's), and time (minibatch noise, decay, kernel motion rate, the end phase).
+17. KRYLOV STEP TEST (job 59729771, 1 node, 8 min; optimizer/krylov_step.py, --opt krylov; scale_krylov.sh; runs/scale_krylov/).
+   Matrix-free ridge on the batch: CG on (K + gamma) x = E with K = J J^T applied by vjp + jvp, step -J^T x scaled to the
+   output-space radius 0.2 ||E|| (decaying), optional heavy-ball momentum with the trust region on the accumulated update.
+   Width 4096, 5000 steps, both targets (reference 0.0758 / 1.49e-4; AdamW 0.39 / 7.2e-4 at 5000 steps):
+   | M, gamma / Rayleigh, momentum | rough | smooth |  wall (3 per GPU) |
+   | 1, 1, 0 | 0.555 | 0.0414 | 56 s |   | 3, 0.1, 0 | 0.547 | 0.0223 | 96 s |   | 3, 1, 0 | 0.534 | 0.0204 | 75 s |
+   | 8, 0.1, 0 | 0.509 | 0.0100 | 150 s |   | 3, 0.1, 0.9 | 0.480 | 0.0060 | 77 s |
+   Diagnostics along the run: alignment cos(E, K x) 0.06-0.17 rough, 0.07-0.3 smooth; CG residual 0.3-7 ||E|| (the solve
+   barely reduces the batch residual at these M); the output-space budget scales the step by 0.03-0.6. Reading: the
+   exact-K Krylov step at affordable M is far from the ridge (Thm stepkrylov's slow convergence for a residual on the
+   slow modes) and, even so, is the one-step optimum of the wrong trust region (TRUST_REGION.md): worse than AdamW on
+   rough and 40x worse than the reference on smooth. The prediction "loses on rough" held; "competitive on smooth" did
+   not, for the truncation reason. The Kronecker diagonal solve is a better ridge than 8 exact Krylov terms.
+   ALIGNMENT SCAN (same job, reference configuration, res_j5 / res_j11): at equal output change, rough, layer 1, step 500,
+   cos(E, J u) = sign 0.43 > ridge2 0.39 > ridge4 0.37 > step 0.34 > grad 0.20 > random / single mode ~0; smooth: ridge4
+   0.58 > sign 0.34 > ridge2 0.31 > step 0.27 > grad 0.08. The sign direction is the best-aligned direction on the rough
+   target: its output response carries the slow-mode part of E that the gradient's (K E) does not.
+18. TRUST-REGION DERIVATION (TRUST_REGION.md). With the two measured facts of item 15 (output-space sphere of radius
+   r ||E||; per-mode box |d_k| <= delta_k), the first-order optimal step is d_k = clip(g_k / (2 mu lambda_k), +-delta_k):
+   the Gauss-Newton step on modes where the box is slack, a fixed push with the gradient's sign where it binds (the
+   held-rough modes: large residual coordinate, small leverage), the whole scaled to the sphere. That is cap + sign push +
+   budget, with the learned per-mode weight as the estimate of delta_k. It explains items 4-15 and 17 without lookahead,
+   lift or concavity. To measure: delta_k by lambda decile (scan extended with one mode per decile), the learned weight
+   against it; open: the smooth-target length (a damping), the late-run degradation, momentum and decay.

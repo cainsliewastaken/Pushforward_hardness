@@ -1,5 +1,9 @@
 # The collective step: what the chain gives as a lookahead rule, and what the radius scan says (2026-10-13)
 
+SUPERSEDED in part by TRUST_REGION.md (01:00): the scan's two facts (output sphere, parameter box) give the sign push +
+cap + budget as the FIRST-order optimum of the right trust region, with no lookahead; the Krylov test of section 4 was
+run (REPORT 61 item 17) and lost on both targets. Sections 2 (the scan) and 3(a)-(b) stand; section 1 is withdrawn.
+
 Follows LOOKAHEAD_THEORY.md (per-mode model, Theorem 7) and its test (REPORT 61 items 13-15): the per-mode rule fails in
 every form at width 4096, and the measured residual curvature says why (no concave modes, |c| ~ 1 % of lambda). This note
 states the collective form of the same lookahead, which needs no per-mode decomposition, and records the Taylor-radius

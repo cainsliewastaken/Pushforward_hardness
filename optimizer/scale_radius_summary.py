@@ -13,8 +13,8 @@ for tag in sys.argv[1:] or ('rough', 'smooth'):
         m = r['metric']
         if m.startswith('rscan_'):
             parts = m.split('_'); d[(r['step'], parts[2], parts[1])]['_'.join(parts[3:])] = r['value']
-    order = ['step', 'sign', 'grad', 'ridge2', 'ridge4', 'rand', 'mode']
+    order = ['step', 'sign', 'grad', 'ridge2', 'ridge4', 'rand', 'mode'] + [f'moded{d}' for d in range(10)]
     print('  grid: k=0..12 is s = s0 * 10^(-3 + 5k/12); s0 at k ~ 7.2.   columns: lev, s*, s*/s0, s*.lev, rf at k=4..11')
-    for (step, l, name), v in sorted(d.items(), key=lambda t: (t[0][0], t[0][1], order.index(t[0][2]))):
+    for (step, l, name), v in sorted(d.items(), key=lambda t: (t[0][0], t[0][1], order.index(t[0][2]) if t[0][2] in order else 99)):
         s0 = v['s0']; rfs = [v.get(f'rf{k}', float('nan')) for k in range(13)]
         print(f"  step {step:5d} {l} {name:7s} s0 {s0:8.3g} lev {v['lev']:8.3g} cosE {v.get('cosE', float('nan')):6.3f}  s* {v['sstar']:8.3g}  s*/s0 {v['sstar'] / s0:8.3g}  s*.lev {v['sstar_out']:8.3g}  rf: " + ' '.join(f'{x:.2g}' for x in rfs[4:12]))
