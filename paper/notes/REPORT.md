@@ -1482,3 +1482,30 @@ Caveats: one seed; baselines untuned (3 fixed lrs, no schedule, beta2 = 0.99); 5
    its size. Prediction: --q_in -1 (weight (lam / lam_max)^(-1/2) on the input layer, cap and budget as now) improves the
    rough result; the sign push today is 10-100x inside the radius on the slow input modes. To run: reference vs --q_in -1
    vs --q_in -0.5, both targets (6 runs, one node, 15 min).
+20. INPUT-SIDE BOX TEST (job 59745633, 1 node, 20 min; optimizer/scale_alpha.sh; runs/scale_alpha/). Weighting every hidden
+   layer's modes by (alpha_j / alpha_max)^(qa/2), floored, cap and budget as in the reference; and the radius scan with
+   one single mode per ALPHA decile (alpha_j, sigma_i logged). Results (reference 0.0758 / 1.49e-4):
+   | qa, floor | rough | smooth |   | -1, 1e-4 | 0.957 | 3.75e-4 |   | -1, 1e-6 | 1.239 | 9.74e-4 |   | -0.5, 1e-4 | 0.638 | 1.10e-4 |
+   The -1 weighting destroys the rough fit (worse than the initial 0.668) and hurts smooth 2.5-6x; -0.5 is the best smooth
+   number at Adam memory so far (1.10e-4, = SOAP b256's 1.1-1.37e-4) and loses the rough target entirely.
+   THE LAW HOLDS. Single-mode radius s* against the mode's input eigenvalue alpha_j, rough target: s* sqrt(alpha_j) =
+   0.74, 0.91, 0.88, 0.82, 1.01, 1.08, 0.93, 0.86, 0.78, 0.95 on layer 0 at step 500 across alpha from 1.1e3 to 2.5e-5
+   (eight decades; s* from 0.022 to 191), and 0.13-0.26 on layer 1 (a1-a9; a0 is the bias column) with alpha over 30x;
+   at step 1500 layer 1: 0.044-0.079. So the per-mode radius is delta_j = c_l / sqrt(alpha_j) on BOTH hidden layers, the
+   pre-activation sphere of TRUST_REGION section 5, to +-20 %; the lambda-decile scan (item 19) saw it as flat on layer 1
+   only because a lambda decile mixes alpha_j. Smooth: layer 1 within 3x (noisier), layer 0 at the noise floor beyond a2.
+   WHAT THE TEST FALSIFIED. The identification of the sign push with the "box branch" (item 18) is wrong in magnitude: the
+   operating push per mode is lr eta w ~ 1e-3 while the box is 3-200, i.e. the uniform push is ~1000x INSIDE every box
+   and the box never binds at the operating point; the sphere (the budget, scale 0.03-0.6 per step) is the active
+   constraint. Pushing modes to their box (qa = -1) spends the output radius on thousands of slow modes with negligible
+   residual coordinate and starves the fast ones. Under sphere x box the correct optimum is SPARSE: a mode is on its box
+   only if its residual coordinate exceeds a threshold set by the output-side eigenvalue and the sphere multiplier
+   (e_k > c sqrt(sigma_i) / r); the rest take the scaled Gauss-Newton step. That rule (box pushes on the few modes with
+   the largest residual coordinate, GN elsewhere) has not been tested; the learned per-mode weight is a stochastic
+   version of the selection. The uniform sign push is therefore NOT derived by the trust-region argument; what is
+   derived and now measured is the trust region itself (output sphere, per-layer pre-activation sphere), and what is
+   measured without derivation is that the sign push's output response is the best-aligned with the residual among the
+   affordable directions (item 17). The theory has the geometry right and the step still open.
+   Timing: eigendecompositions were 78-96 % of wall in every run of items 13-20 (adaptive refresh at period 1 with the
+   batched eigh); the subspace-iteration variant (item 11, 0.064) spends 5x less there. Isolated per-step wall against
+   AdamW has not been re-measured since item 11 (24 vs 8 ms).

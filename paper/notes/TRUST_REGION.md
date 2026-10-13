@@ -1,5 +1,13 @@
 # The trust region of the step, and the first-order derivation of sign push + cap + budget (2026-10-13, ~01:00)
 
+CORRECTION (2026-10-13 11:45, REPORT 61 item 20). The per-layer law delta_j = c_l / sqrt(alpha_j) is CONFIRMED on both
+hidden layers (+-20 % over eight decades of alpha on the input layer). But the identification of the sign push with the
+box branch of section 2 is wrong in magnitude: the operating push (lr eta w ~ 1e-3 per mode) is ~1000x inside every box,
+so the box does not bind and the sphere is the only active constraint; pushing modes to the box (--qa -1) destroys the
+fit. The optimum of section 2 under sphere x box is sparse (box pushes only on modes whose residual coordinate exceeds
+c sqrt(sigma_i) / r, GN elsewhere) and has not been tested. Sections 1, 2 (the geometry and the optimisation) and 5 (the
+law) stand; section 3's reading of the sign push as that optimum is withdrawn.
+
 Written after the Taylor-radius scans (REPORT 61 item 15, COLLECTIVE_RULE.md section 2) and the Krylov test (item 17).
 Status: a derivation from two MEASURED facts about the network at width 4096; the facts are measurements, the
 optimisation is exact; what it predicts was checked where marked.
