@@ -1589,3 +1589,17 @@ Caveats: one seed; baselines untuned (3 fixed lrs, no schedule, beta2 = 0.99); 5
    needs a MEASURED per-mode gradient-change rate (e.g. two EMAs of different windows per mode: disagreement beyond the
    noise model = the signal moved); not built. Momentum 0.9 is near the staleness limit on this problem; the headroom
    from averaging is bounded by the batch-1024 result (1.24x per step, item 22).
+23. ONLINE PER-MODE MOMENTUM WINDOW (job 59748427, 1 node, 14 min; --mom_adapt; scale_momadapt.sh; runs/scale_momadapt/).
+   Window per mode = min(noise limit, staleness limit): noise limit = (v - m^2) / m^2 with the smoothed de-biased signal
+   estimate; staleness limit = min(completion length / step length per mode, 2 x the layer's adaptive refresh period).
+   No tuned momentum constant. Results (reference beta 0.9: rough 0.0612, smooth 1.41e-4): online window with the learned
+   weight 0.0835 / 1.80e-4; with uniform weights 0.0988 / 3.26e-4. LOSES on both targets, 1.3-2.3x.
+   Why: the windows ended at 50-700 steps late in the run (per decile: 118-176 rough, 236-694 smooth w=1), uniform across
+   deciles, i.e. set by the layer cap, because both online staleness measures stop binding once the steps are small
+   (completion / step -> large under the lr decay; the adaptive refresh period grows to 100-350 since the g.D criterion
+   sees little change per small step), and the noise limit asks for long windows (the gradient IS noise-dominated).
+   A 10-step window beats all of them. So either the gradient's true decorrelation time per mode is ~10-30 steps for
+   reasons the per-mode model does not contain (cross-mode kernel motion at 2-3 %/step is the candidate: item 21(e)),
+   or the averaging premise itself is weak (batch 1024, which halves the noise, gave only 1.24x per step: item 22). The
+   measurement that decides: the per-mode gradient autocorrelation vs lag along the run (a sample of modes, lags to 64),
+   which gives the window with no model; not run.
