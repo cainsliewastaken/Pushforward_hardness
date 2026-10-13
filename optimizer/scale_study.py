@@ -26,7 +26,7 @@ import os, sys, json, math, time, argparse
 import numpy as np, torch
 
 p = argparse.ArgumentParser()
-p.add_argument('--opt', required=True, choices=['adamw', 'muon', 'soap', 'kronq'])
+p.add_argument('--opt', required=True, choices=['adamw', 'muon', 'soap', 'kronq', 'kronqf'])
 p.add_argument('--width', type=int, default=512); p.add_argument('--depth', type=int, default=2)
 p.add_argument('--p', type=float, default=2.0, help='target roughness exponent (0 smooth, 2 rough)')
 p.add_argument('--steps', type=int, default=5000); p.add_argument('--batch', type=int, default=256)
@@ -51,6 +51,25 @@ p.add_argument('--sphere', type=float, default=0.0, help='>0: Euclidean step. Ea
                'controller holding the measured relative Taylor remainder r_f = ||f(th+d) - f(th) - J d|| / ||J d|| of that layer\'s step at this value '
                '(one jvp + one forward, round-robin over layers every --sphere_every steps). The lr decay is replaced by decaying the target.')
 p.add_argument('--sphere_every', type=int, default=10)
+p.add_argument('--stats_every', type=int, default=0, help='accumulate the factor statistics every k steps (0 = only on refresh steps, the old behaviour)')
+p.add_argument('--ekfac', type=int, default=0, help='1: per-mode curvature = EMA of the exact GN diagonal in the Kronecker basis (same-sample pairing), used in the cap and live mask')
+p.add_argument('--rot_once', type=int, default=0, help='1: keep the momentum in the rotated basis (exact block transport at refresh): one rotation in, one out per step')
+p.add_argument('--tf32', type=int, default=0, help='1: allow TF32 matmuls (tensor cores) for every method')
+p.add_argument('--eig_iters', type=int, default=0, help='>0: warm-started subspace iteration (k QR steps per block) instead of eigh after the first refresh')
+p.add_argument('--adapt_refresh', type=float, default=0.0, help='>0: error-controlled refresh interval: e = |sum|Gr_new| - sum|Gr_old|| / sum|Gr_new| at a refresh, R <- R clip(kappa/e, 1/2, 2) in [2, 200]')
+p.add_argument('--rule', default='sign', choices=['sign', 'adam'], help='kronqf: sign push (KronQ) or the Adam rule in the Kronecker basis (ks_adam)')
+p.add_argument('--S_mode', default='mc', choices=['mc', 'emp'], help='kronqf: backprop factor from the MC probe or the empirical signal (rescaled to the GN trace once)')
+p.add_argument('--last_S', default='stats', choices=['stats', 'identity'], help='kronqf: output layer S factor from statistics or identity')
+p.add_argument('--q', type=float, default=0.0, help='kronqf: fixed per-mode weight (lam/lam_max)^(q/2) when --hyper 0')
+p.add_argument('--b1', type=float, default=0.9); p.add_argument('--eps', type=float, default=1e-8); p.add_argument('--cap', type=int, default=1)
+p.add_argument('--centred', type=int, default=0, help='1: train f(x) - f_0(x) with f_0 the frozen initial network (one extra forward per step)')
+p.add_argument('--horizon', type=float, default=1.0, help='kronqf hypergradient: eligibility-trace horizon (1 = one-step)')
+p.add_argument('--hyper_shape', type=int, default=0, help='kronqf: 1 = learn the per-mode shape only (mean of u removed)')
+p.add_argument('--sign_floor', type=float, default=0.0, help='kronqf: soft sign C / (|C| + floor max|C|) instead of sign(C)')
+p.add_argument('--topk', type=int, default=0, help='kronqf: push only the k modes with the largest curvature per layer (0 = all live)')
+p.add_argument('--lr_kappa', type=float, default=0.0, help='kronqf: per-layer step multiplier eta_l from the measured function-space remainder, held at kappa (KronQ2 --lr_kappa)')
+p.add_argument('--check_every', type=int, default=10)
+p.add_argument('--dprev_bits', type=int, default=0, help='1: store the previous step as int8 signs and reconstruct its magnitude from the current push weight (hypergradient state 0.25 P instead of 0.5-1 P)')
 p.add_argument('--gnls', type=int, default=0, help='1: per-layer line search of the sign step against the EXACT per-sample GN curvature on the batch, '
                'q = (2/(m NOUT)) sum_x (gz(x)^T dW a(x))^2 (needs --bcurv-style per-sample gz; one matmul per layer); scale = min(1, g.D / (lr q))')
 p.add_argument('--diag', type=int, default=0, help='1: at every eval step log per layer the u distribution, clamp fraction, cap-active fraction, '
@@ -59,7 +78,8 @@ a = p.parse_args()
 import subprocess
 try: GIT = subprocess.run(['git', '-C', os.path.dirname(os.path.abspath(__file__)), 'rev-parse', '--short', 'HEAD'], capture_output=True, text=True).stdout.strip()
 except Exception: GIT = 'unknown'
-torch.backends.cuda.matmul.allow_tf32 = False; torch.backends.cudnn.allow_tf32 = False
+torch.backends.cuda.matmul.allow_tf32 = bool(a.tf32); torch.backends.cudnn.allow_tf32 = bool(a.tf32)
+if a.tf32: torch.set_float32_matmul_precision('high')
 DEV = 'cuda' if torch.cuda.is_available() else 'cpu'; torch.manual_seed(a.seed)
 G = 16; NIN = NOUT = G * G
 kx = torch.fft.fftfreq(G, device=DEV) * G; KX, KY = torch.meshgrid(kx, kx, indexing='ij'); K2 = KX ** 2 + KY ** 2
@@ -77,14 +97,31 @@ torch.manual_seed(a.seed)
 lins = torch.nn.ModuleList([torch.nn.Linear(dims[i], dims[i + 1]) for i in range(len(dims) - 1)]).to(DEV)
 L1 = len(lins); P = sum(q.numel() for q in lins.parameters())
 acts_cache = [None] * L1; zs_cache = [None] * L1
+lins0 = None
+if a.centred:
+    import copy
+    lins0 = copy.deepcopy(lins)
+    for q in lins0.parameters(): q.requires_grad_(False)
+KQ = None
+if a.opt == 'kronqf':
+    from kronq_fast import KronQFast
+    KQ = KronQFast(lins, a, DEV, NOUT, torch.nn.functional.gelu, lambda shape: torch.randint(0, 2, shape, device=DEV, generator=gtrain).float() * 2 - 1)
+def forward0(x):
+    h = x
+    for l, lin in enumerate(lins0):
+        z = lin(h); h = torch.nn.functional.gelu(z) if l < L1 - 1 else z
+    return h
 def forward(x, keep=False):
+    if KQ is not None:
+        y = KQ.forward(x, keep)
+        return y - forward0(x) if lins0 is not None else y
     h = x
     for l, lin in enumerate(lins):
         if keep: acts_cache[l] = h
         z = lin(h)
         if keep: z.retain_grad(); zs_cache[l] = z
         h = torch.nn.functional.gelu(z) if l < L1 - 1 else z
-    return h
+    return h - forward0(x) if lins0 is not None else h
 def mse(out, y): return ((out - y) ** 2).mean()
 @torch.no_grad()
 def val_mse():
@@ -92,47 +129,70 @@ def val_mse():
 def nbytes(x): return x.numel() * x.element_size()
 
 # ------------------------------------------------------------------ blocked / one-sided eigenbasis helpers
-def blocks_of(dim):
-    if dim > a.max_dim: return None
-    b = a.block if 0 < a.block < dim else dim
-    return [slice(i, min(i + b, dim)) for i in range(0, dim, b)]
 class Side:
-    """EMA'd factor on one side of a layer (full, blocked, or diagonal when wider than max_dim) and its eigenbasis."""
+    """EMA'd factor on one side of a layer: full / blocked (batched full blocks + one remainder block) / diagonal (dim > max_dim)."""
     def __init__(self, dim):
-        self.dim, self.bl = dim, blocks_of(dim); self.F = None; self.U = None; self.e = None
-    def update(self, Z, beta):           # Z: samples x dim, factor = E[Z^T Z] (or its diagonal)
+        self.dim = dim; self.diag = dim > a.max_dim
+        b = a.block if 0 < a.block < dim else dim
+        self.b, self.nf = b, dim // b; self.rem = dim - self.nf * b
+        self.F = None; self.Fr = None; self.U = None; self.Ur = None; self.e = None
+    def update(self, Z, beta):           # Z: samples x dim; factor = E[Z^T Z] (or its diagonal)
         m = Z.shape[0]
-        new = (Z * Z).mean(0) if self.bl is None else [Z[:, s].T @ Z[:, s] / m for s in self.bl]
-        if self.F is None: self.F = new
-        elif self.bl is None: self.F.mul_(beta).add_(new, alpha=1 - beta)
+        if self.diag:
+            new = (Z * Z).mean(0)
+            if self.F is None: self.F = new
+            else: self.F.mul_(beta).add_(new, alpha=1 - beta)
+            return
+        nb = self.nf * self.b; Zf = Z[:, :nb].reshape(m, self.nf, self.b)
+        newF = torch.einsum('mkb,mkc->kbc', Zf, Zf) / m
+        newR = (Z[:, nb:].T @ Z[:, nb:] / m) if self.rem else None
+        if self.F is None: self.F, self.Fr = newF, newR
         else:
-            for F_, N_ in zip(self.F, new): F_.mul_(beta).add_(N_, alpha=1 - beta)
-    def eig(self):
-        if self.bl is None: self.U = None; self.e = self.F.clamp(min=0).clone(); return
-        self.U = []; self.e = torch.zeros(self.dim, device=DEV)
-        for s, F_ in zip(self.bl, self.F):
-            ev, V = torch.linalg.eigh(F_); self.U.append(V); self.e[s] = ev.clamp(min=0)
-    def overlap(self, Uold):           # squared overlaps (new x old) per block, for carrying per-mode state
-        if self.U is None or Uold is None: return None
-        return [(Vn.T @ Vo) ** 2 for Vn, Vo in zip(self.U, Uold)]
-    def carry(self, T, O, side):       # T indexed by modes on this side; side 'L' rows / 'R' columns
+            self.F.mul_(beta).add_(newF, alpha=1 - beta)
+            if self.rem: self.Fr.mul_(beta).add_(newR, alpha=1 - beta)
+    def eig(self, iters=0):
+        if self.diag: self.U = None; self.e = self.F.clamp(min=0).clone(); return
+        if self.U is None or iters <= 0:
+            ev, V = torch.linalg.eigh(self.F); self.U = V; e = ev.clamp(min=0).reshape(-1)
+            if self.rem: evr, Vr = torch.linalg.eigh(self.Fr); self.Ur = Vr; e = torch.cat([e, evr.clamp(min=0)])
+        else:                            # warm-started subspace iteration from the previous basis
+            V = self.U
+            for _ in range(iters): V, _ = torch.linalg.qr(torch.bmm(self.F, V))
+            self.U = V; e = torch.einsum('kbc,kbd,kdc->kc', V, self.F, V).clamp(min=0).reshape(-1)
+            if self.rem:
+                Vr = self.Ur
+                for _ in range(iters): Vr, _ = torch.linalg.qr(self.Fr @ Vr)
+                self.Ur = Vr; e = torch.cat([e, torch.diagonal(Vr.T @ self.Fr @ Vr).clamp(min=0)])
+        self.e = e
+    def basis(self): return None if self.U is None else (self.U, self.Ur)
+    def overlap(self, Bold, signed=False):   # per-block overlaps (new^T old): squared for second moments, signed for first moments
+        if self.U is None or Bold is None: return None
+        O = torch.bmm(self.U.transpose(1, 2), Bold[0]); Or = (self.Ur.T @ Bold[1]) if self.rem else None
+        return (O, Or) if signed else (O * O, (Or * Or) if self.rem else None)
+    def _apply(self, M, side, Bf, Br, transpose):
+        """block-diagonal (Bf, Br) applied to M: side 'L' -> B @ M (rows), 'R' -> M @ B^T (columns); transpose=True uses B^T in place of B."""
+        nb = self.nf * self.b
+        if side == 'L':
+            n = M.shape[1]; Mf = M[:nb].reshape(self.nf, self.b, n)
+            out = torch.bmm(Bf.transpose(1, 2) if transpose else Bf, Mf).reshape(nb, n)
+            if self.rem: out = torch.cat([out, (Br.T if transpose else Br) @ M[nb:]], 0)
+        else:
+            n = M.shape[0]; Mf = M[:, :nb].reshape(n, self.nf, self.b)
+            out = torch.einsum('nkb,kcb->nkc' if not transpose else 'nkb,kbc->nkc', Mf, Bf).reshape(n, nb)
+            if self.rem: out = torch.cat([out, M[:, nb:] @ (Br if transpose else Br.T)], 1)
+        return out
+    def carry(self, T, O, side):
         if O is None: return T
-        out = T.clone()
-        for s, Ob in zip(self.bl, O):
-            if side == 'L': out[s, ...] = Ob @ T[s, ...]
-            else: out[..., s] = T[..., s] @ Ob.T
-        return out
-    def rot(self, M, side, inv):          # side 'L': rows; 'R': columns. inv=False: into the eigenbasis
+        return self._apply(T, side, O[0], O[1], False)
+    def rot(self, M, side, inv):             # inv=False: into the eigenbasis (U^T M rows / M U columns); inv=True: back
         if self.U is None: return M
-        out = torch.empty_like(M)
-        for s, V in zip(self.bl, self.U):
-            if side == 'L': out[s, :] = (V @ M[s, :]) if inv else (V.T @ M[s, :])
-            else: out[:, s] = (M[:, s] @ V.T) if inv else (M[:, s] @ V)
-        return out
+        return self._apply(M, side, self.U, self.Ur, transpose=not inv)
     def state_bytes(self):
         if self.F is None: return 0
-        if self.bl is None: return nbytes(self.F)
-        return sum(nbytes(F_) for F_ in self.F) + (sum(nbytes(V) for V in self.U) if self.U else 0)
+        if self.diag: return nbytes(self.F)
+        tot = nbytes(self.F) + (nbytes(self.Fr) if self.rem else 0)
+        if self.U is not None: tot += nbytes(self.U) + (nbytes(self.Ur) if self.rem else 0)
+        return tot
 def ns5(Gm, steps=5, eps=1e-7):
     aa, bb, cc = (3.4445, -4.7750, 2.0315); Xm = Gm / (Gm.norm() + eps); tr = Gm.shape[0] > Gm.shape[1]
     if tr: Xm = Xm.T
@@ -161,6 +221,7 @@ else:
             s_['hv'] = (torch.zeros(o, device=DEV), torch.zeros(i + 1, device=DEV)) if a.compress else torch.zeros(o, i + 1, device=DEV)
         st.append(s_)
 def opt_state_bytes():
+    if a.opt == 'kronqf': return KQ.state_bytes()
     if a.opt == 'adamw':
         return sum(nbytes(t) for s in opt.state.values() for t in s.values() if torch.is_tensor(t) and t.numel() > 1)
     if a.opt == 'muon':
@@ -215,7 +276,9 @@ for step in range(1, a.steps + 1):
     sync(); t0 = time.time()
     need_stats = a.opt in ('soap', 'kronq') and (step - 1) % a.refresh == 0
     for q in lins.parameters(): q.grad = None
-    keep_now = a.opt == 'kronq' and (need_stats or a.bcurv or a.gnls)
+    if KQ is not None:
+        for W in KQ.Wt: W.grad = None
+    keep_now = (a.opt == 'kronq' and (need_stats or a.bcurv or a.gnls)) or a.opt == 'kronqf'
     out = forward(xb, keep=keep_now); loss = mse(out, yb); loss.backward(retain_graph=keep_now)
     bc = None; gz_b = None
     if a.opt == 'kronq' and (a.bcurv or a.gnls):   # per-sample backprop signal of a random output combination (unbiased GN probe)
@@ -230,8 +293,11 @@ for step in range(1, a.steps + 1):
             dA = (s_['R'].rot(at_b, 'R', False) ** 2).mean(0); dS = (s_['L'].rot(gz_b[l].T, 'L', False) ** 2).mean(1)
             bc.append((dS[:, None] * dA[None, :]) * (2.0 / NOUT))
     sync(); tm['fb'] += time.time() - t0
+    if a.opt == 'kronqf':
+        KQ.step(step, lr, out, xb, yb, mse, tm, time.time, emit if a.diag else None)
     with torch.no_grad():
-        if a.opt == 'adamw':
+        if a.opt == 'kronqf': pass
+        elif a.opt == 'adamw':
             for g_ in opt.param_groups: g_['lr'] = lr
             t0 = time.time(); opt.step(); sync(); tm['upd'] += time.time() - t0
         elif a.opt == 'muon':
@@ -257,7 +323,7 @@ for step in range(1, a.steps + 1):
                         s_['R'].update(at, a.beta_stats); s_['L'].update(gz[l], a.beta_stats)
                 sync(); tm['stats'] += time.time() - t0; t0 = time.time()
                 for s_ in st:
-                    oldL, oldR = s_['L'].U, s_['R'].U
+                    oldL, oldR = s_['L'].basis(), s_['R'].basis()
                     s_['L'].eig(); s_['R'].eig()
                     if a.opt == 'kronq' and a.hyper:
                         OL, OR = s_['L'].overlap(oldL), s_['R'].overlap(oldR)
