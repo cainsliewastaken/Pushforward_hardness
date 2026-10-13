@@ -22,6 +22,14 @@ import math, torch
 from torch.func import jvp
 
 EIG_DTYPE = None
+def solve_gamma(Cabs, lam, target2, iters=40):
+    """gamma with sum (Cabs / (lam + gamma))^2 = target2 (decreasing in gamma); bisection in log gamma."""
+    lo, hi = -30.0, 30.0
+    for _ in range(iters):
+        g = 0.5 * (lo + hi); v = float((Cabs / (lam + math.exp(g))).pow(2).sum())
+        if v > target2: lo = g
+        else: hi = g
+    return math.exp(0.5 * (lo + hi))
 def safe_eigh(F):
     """eigh of a (batch of) symmetric matrices with a float64 CPU fallback when cusolver fails to converge."""
     Fs = 0.5 * (F + F.transpose(-1, -2))
@@ -123,6 +131,7 @@ class KronQFast:
         self.lamx = [None] * self.L if a.ekfac else None
         self.eta = [1.0] * self.L; self.refresh_cur = a.refresh; self.emp_scale = [None] * self.L
         self.period = [a.refresh] * self.L; self.next_ref = [1] * self.L; self.rf = [None] * self.L
+        self.last_gamma = [None] * self.L; self.kappa = a.lr_kappa if a.lr_kappa > 0 else a.sphere
         global EIG_DTYPE; EIG_DTYPE = torch.float64 if a.eig_dtype == 'float64' else None
         self.cache = {}; self.last_Gr = None; self.diag_out = {}
         self.f0 = None
@@ -164,6 +173,13 @@ class KronQFast:
         live = lam > a.reltol * lmax
         if a.topk > 0:
             thr = lam.flatten().kthvalue(max(1, lam.numel() - a.topk))[0]; live = live & (lam >= thr)
+        if a.alloc:                                   # derived T-step allocation on the per-step length budget R = lr eta sqrt(N)
+            T_rem = max(10, a.steps - self.t_step + 1); R = lr * self.eta[l] * math.sqrt(g.numel())
+            gam = solve_gamma(Cf.abs(), lam, (T_rem * R) ** 2)
+            D = Cf / (lam + gam) / T_rem / max(lr * self.eta[l], 1e-30)
+            if a.sphere > 0: D = D * (math.sqrt(D.numel()) / (float(D.norm()) + 1e-30))
+            self.last_gamma[l] = gam / lmax
+            return D, lam, live
         if a.rule == 'adam':
             V2 = self.V2[l]; V2f = V2.float() * a.b2 + (g * g) * (1 - a.b2)
             if update_state: self.V2[l] = V2f.to(V2.dtype)
@@ -177,6 +193,7 @@ class KronQFast:
         if a.cap:
             capv = g.abs() / (lam.clamp(min=1e-30) * max(lr * self.eta[l], 1e-30) * L)
             D = torch.sign(D) * torch.minimum(D.abs(), capv)
+        if a.sphere > 0: D = D * (math.sqrt(D.numel()) / (float(D.norm()) + 1e-30))   # unit-rms direction: the step length is lr eta sqrt(N)
         return D, lam, live
     # ---------------- one optimizer step; call after loss.backward() on forward(xb, keep=need_keep)
     def step(self, step, lr, out, xb, yb, loss_fn, tm=None, t=None, emit=None):
@@ -275,11 +292,23 @@ class KronQFast:
                     if diag_now: emit(f'gnls_alpha_l{l}', alpha, step); emit(f'gnls_qratio_l{l}', q / (float((lam * D * D).sum()) + 1e-30), step)
                 if diag_now:
                     emit(f'livefrac_l{l}', float(live.float().mean()), step); emit(f'wnorm_l{l}', float(self.Wt[l].norm()), step)
+                    if a.alloc and self.last_gamma[l] is not None: emit(f'alloc_gamma_over_lmax_l{l}', self.last_gamma[l], step); emit(f'alloc_fitfrac_l{l}', float((lam > self.last_gamma[l] * float(lam.max())).float().mean()), step)
+                    if l == (1 if L > 2 else 0):               # shape of the Taylor radius: remainder and leverage along five directions at the step's length
+                        lmax_ = float(lam.max()); dirs = {'step': D, 'grad': g, 'rand': torch.randn_like(g),
+                                                          'ridge2': g / (lam + 1e-2 * lmax_), 'ridge4': g / (lam + 1e-4 * lmax_)}
+                        nrm = float(lr * self.eta[l] * D.norm()); W_now = self.Wt[l].data
+                        f0 = self.forward_with(xb, l, W_now)
+                        for name, Dir in dirs.items():
+                            d = -Dir * (nrm / (float(Dir.norm()) + 1e-30))
+                            _, Jd = jvp(lambda Wl: self.forward_with(xb, l, Wl), (W_now,), (d,))
+                            f1 = self.forward_with(xb, l, W_now + d)
+                            emit(f'shape_rf_{name}_l{l}', float((f1 - f0 - Jd).norm() / (Jd.norm() + 1e-30)), step)
+                            emit(f'shape_lev_{name}_l{l}', float(Jd.norm() / (d.norm() + 1e-30)), step)
                     if a.hyper: emit(f'u_q50_l{l}', float(self.u[l].float().median()), step)
                 Dws.append(D)
             # ---- step length controllers
             g_all = 1.0
-            if a.rem > 0 or a.lr_kappa > 0:
+            if a.rem > 0 or self.kappa > 0:
                 f_before = out.detach()
             for l in range(L): self.Wt[l].data.sub_(lr * self.eta[l] * Dws[l])
             if a.rem > 0:
@@ -288,7 +317,7 @@ class KronQFast:
                     sc = 1.0 - a.rem / rho
                     for l in range(L): self.Wt[l].data.add_(sc * lr * self.eta[l] * Dws[l])
                 if diag_now: emit('rem_rho', rho, step)
-            if a.lr_kappa > 0 and step % a.check_every == 0:   # per-layer eta from the function-space remainder (round-robin)
+            if self.kappa > 0 and step % a.check_every == 0:   # per-layer eta from the function-space remainder (round-robin)
                 l = (step // a.check_every) % L; d = -lr * self.eta[l] * Dws[l]
                 W_now = self.Wt[l].data.clone(); W_pre = W_now - d                           # the pre-step point
                 f0 = self.forward_with(xb, l, W_pre)
@@ -298,8 +327,8 @@ class KronQFast:
                 if lin > 0:
                     rf = float((f1 - f0 - Jd).norm()) / lin; self.rf[l] = rf if self.rf[l] is None else 0.7 * self.rf[l] + 0.3 * rf
                     if lr > 0.05 * a.lr and l < L - 1:                       # kronq2: hidden layers only; the output layer is linear in its weights
-                        if self.rf[l] > 1.5 * a.lr_kappa: self.eta[l] *= 0.7
-                        elif self.rf[l] < a.lr_kappa / 1.5: self.eta[l] *= 1.25
+                        if self.rf[l] > 1.5 * self.kappa: self.eta[l] *= 0.7
+                        elif self.rf[l] < self.kappa / 1.5: self.eta[l] *= 1.25
                         self.eta[l] = min(max(self.eta[l], 1e-3), 1e3)
                     if l == L - 2: self.eta[L - 1] = self.eta[L - 2]            # output layer follows the last hidden layer
                     if emit is not None and (diag_now or step % a.eval_every < a.check_every): emit(f'rf_l{l}', self.rf[l], step); emit(f'eta_l{l}', self.eta[l], step)
