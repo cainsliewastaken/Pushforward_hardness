@@ -2392,6 +2392,16 @@ Caveats: one seed; baselines untuned (3 fixed lrs, no schedule, beta2 = 0.99); 5
    therefore not run; the xfold session's --spike_diag is the instrument to use if the onset is to be located. Gradient-norm clipping stays a
    no-op for the sign step; the stability bound in the theory is the per-mode Newton bound (the cap), untested at > 5000 steps, and decay was
    absent from every spiking run, so "decay first, then the cap" is the order of any test.
+   CORRECTION (2026-10-14, from the xfold session's SPIKE_RESULT.md, TF32 test, 16 runs, 2-4 seeds per configuration): the sharpening reading
+   above is WRONG for KronQ's spikes. Measured cause: at some late refresh the Cholesky-QR returns a non-orthonormal rotation (the 1e-12 jitter
+   lets the Cholesky succeed on an ill-conditioned Gram instead of falling back to QR), the accumulated basis error jumps from < 1e-4 to > 0.5
+   within 50-300 steps, and the loss spikes 250-1500 steps later; in every smooth run, in both precisions. On the rough target TF32 itself is
+   the cause: fp32 removes the spikes and reaches a 2.2x LOWER loss (0.0033 vs 0.0073, batch 1024, 10000 steps): TF32 sets a floor there, and
+   every result of this line ran with --tf32 1. Fix under test there: an orthogonality guard after Cholesky-QR with a float64 Householder QR
+   fallback, basis rotations and transports in fp32, TF32 kept for the network's matmuls. Consequences here: the cap test proposed above is
+   moot for the spikes; the large-batch "stability bound" argument drops (large batch: no budget, no cap, a numerically guarded basis); the
+   rough-field references (0.0622 etc.) may be TF32-limited and need re-measuring once the guard lands. AdamW's own spikes at lr 1e-3 are a
+   separate matter and were not examined by that test.
 57. INVENTORY OF THE FAST PATH AND THE METHOD WITHOUT THE BUDGET (job 59767821, 1 node, 18 min, released by the chain; scale_nobudget.sh;
    runs/scale_nobudget/; 9 runs). What the preset runs: (1) the per-layer blocked Kronecker eigenbasis (input covariance every step, probe
    backprop covariance every step, two subspace iterations when due, adaptive period 5-1000, state transported); (2) sign of the momentum
