@@ -2162,6 +2162,43 @@ Caveats: one seed; baselines untuned (3 fixed lrs, no schedule, beta2 = 0.99); 5
    the comparison measures optimization speed on a rough target. Separately (user's question): whether the 256 x 256 target
    is rougher at step 1 than the 64 x 64 one (scale_turbres.sh, measurement only).
 
+48. TURBULENCE, FULL TRAINING RUN (job 59763893, 2 nodes; scale_turbfull.sh; runs/scale_turbfull/; all 400000 pairs at 64 x 64, sampled
+   without replacement epoch by epoch, 20 epochs; batch 256 = 31240 steps, batch 1024 = 7810 steps; seed 1 complete, seed 2 KronQ
+   stopped after seed 1 diverged everywhere; validation 4096 held-out pairs from the test region, in units of the target variance).
+   | increment | final | best along run | wall |   | AdamW 1e-4, b256 | 0.156 | 0.156 (still falling) | 149 s |   | AdamW 3e-4 wd 0.1, b256 | 0.163 | 0.163 | 154 s |
+   | AdamW 3e-4, b1024 | 0.161 | 0.161 | 80 s |   | KronQ 1e-3 budget 0.15, b256 | 1.5e6 | 0.311 (~step 1000) | 487 s |
+   | KronQ 1e-3 budget 0.3, b256 | 12.2 | 0.418 | 499 s |   | KronQ 1e-3 budget 0.3 / 0.6, b1024 | 7e4 / 438 | 0.340 / 0.324 | 195 s |
+   | direct | AdamW 1e-3, b256 | 0.066 | 0.066 | 149 s |   | AdamW 3e-4 wd 0.1, b1024 | 0.071 | 0.071 | 76 s |
+   | KronQ 1e-3 budget 0.15, b256 | 6.3e3 | 0.099 | 514 s |   | KronQ budget 0.3, b256 | 0.80 | 0.199 | 505 s |   | KronQ b1024, 0.3 / 0.6 | 129 / 419 | 0.129 / 0.276 | |
+   (a) ADAMW WINS DECISIVELY: 0.156 vs KronQ's best point along any run 0.31 (increment), 0.066 vs 0.099 (direct), at a third of
+       the wall; the data volume mattered (AdamW 0.273 with 100000 pairs, item 47, -> 0.156 with 400000).
+   (b) EVERY KRONQ RUN DEGRADES FROM ~STEP 1000 AND THEN DIVERGES, at every budget and both batch sizes, where the 5000-step runs
+       (lr decayed to 0 by step 5000) did not. Trajectories (increment, b256, budget 0.15): 0.38 at 1000, 0.61 at 2000, 0.91 at 3000,
+       > 1 (worse than predicting zero) from 4000, then spikes to 1e2-1e4 with partial recoveries. Not a sudden blow-up: a steady
+       loss of the function followed by instability.
+   (c) MECHANISM (from the diagnostics of item 47 and the diag run): the budget binds on every step by ~4x (raw step 0.67 ||E_B||,
+       cut to 0.15), so the effective step is the budget and the lr is irrelevant; the held-out alignment of the steps falls from
+       0.14 to 0.03-0.05 by step ~1000 as the learnable part of the increment is removed; the one-step held-out change -2 c rho +
+       rho^2 is negative only while c > rho / 2 = 0.075, so from ~step 1000 every step RAISES the held-out loss; the budget is
+       relative to the current batch residual, so a worsening model is granted larger steps (runaway); and the sign push's fixed
+       per-mode noise cost (Prop. 2) random-walks the weights outward (weight norms 73 -> 127 in 5000 steps, item 47's run). The
+       field problem never reaches c < rho / 2: its target is fully learnable and the lr decay brings rho down with c (kappa ~ 1,
+       item 42). Adam escapes because its per-coordinate step shrinks on noise coordinates and its lowest lr wins (least diffusion).
+   Comparison protocol note: equal wall is not well-posed here (AdamW's longer runs overfit a small slab, item 45; on the full data
+   AdamW simply wins); the relevant statement is best achievable validation at the method's best setting.
+
+49. DIVERGENCE MECHANISM TEST (same job; scale_turbfull_add.sh, scale_capfix_summary.py; indices 100+; 20 epochs, lr 1e-3, budget 0.15,
+   batch 256, both targets, seed 1). Predictions beforehand: the cap (removed in item 43 on 5000-step evidence) and the initial-
+   residual anchor do NOT stop the degradation (they do not change rho); the anchor removes the runaway loop only; the held-out-coupled
+   length does. Results: | variant | increment final / best / trajectory | direct final / best |
+   | cap on | 3.68 / 0.310 / 0.38 @1000, 0.52 @2000, 7.7 @5000, 15 @20000 | 144 / 0.099 / 0.10 @1000, 0.31 @5000, 142 @20000 |
+   | anchor init | 0.51 / 0.430 / spikes to 2.9e3 and 7.8e3, recovers to 0.62 as lr -> 0 | 0.25 / 0.208 / spikes to 1.2e4, recovers to 2.9 |
+   | held-out budget kappa 1/2 | (crashed at the first window: slow_adapt.py was edited while these two processes were loading their cache;
+     the question is answered by item 50's capped runs) |
+   Both predictions hold: the cap changes nothing (the weight-drift hypothesis is out), the anchor converts the permanent blow-up into
+   spikes with recovery (the runaway loop is real but secondary), and neither reaches AdamW's 0.156 / 0.066. The alignment mechanism
+   of item 48 (c) stands as the explanation; the capped rule (item 50) is its test.
+
 25 (this fork). APPROXIMATION CONTROLS AND BASIS TRACKING (job 59749741, 1 node, 12 min; optimizer/tracking.py, --track;
    scale_exact.sh; runs/scale_exact/). Width 4096, both targets: reference fast configuration (blocks 256, bf16 state, two
    subspace iterations, refresh floor 5) against "exact Kronecker" (full factors, fp32 state, float64 eigh, refresh floor
