@@ -2254,6 +2254,53 @@ Caveats: one seed; baselines untuned (3 fixed lrs, no schedule, beta2 = 0.99); 5
    --eval_every 25 --diag 1 over the last 500 steps); not run. Until then the field numbers quoted should be the best-along-run
    or the median of seeds, and a final-step spike of this kind is a fast-path defect to fix, not a result.
    Allocation 59763893 released by the chain at 22:05 (all.log.done: exit 0,0; squeue empty).
+51. WEIGHT SHRINK TOWARD A FLOOR (NULL) AND WEIGHT DECAY (job 59765399, 1 node, 25 min, released by the chain; scale_udecay.sh; runs/scale_udecay/,
+   12 runs). Reading of the code before the run: the learned weight's hypergradient hg = -lr g_{t+1} D_t is a per-mode next-batch transfer test
+   (it raises w where the next batch's gradient agrees in sign with the last push), normalised by a 100-step EMA and clamped at e^+-4.6, with
+   NO decay: on a mode whose push does not transfer it has zero mean, so u random-walks (the weight norms 73 -> 127 of item 48). Fix under
+   test: u -= eps (u - u_floor) each step (--u_decay eps, --u_floor -2.3, w_floor 0.1), eps 0.0003 / 0.001 (memory 3300 / 1000 steps).
+   Predictions beforehand: field within seed noise (the transferring modes are held up by positive agreement); turbulence train /
+   validation gap narrows and the matched-training-loss deficit (24-34 %) falls. Null: no change on turbulence.
+   | | increment final | direct final / best | field rough | field smooth |   (references: 0.195 / 0.100, 0.082; 0.0622; 1.42e-4)
+   | eps 0.0003 | 0.1923 | 0.0983 / 0.0814 | 0.0979 | 1.71e-4 |
+   | eps 0.001 | 0.1902 | 0.0973 / 0.0810 | 0.1112 | 2.08e-4 |
+   BOTH PREDICTIONS FAIL. Turbulence moves 1-3 % (the null); the field loses 1.6-1.8x on rough and 20-46 % on smooth. So the shrink acted,
+   and it acted on the modes that carry the field result while leaving the turbulence gap untouched: one-step next-batch sign agreement
+   does not separate transferring from memorising pushes. The memorising pushes agree across batches as well as the useful ones do (the
+   same samples recur every epoch, so a per-sample fit IS consistent from batch to batch within an epoch's neighbours and across epochs).
+   The shrink line is closed; no per-step, per-mode test of this kind can see the overfit.
+   WEIGHT DECAY (same job; the fast path's decoupled decay W *= 1 - lr wd on the matrices; item 50 had wd 0.01 only, a 1e-5 shrink per step):
+   | | increment final | direct final / best | train-batch loss at the end (incr / dir) |
+   | wd 0 (item 50) | 0.1946 | 0.1002 / 0.0818 | 0.063 / 0.021 |
+   | wd 0.1 | 0.1568 | 0.0827 / 0.0748 | 0.060 / 0.021 |
+   | wd 0.3 | 0.1273 | 0.0628 / 0.0606 | 0.060 / 0.023 |
+   | AdamW best lr (item 48; its wd tried at 0.1, lr 3e-4 only, slightly worse) | 0.1563 | 0.0660 | 0.112 / 0.044 |
+   At wd 0.3 the training-batch loss is UNCHANGED (0.060 vs 0.063) and the validation falls 35 % (increment) / 37 % (direct): the decay does
+   not slow the fit, it redirects it to directions that transfer. KronQ wd 0.3 is 19 % below AdamW's best on the increment and 5 % below on
+   direct, seed 1, with AdamW's decay not yet swept (item 53). Reading: the slow-mode push removes gradient descent's implicit regulariser
+   (spectral bias: the slow modes, where the sample-specific structure and the leverage noise live, are never reached) and needs an
+   explicit one in its place; with it the roughness advantage survives on replayed data. This is the first turbulence result where KronQ
+   is ahead at the end of training.
+52. SIMPLIFICATION TESTS ON THE FIELD (job 59765617, 1 node, 12 min, released by the chain; scale_simple.sh; runs/scale_simple/; 20 runs,
+   5000 steps, seed 1; references KronQ 0.0622 / 1.42e-4, AdamW lr 3e-4 0.390 / 8.5e-4, AdamW best smooth lr 1e-3 7.2e-4). Three questions
+   from the side chat's list (the others were already answered: the leaky weight is item 51, rho = kappa 2c lost in items 41 and 50, batch
+   1024 is items 44 and 46).
+   (1) IS THE ROUGH RESULT MOSTLY INPUT WHITENING? --whiten pca (rotate the inputs into the data-covariance eigenbasis, fixed from 65536
+   training inputs) and --whiten full (also scale every direction to unit variance, floor 1e-6 x top eigenvalue), plain AdamW:
+   | AdamW | lr 1e-4 | lr 3e-4 | lr 1e-3 |   rough: unwhitened 0.496 / 0.390 / 0.431; pca 0.442 / 0.261 / 0.136; full 0.116 / 0.109 / 0.109
+   |       |        |        |         |   smooth: unwhitened 2.4e-3 / 8.6e-4 / 7.2e-4; pca 1.9e-3 / 6.4e-4 / 5.2e-4; full 2.3e-2 / 3.6e-3 / 1.5e-3
+   YES, MOSTLY. Full whitening takes AdamW from 0.39 to 0.109 on the rough target, 3.6x, learning-rate-insensitive (1e-4 to 1e-3 within
+   7 %); the rotation alone gives 3.2x at lr 1e-3 (Adam's per-coordinate scaling in the eigenbasis is a diagonal whitening). KronQ keeps
+   1.75x over whitened AdamW (0.062 vs 0.109): the hidden layers' bases and the push. On the smooth target whitening HURTS AdamW (2x at
+   full, 1e-3; the floor amplifies the low-variance input directions the smooth target does not use), and KronQ's 1.42e-4 stands 3.7x below
+   the best whitened AdamW. Consequence for the paper: the theory's content, that a rough target is learned through the low-variance input
+   directions, has a one-line practical form for anyone with Adam: whiten the inputs. The full method is the version for the hidden layers.
+   (2) FROZEN BASES (--freeze_after, no refresh on any layer after that step): after step 20: rough 0.636 (the mean: collapse), smooth
+   7.3e-4 (5x worse); after step 200: rough 0.0703 (+13 %), smooth 2.17e-4 (+53 %). The bases must track the moving kernel (2-3 % per step,
+   item 21e); the method is not reducible to a fixed transform. Prediction (10-50 % loss on rough) held for 200, understated for 20.
+   (3) PROBE STATISTICS EVERY k STEPS (--stats_every): k = 2: rough 0.0680 (+9 %), smooth 1.44e-4 (+1 %); k = 5: rough 0.0831 (+34 %),
+   smooth 1.50e-4 (+6 %). The rough target needs the probe every step; the smooth one does not. Prediction held.
+   Also: every run now prints step / val / train-batch loss / wall at each eval (user request), so a run can be killed from its log.
 
 25 (this fork). APPROXIMATION CONTROLS AND BASIS TRACKING (job 59749741, 1 node, 12 min; optimizer/tracking.py, --track;
    scale_exact.sh; runs/scale_exact/). Width 4096, both targets: reference fast configuration (blocks 256, bf16 state, two
