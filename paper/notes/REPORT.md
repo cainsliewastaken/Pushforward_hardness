@@ -2451,6 +2451,21 @@ Caveats: one seed; baselines untuned (3 fixed lrs, no schedule, beta2 = 0.99); 5
    (d) Per-step cost at this width: KronQ 5x AdamW's wall (the eigen-refresh and the probe dominate a 3M-parameter network); at equal wall
    AdamW would get 25000 steps, which on the rough target does not reach 0.17 at any length in the critical-batch scan (item 56 data).
    Method as run here: blocked Kronecker basis with the guarded refresh, sign of momentum, learned weights, lr with linear decay. Nothing else.
+59. MERGE OF THE XFOLD SESSION'S REFACTOR AND PRECISION WORK (2026-10-14; branch xfold merged into main after its jobs 59769209 / 59769295;
+   details in paper/notes/SPIKE_RESULT.md, sections "Precision pairs" and "Hybrid"). (a) The refactor (kronq_orig.KronQOrig, --orig 1: weights
+   in ordinary coordinates, statistics there, bases recomputed at each refresh, the summed gradient rotated in and the update out) equals the
+   per-sample KronQFast in fp32 (rough preset 0.054 vs 0.049; to 1 % through step 2000) and runs 21 % faster at batch 4096: the large-batch
+   form of item 57's cost accounting, built and validated. In TF32 it is 2x worse on rough (0.099): the rotation of the summed gradient in
+   reduced precision destroys the slow-mode components (the cancellation argument), so the two rotations must be fp32. (b) AdamW is identical
+   in fp32 and TF32 (0.390): the precision sensitivity belongs to a method that reaches the slow modes. (c) KronQFast itself in fp32: 0.049
+   against 0.062-0.071 in TF32; the rough references of this line are TF32-limited and should be re-quoted from fp32 runs (8x over AdamW at
+   equal steps on the rough preset). (d) Hybrid on KronQFast (refresh in fp32, weights transformed at re-orthonormalisation, QR guard, network
+   TF32): catastrophic spikes gone (basis error 1e-5 - 7e-5, was 1.0); rough preset 0.057-0.060, and 0.052-0.054 with the activation rotations
+   in fp32 too (--rot_hp), at no measurable cost at batch 256; smooth B1024 T10000 1-2 small spikes against 11. Open there: the long rough run
+   (B1024 T10000), where the hybrid's 0.0079 is still 2.4x above fp32's 0.0033 and --rot_hp was not run; the per-refresh function change of
+   ~5 % of the residual is now the rotated forward's own TF32 rounding. Consequence for the method statement: fp32 for the basis work and
+   the rotations (gradient in, update out, activations in the per-sample form), reduced precision for the network's matmuls; everything else
+   as in item 58.
 
 25 (this fork). APPROXIMATION CONTROLS AND BASIS TRACKING (job 59749741, 1 node, 12 min; optimizer/tracking.py, --track;
    scale_exact.sh; runs/scale_exact/). Width 4096, both targets: reference fast configuration (blocks 256, bf16 state, two
