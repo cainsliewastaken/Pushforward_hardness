@@ -20,11 +20,11 @@ probe), a mode is q_i p_j^T, its Kronecker curvature lam_ij = sigma_i alpha_j (2
 Statistics every step, bases refreshed when the predicted first-order decrease changes by 10 % (floor 5 steps), by two
 warm-started subspace iterations. Cost 2.1-2.5 forward-backwards per step, state 1.96 x parameters.
 
-Results (items 1, 9, 11, 13, 21): rough 0.061-0.076 (SOAP b256 0.083-0.095, AdamW 0.39 at equal steps and 0.25 at 4x
-the steps, Muon 0.26, exact-K Krylov 0.48-0.56); smooth 1.41e-4 (SOAP 1.1-1.4e-4, AdamW 7.2e-4 / 1.56e-4 at 4x). At
-equal FLOPs about 4x over AdamW on rough; a tie on smooth. Per-step wall: 15.8 ms = 2.4x AdamW (with the same diagnostics; ~4.8x AdamW's clean 3.3 ms) with the Cholesky-QR
-subspace iteration (item 34; the batched-QR / eigendecomposition variants used in items 13-33 were 10-50x and must not
-be used). At equal wall on rough: 0.060 vs AdamW ~0.33 (5x).
+Results, 3 seeds, isolated, fused update (item 36): rough 0.062 (seeds 0.060-0.065; SOAP b256 0.091, AdamW 0.39 at
+equal steps, ~0.21 at equal wall), smooth 1.38e-4 (AdamW 8.5e-4 at equal steps, ~1.1e-4 at equal wall; SOAP unstable
+across seeds, 1.3e-4 to 1.4e-3). Wall per step, clean: 12.7 ms (rough) / 8.4 ms (smooth) against AdamW 2.2 ms and SOAP
+28.5 ms: 5.8x AdamW, 2.2x faster than SOAP. At equal wall: ~3.4x better than AdamW on rough, level on smooth. The eager
+path shows a 1.8x seed outlier on rough (numerical sensitivity, item 35); the fused path's seeds agree within 8 %.
 
 ## 2. The mechanism (MECHANISM.md; items 21, 22, 27, 28)
 

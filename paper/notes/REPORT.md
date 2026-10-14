@@ -1852,6 +1852,25 @@ Caveats: one seed; baselines untuned (3 fixed lrs, no schedule, beta2 = 0.99); 5
    Standing configuration: Cholesky-QR, refresh floor 5, unfused (item 34): 15.8 ms per step. The engineering line is
    closed at 2.4x AdamW (with diagnostics; ~4.8x clean); the remaining per-step cost is the per-mode update (28 s) and
    the refresh transports (27 s), both proportional to the number of modes, i.e. to the parameter count.
+36. MULTI-SEED TABLE (job 59758986, 3 nodes, 7 min; scale_seeds.sh, scale_seeds_summary.py; runs/scale_seeds/). Width 4096,
+   depth 2, batch 256, 5000 steps, seeds 1-3, one run per GPU (isolated wall, no diagnostics), fused update fixed (0-d
+   tensor step scalar). Validation MSE at 5000 steps:
+   | method | rough: seeds | mean | max/min | smooth: seeds | mean | max/min | state/P | ms/step |
+   | KronQ fast, eager | 0.0601 0.0595 0.1079 | 0.0758 | 1.81 | 1.386e-4 1.380e-4 1.377e-4 | 1.381e-4 | 1.01 | 1.96 | 15.7 / 11.4 |
+   | KronQ fast, fused | 0.0596 0.0646 0.0608 | 0.0617 | 1.08 | 1.374e-4 1.363e-4 1.400e-4 | 1.379e-4 | 1.03 | 1.96 | 12.7 / 8.4 |
+   | AdamW (lr 3e-4) | 0.3903 0.3917 0.3944 | 0.3921 | 1.01 | 8.61e-4 8.50e-4 8.34e-4 | 8.48e-4 | 1.03 | 2.00 | 2.2 / 2.1 |
+   | SOAP b256 (lr 3e-3) | 0.0913 0.0885 0.0929 | 0.0909 | 1.05 | 1.30e-4 1.38e-3 8.17e-4 | 7.75e-4 | 10.6 | 2.46 | 28.5 |
+   (ms/step rough / smooth; the rough runs refresh more often.)
+   Readings. (a) The method's rough result is 0.060-0.065 on five of six runs and 0.108 on one (eager, seed 3): the 1.5x
+   numerical sensitivity of item 35 appears as a seed outlier; the fused variant's three seeds agree within 8 %. Taking
+   the fused rows as the method: rough 0.062 (SOAP 0.091: 1.47x; AdamW 0.39: 6.3x at equal steps), smooth 1.38e-4
+   (AdamW 8.5e-4: 6.1x; SOAP's mean 7.7e-4 but its best seed 1.30e-4: SOAP at lr 3e-3 is unstable on smooth, 10x
+   across seeds). (b) WALL, clean: KronQ fused 12.7 ms per step on rough (8.4 on smooth), AdamW 2.2 ms, SOAP 28.5 ms:
+   the method is 5.8x AdamW per step on rough and 2.2x faster than SOAP. At equal wall on rough AdamW gets 5.8x the
+   steps (~0.21 from its curve, items 9 / 29 extrapolation): the method is ~3.4x better at equal wall on rough, and
+   on smooth AdamW at 5.8x the steps (~1.1e-4 by its curve) is level with it: the smooth advantage is at equal steps only.
+   (c) The fused update is worth 1.24x in wall and removes the eager path's outlier; it is the standing configuration.
+   These rows replace every single-seed number of items 11-35 in the paper's table.
 
 25 (this fork). APPROXIMATION CONTROLS AND BASIS TRACKING (job 59749741, 1 node, 12 min; optimizer/tracking.py, --track;
    scale_exact.sh; runs/scale_exact/). Width 4096, both targets: reference fast configuration (blocks 256, bf16 state, two
