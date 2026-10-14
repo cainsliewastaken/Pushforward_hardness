@@ -42,3 +42,19 @@ Jobs 59767397 (scale_spikefield, crashed at the realised-change logger, onsets o
    avoids the failure is not known. Fix to test (a numerical guard, no new constant in the method): check V^T V after Cholesky-QR and fall
    back to Householder QR in float64 when it is not orthonormal to working precision; rotations and transports in fp32 with TF32 kept for the
    network's own matmuls.
+
+## QR guard (job 59768606, frozen code 83e58e9; same configs and seeds as scale_tf32, --qr_guard 1)
+| config | unguarded (scale_tf32): seeds spiked, spikes, final | guarded: seeds spiked, spikes, final | basis error max | guard fallbacks |
+| smooth B1024 fp32, seeds 1-2 | 2 of 2 (all 4 of 4), 8 / 5, 3.2e-4 / 8.5e-5 | 0 of 2, 0 / 0, 4.6e-5 / 3.8e-5 | 2e-5 (was 1.0) | 5580 / 5826, first at 7346 / 6753 |
+| smooth B1024 TF32, seeds 1-4 | 4 of 4, 11 / 11 / 6 / 9, 5.5e-3 / 4.8e-4 / 2.7e-2 / 1.3e-3 | 3 of 4, 2 / 1 / 0 / 3, 4.4e-5 / 3.8e-5 / 4.1e-5 / 6.0e-5 | 4.5-5.5e-3 (was 1.0) | 3200-7300, first 6680-7090 |
+| rough B1024 TF32, seeds 1-2 | 2 of 2, 3 / 1, 0.0102 / 0.0473 | 2 of 2, 1 / 1, 0.086 / 0.0102 | 5.5e-3 | 10778 / 2908, first 4854 / 5454 |
+1. CONFIRMED: the catastrophic spikes are the Cholesky-QR returning non-orthonormal rotations late in training (the guard fires thousands of
+   times from step ~6700 on the smooth target, ~4900 on the rough, exactly where the basis broke before). With the guard and fp32: no spikes,
+   basis error 2e-5. With the guard and TF32: the catastrophic spikes are gone (finals within 1.5x of the best instead of 10-700x); small ones
+   remain, with the basis error held at ~5e-3 by TF32 drift in the rotations and transports.
+2. Rough TF32 still spikes (one large final spike, 0.086); rough fp32 without the guard did not spike and reached 2.2x lower loss: on the
+   rough target the remaining problem is the TF32 drift, not the Cholesky failure.
+3. Cost: guarded TF32 129-138 s against 135 s unguarded (no measurable cost); guarded fp32 256-259 s against 233 s (+10 %), from the
+   float64 Householder fallbacks in the last third of training.
+Next: the guard on by default; basis rotations, transports and the rotated-parametrisation products in fp32 with TF32 kept for the
+network's own matmuls (removes the drift at a fraction of full fp32's 1.7-1.9x runtime).
