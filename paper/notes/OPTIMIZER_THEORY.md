@@ -48,6 +48,16 @@ Three things determine such a nudge, and each has a theory statement and a statu
      near-degenerate SUBSPACE, and the equal-magnitude sign push on such a subspace is a subspace push); the output-space
      constant 0.2 and the lr are empirical, set by the grid (item 40), and item 42's correction says why no local rule
      can set them: the quantity a local rule reads (gain minus cost over a window) is 1-2 % of the terms it sits between.
+     The fixed budget is not safe on every problem: on 2D turbulence (400k pairs, 20 epochs, lr 1e-3) every run at budget
+     0.15 diverges after step 1000-5000 (item 48) while the same budget on the field is the working point; the ceiling is
+     problem-dependent and below 0.15 there. A held-out-coupled cap, budget_t = min(rem, kappa 2 c_t) with c_t the
+     held-out alignment of the step (slow_adapt.py --sa_cap 1), removes the divergence (item 50), but as a rule it is not
+     what it claims: on turbulence c_t falls to 0.003-0.013 within 2500 steps and the budget sits on its 0.03 floor for the
+     rest of the run, and on the smooth field the cap binds and costs 1.5-3x against the uncapped run, because the batch
+     output change overstates the held-out change 9-145x (items 32, 50) and the per-step quadratic does not set the useful
+     length. Status: a problem-dependent ceiling exists and the method has no rule for it; the cap is a safety that
+     substitutes a small constant for the divergence. On turbulence KronQ with it reaches 0.19 (increment; AdamW 0.156) and
+     0.079 best / 0.095 final (direct; AdamW 0.066).
 
 Not ingredients: the cap (active on 0.3 % of modes, item 42b; it is ingredient 3 computed from one batch instead of the
 sequence, and the sequence estimate is always smaller), the regime switch (retracted, item 41), the kappa rules (items

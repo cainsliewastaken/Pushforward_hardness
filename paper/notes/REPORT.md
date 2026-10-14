@@ -2198,6 +2198,62 @@ Caveats: one seed; baselines untuned (3 fixed lrs, no schedule, beta2 = 0.99); 5
    Both predictions hold: the cap changes nothing (the weight-drift hypothesis is out), the anchor converts the permanent blow-up into
    spikes with recovery (the runaway loop is real but secondary), and neither reaches AdamW's 0.156 / 0.066. The alignment mechanism
    of item 48 (c) stands as the explanation; the capped rule (item 50) is its test.
+50. CAPPED BUDGET (same job 59763893, released at its end by the chain; scale_capfix.sh, scale_capfix_summary.py; runs/scale_capfix/,
+   18 runs). Rule under test: budget_t = min(rem, kappa_max x 2 c_t) with c_t the held-out alignment of the actual step, measured in
+   windows of 40 steps every 250 on a fixed fresh batch (slow_adapt.py --sa_cap 1; floor --sa_rem_min 0.03), budget relative to
+   min(current, step-1) batch residual (--rem_anchor min), cap off. Predictions beforehand: (i) turbulence (lr 1e-3, budget 0.15,
+   20 epochs = 31240 steps, batch 256) does not diverge; (ii) the field (5000 steps, budget 0.2) is unchanged within seed noise,
+   since c ~ 0.04-0.09 there and 2c sits near the fixed budget. Null: (i) fails if the runs still blow up, (ii) fails if the field
+   moves by more than the seed spread (~5 %).
+   TURBULENCE (seed 1; AdamW references from item 48: increment 0.156 at lr 1e-4 (0.173 at 3e-4, 0.183 at 1e-3), direct 0.066 at
+   lr 1e-3 (0.071 at 1e-4, 0.101 final / 0.084 best at 3e-4)):
+   | target | kappa_max | final | best | val at 1000 / 2000 / 5000 / 10000 / 20000 | train-batch loss at the end |
+   | increment | 0.75 | 0.1933 | 0.1933 | 0.231 / 0.214 / 0.202 / 0.198 / 0.196 | 0.063 |
+   | increment | 1.0 | 0.1946 | 0.1946 | 0.236 / 0.214 / 0.203 / 0.199 / 0.197 | 0.063 |
+   | increment | 1.0, wd 0.01 | 0.1899 | 0.1899 | 0.236 / 0.213 / 0.200 / 0.194 / 0.192 | 0.063 |
+   | direct | 0.75 | 0.0951 | 0.0785 @2000 | 0.083 / 0.079 / 0.081 / 0.086 / 0.092 | 0.021 |
+   | direct | 1.0 | 0.1002 | 0.0818 @2000 | 0.090 / 0.082 / 0.085 / 0.090 / 0.097 | 0.021 |
+   | direct | 1.0, wd 0.01 | 0.0977 | 0.0812 @2000 | 0.090 / 0.081 / 0.084 / 0.088 / 0.094 | 0.021 |
+   (i) HOLDS: none of the six runs diverges (item 48: every uncapped KronQ run at lr 1e-3 blew up by step 5000-20000; item 49: cap on
+   and init anchor did not stop it). The increment target decreases monotonically to 0.19, the best KronQ turbulence number of the
+   line (uncapped best-along-run 0.31), 24 % behind AdamW's best lr and ahead of AdamW at lr 3e-4 and 1e-3. The direct target
+   reaches 0.079-0.082 at step 2000 and then rises 20 % while the train-batch loss keeps falling (0.044 -> 0.021): a train /
+   validation gap (final 0.021 / 0.095; AdamW lr 1e-3 0.044 / 0.066), i.e. fitting the training slab, not a blow-up. AdamW at lr
+   3e-4 does the same (0.084 -> 0.101, train 0.024). Weight decay 0.01 moves both targets by 2 % (within what one seed resolves).
+   kappa_max 0.75 vs 1.0: 1 % apart. The cap's own trajectory: c 0.13 (increment) / 0.35 (direct) at step 40, 0.012 by step 2500,
+   then 0.003-0.013 to the end on every run, so the rule's value kappa x 2c (0.006-0.026) was BELOW the floor from step ~2500 on and
+   the runs were in effect at a constant budget 0.03 for 90 % of training. The ratio of the raw batch output change to the held-out
+   one (sa_rho_batch_over_heldout) is 10 (increment) / 145 (direct) at step 40 and 8-60 later, so the held-out change per step at
+   the floor is ~0.001-0.004 of the residual, well under 2c: the slow rise on direct is NOT the break-even mechanism of item 48;
+   it is the gap above. What the test shows is therefore: a budget of 0.03 at lr 1e-3 does not diverge where 0.15 does (the
+   ceiling on turbulence is below 0.15, item 48), and the alignment-coupled rule as written mostly reduces to that floor.
+   FIELD (3 seeds x 2 targets x kappa_max {0.75, 1.0}; references = the same preset uncapped (scale_min, item 43): rough 0.0622 /
+   0.0626 / 0.0618, smooth 1.42e-4 / 1.38e-4 / 1.42e-4 for seeds 1-3):
+   | kappa_max | rough s1 / s2 / s3 | smooth s1 / s2 / s3 |
+   | 1.0 | 0.0572 / 0.0589 / 0.0614 best (0.113 final, see below) | 2.15e-4 / 2.16e-4 / 2.27e-4 |
+   | 0.75 | 0.0662 / 0.0665 best (0.108 final) / 0.0649 | 4.30e-4 / 4.67e-4 / 4.36e-4 |
+   (ii) HOLDS ON ROUGH, FAILS ON SMOOTH. Rough: kappa 1.0 is 1-8 % better than the reference on all three seeds (the cap binds
+   early, c 0.07-0.09 -> budget 0.15-0.17 at steps 40-800, then 0.09-0.11 against the fixed 0.2), kappa 0.75 is 5-7 % worse: at
+   most a seed-level effect, as predicted. Smooth: 1.55x worse at kappa 1.0 and 3.1x worse at 0.75. There the cap binds hard
+   (c 0.23 -> 0.02 over the run, budget 0.2 -> 0.04-0.05 at kappa 1.0 and to the 0.03 floor from step 1500 at kappa 0.75), and
+   the uncapped run, whose batch output change exceeds the rule's "break-even" 2c by 4-5x throughout, is the better one. The
+   rule's premise (a step with batch change rho > 2 c_heldout raises the held-out loss) is false on the smooth target, for the
+   reason item 32 found: the batch change overstates the held-out change (ratio 9-24 on smooth, 10-145 on turbulence, 0.4-1.7 on
+   rough), and even on the held-out side the per-step quadratic does not set the useful length (the held-out line search, item
+   32, under-stepped 2-6x). The capped budget is thus a SAFETY that replaces the divergence by a 0.03 floor, not a length rule;
+   it costs nothing on the rough field, 1.5x on the smooth field, and on turbulence it leaves KronQ 24 % (increment) and 45 %
+   (direct, final; 19 % at best) behind AdamW's best lr.
+   LAST-STEP SPIKE (noted, not explained). Two of the six rough-field runs jump at the final evaluation (seed 2 kappa 0.75: 0.0665
+   at step 4750 -> 0.1077 at 5000; seed 3 kappa 1.0: 0.0614 -> 0.1130), with the train-batch loss jumping too (0.067 -> 0.106,
+   0.064 -> 0.112), so the weights moved in the last 250 steps where lr <= 5e-5. This is not new to the cap: scanning all 150
+   healthy rough-field KronQ runs of the line (val < 0.2 before the last eval), 21 (14 %) jump > 30 % at the last interval against
+   16 jumps in the 19 earlier intervals combined (0.6 % per interval), with cap on and off, before and after slow_adapt (e.g.
+   scale_min j14 0.0688 -> 0.1005, scale_seeds j16 0.0625 -> 0.1079, scale_fused j0 0.0626 -> 0.0922). The fast path's step is
+   lr x w x sign(C) with the hypergradient scaled by lr and normalised by a 100-step EMA, and nothing in it grows as lr -> 0 by
+   inspection; the cause is open. The diagnostic that would locate it costs ~2 min of one GPU (one jumping configuration with
+   --eval_every 25 --diag 1 over the last 500 steps); not run. Until then the field numbers quoted should be the best-along-run
+   or the median of seeds, and a final-step spike of this kind is a fast-path defect to fix, not a result.
+   Allocation 59763893 released by the chain at 22:05 (all.log.done: exit 0,0; squeue empty).
 
 25 (this fork). APPROXIMATION CONTROLS AND BASIS TRACKING (job 59749741, 1 node, 12 min; optimizer/tracking.py, --track;
    scale_exact.sh; runs/scale_exact/). Width 4096, both targets: reference fast configuration (blocks 256, bf16 state, two
