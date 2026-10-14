@@ -1871,6 +1871,38 @@ Caveats: one seed; baselines untuned (3 fixed lrs, no schedule, beta2 = 0.99); 5
    on smooth AdamW at 5.8x the steps (~1.1e-4 by its curve) is level with it: the smooth advantage is at equal steps only.
    (c) The fused update is worth 1.24x in wall and removes the eager path's outlier; it is the standing configuration.
    These rows replace every single-seed number of items 11-35 in the paper's table.
+37. COMPONENT ABLATION 2 (job 59759622, 3 nodes, 5 min; scale_ablate2.sh; runs/scale_ablate2/). Standing configuration
+   (Cholesky-QR, floor 5, fused), one change at a time, one seed, one run per GPU. Rough single-seed differences below
+   ~1.5x are not resolved (item 35); smooth is reproducible to 2 %.
+   | variant | rough | x ref | smooth | x ref | ms/step |
+   | reference | 0.0596 | 1.00 | 1.394e-4 | 1.00 | 14.5 |
+   | momentum off (b1 = 0) | 0.1125 | 1.89 | 8.43e-4 | 6.05 | 11.1 |
+   | b1 0.8 | 0.0960 | 1.61 | 2.02e-4 | 1.45 | 15.2 |
+   | b1 0.95 | 0.1795 | 3.01 | 1.33e-4 | 0.95 | 15.3 |
+   | statistics EMA 0.9 | 0.0827 | 1.39 | 1.36e-4 | 0.97 | 15.5 |
+   | statistics EMA 0.99 | 0.1331 | 2.23 | 1.47e-4 | 1.05 | 13.2 |
+   | hypergradient rate 0.003 / 0.03 | 0.0657 / 0.0747 | 1.10 / 1.25 | 1.72e-4 / 1.65e-4 | 1.23 / 1.19 | 14.5 / 16.2 |
+   | cap without the 1/L | 0.0618 | 1.04 | 1.41e-4 | 1.01 | 14.4 |
+   | no lr decay | 0.0743 | 1.25 | 2.13e-4 | 1.53 | 15.7 |
+   | cosine decay | 0.0705 | 1.18 | 1.36e-4 | 0.98 | 14.8 |
+   | blocks 128 | 0.0847 | 1.42 | 1.72e-4 | 1.24 | 12.0 |
+   | blocks 512 | 0.0733 | 1.23 | 1.10e-4 | 0.79 | 23.7 |
+   | empirical S factor (gradient covariance, no probe) | 0.1153 | 1.93 | 1.09e-4 | 0.78 | 14.3 |
+   Readings. (a) MOMENTUM IS ESSENTIAL and 0.9 is near its optimum: off = 1.9x / 6x worse; 0.8 = 1.6x / 1.45x; 0.95 = 3x
+   worse on rough (lag) and equal on smooth. First time this was tested at this width. (b) The statistics must be fresh
+   on rough: EMA 0.99 (100-step memory) = 2.2x worse, 0.9 within noise; 0.95 stands. (c) The hypergradient rate 0.01 is
+   within 1.1-1.25x of its neighbours on both sides: at its optimum. (d) The 1/L in the cap is INERT (1.04 / 1.01):
+   removed from the default (the cap is now exactly the Gauss-Newton step, as derived). (e) The lr decay matters
+   (none: 1.25x / 1.53x worse); linear and cosine are equivalent. (f) Block size: 128 loses on both (1.4x / 1.24x, 17 %
+   faster); 512 is 0.79x on smooth (better) at 1.6x the cost and within noise on rough: smooth wants larger blocks
+   (consistent with the fork's full-factor result, item 25). (g) The output-side factor: the random-probe Gauss-Newton
+   factor is 1.9x better on ROUGH, the empirical gradient covariance (SOAP's choice) is 1.28x better on SMOOTH, at equal
+   cost. So the two targets want different output-side statistics as well as different block sizes; a configuration
+   with blocks 512 + empirical S on smooth is predicted at ~0.6x the reference (8.5e-5, better than SOAP's best seed)
+   and is a per-target choice unless selected online from where the residual sits (measurable: item 21).
+   Verdict on the add-on question: of the nine untested choices, one is inert (1/L, removed), seven sit at or near their
+   optima (momentum 0.9, stats 0.95, hyper rate 0.01, linear decay, probe S on rough, blocks 256 on rough, decay on),
+   and two are target-dependent (block size, S factor). Every active component now has a number.
 
 25 (this fork). APPROXIMATION CONTROLS AND BASIS TRACKING (job 59749741, 1 node, 12 min; optimizer/tracking.py, --track;
    scale_exact.sh; runs/scale_exact/). Width 4096, both targets: reference fast configuration (blocks 256, bf16 state, two

@@ -88,6 +88,14 @@ network and belong in the paper. They do NOT explain the step: the method operat
 (push ~1e-3 vs box 3-200) and far beyond the first-order radius on the hidden layer; the box-edge rule and the
 per-layer budget both lose (items 20, 30).
 
+## 3b. Component ablation (item 37, single seed, Cholesky-QR fused configuration)
+Momentum essential (off: 1.9x rough / 6x smooth worse; 0.9 near-optimal, 0.95 lags 3x on rough); statistics EMA 0.95
+near-optimal (0.99 = 2.2x worse on rough); hypergradient rate 0.01 at its optimum (+-1.2x either side); the 1/L in the
+cap inert (removed: the cap is the Gauss-Newton step exactly); lr decay needed (none: 1.25x / 1.5x worse; cosine =
+linear); blocks 128 worse on both, 512 better on smooth (0.79x) at 1.6x cost; the probe Gauss-Newton S factor 1.9x
+better on rough, the empirical gradient covariance 1.28x better on smooth. Target-dependent choices: block size and the
+output-side statistic; everything else is at its optimum and has a number.
+
 ## 4. Refuted, each by its own experiment (do not revisit without new evidence)
 
 * Lift as the mechanism, second order (no concave modes: fraction 1e-5 to 1e-3, residual curvature ~1 % of GN and
