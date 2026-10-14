@@ -1903,6 +1903,23 @@ Caveats: one seed; baselines untuned (3 fixed lrs, no schedule, beta2 = 0.99); 5
    Verdict on the add-on question: of the nine untested choices, one is inert (1/L, removed), seven sit at or near their
    optima (momentum 0.9, stats 0.95, hyper rate 0.01, linear decay, probe S on rough, blocks 256 on rough, decay on),
    and two are target-dependent (block size, S factor). Every active component now has a number.
+38. KAPPA TEST, PHASE 1 (job 59760110; --kappa_diag; mechanism.KappaDiag; runs/scale_kappa/diag_*.jsonl; side-chat plan "settling
+   the learning rate from the chain"). Reversal fraction r_fast = fraction of step t's output change on the true kernel's
+   top-32 directions (fixed fresh batch) cancelled by step t+1; the plan's two-stage formula kappa_pred = 1 / (2 (1 - r)) for
+   the budget rho_t = kappa x 2 c_t. Reference configuration, windows of 59 steps:
+   | window | r_fast median (q25, q75) | kappa_pred | r_all | fast-energy share of the step | held-out cos fast / slow / all |
+   | rough, steps 2-60 | +0.09 (-0.17, +0.32) | 0.55 | -0.12 | 0.04 | 0.43 / 0.064 / 0.066 |
+   | rough, steps 1000-1060 | +0.34 (+0.21, +0.47) | 0.76 | +0.31 | 0.30 | 0.41 / 0.025 / 0.030 |
+   | smooth, steps 2-60 | -0.76 (-0.90, -0.45) | 0.28 | -0.73 | 0.055 | 0.36 / 0.18 / 0.18 |
+   | smooth, steps 1000-1060 | -0.35 (-0.67, +0.05) | 0.37 | -0.61 | 0.32 | 0.54 / 0.077 / 0.094 |
+   Reading. On rough the fast-mode reversal grows from 0.09 to 0.34 over the run and kappa_pred rises from 0.55 to 0.76,
+   the low end of the reference's band (0.75-0.95, item 31). On smooth the reversal is NEGATIVE: consecutive steps
+   reinforce on the fast modes (momentum-driven continuation, no overshoot), so the two-stage formula gives kappa < 0.5,
+   below the one-step optimum, while the smooth reference runs at kappa ~ 0.6-1 against the budget without harm: the
+   formula's premise (overshoot cancelled by the next step) does not hold there. Also: early in both runs only 4-6 % of
+   the step's output energy is on the true top-32 directions (30 % by step 1000): the "fast modes carry the quadratic cost"
+   premise (item 28, measured in the Kronecker basis) is not what the TRUE kernel's top-32 see at the start. Phase 2 (kappa
+   = 0.5 / 0.75 / 1.0 both targets, 0.3 on smooth; c measured every 10 steps; no lr schedule) running.
 
 25 (this fork). APPROXIMATION CONTROLS AND BASIS TRACKING (job 59749741, 1 node, 12 min; optimizer/tracking.py, --track;
    scale_exact.sh; runs/scale_exact/). Width 4096, both targets: reference fast configuration (blocks 256, bf16 state, two
