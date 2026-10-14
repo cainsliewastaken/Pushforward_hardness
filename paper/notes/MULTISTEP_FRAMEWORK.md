@@ -341,13 +341,113 @@ a computable quantity that has not been computed.
 Every horizon is logarithmic: in the batch size, the training-set size, the evaluation-set size, or the inverse one-step
 error. The intermittency rates delta and kappa of the finite-time growth set the scale of all the sampling horizons.
 
-## D. Roughness with the metric as a parameter (plan)
-Write the roughness paper's floor, step bound, Krylov functional and held rough error for a general metric M (M = I:
-one-step; M = M_v: rollout target). B2 is the floor part. What is still needed:
- - the slow part E_gamma and its Krylov certificate in the M metric, i.e. for the kernel K M;
- - the operator-target version (MULTISTEP_CHAIN M9: the untransferable subspace) as the off-data part;
- - the fixed-horizon floor the draft left open, through the roughness of S_tau measured in the leading adjoint
-   patterns (C1).
+## D. Roughness with the metric as a parameter (written 2026-10-14)
+
+THEOREM D1 (the roughness theory in any metric). Let M be symmetric positive definite on the space of sampled
+functions (N entries), <a, b>_M = a^T M b. Measure the first-order step E + Phi g in ||.||_M. Every statement of the
+roughness paper that uses only a linear map from steps to sampled functions and an inner product then holds verbatim
+in (R^N, <.,.>_M), with the kernel K replaced by K M:
+ - The single-step value F_M(s) = min_{|g| <= s} ||E + Phi g||_M.
+ - The slow part E_{M,gamma} = gamma (K M + gamma)^{-1} E and the identity F_M(s_gamma) = ||E_{M,gamma}||_M.
+ - The supremum over all roughness functions equals F_M, attained by the rank-one functional u -> <E_{M,gamma}, u>_M,
+   i.e. by the vector M E_{M,gamma}.
+ - The Krylov certificate in span{E, K M E, (K M)^2 E, ...}.
+ - The local-complexity floor, with the norm constant and the peak feature roughness computed in <.,.>_M.
+ - The signed path floor (B2 is its rollout-target form).
+K M is self-adjoint and PSD for <.,.>_M, with the spectrum of M^{1/2} K M^{1/2}. A degenerate M (PSD, e.g. a single
+horizon) gives the same statements on the quotient by ker M.
+Proof. z = M^{1/2} E is an isometry from (R^N, <.,.>_M) to Euclidean R^N. It maps the features to M^{1/2} Phi, the kernel
+to M^{1/2} K M^{1/2}, and every seminorm R to R o M^{-1/2}. Apply the paper's theorems in z and map back:
+M^{-1/2} gamma (M^{1/2} K M^{1/2} + gamma)^{-1} M^{1/2} = gamma (K M + gamma)^{-1}. The paper's statements are finite-dimensional
+Hilbert-space statements (the draft's Thm "Each operator error obeys the roughness theory" uses the same fact).  []
+Instances:
+ - M = I: one-step training.
+ - M = M_v: the rollout target at first order in eps (MULTISTEP_CHAIN section 2).
+ - M = M_{delta_p}: a single horizon (D3).
+ - The operator targets of MULTISTEP_CHAIN M9 (Jacobian and higher): the same theory on tensor-valued sampled functions
+   with Frobenius M.
+Reading. Under gradient descent on the target's own loss (w = v), E evolves by -K M_v E, so the M-geometry slow part
+keeps the paper's meaning, "what training on this loss removes slowly". Under one-step training it is only a spectral
+filter, as the draft noted for multistep training in the Euclidean metric. "Rough" is therefore relative to a metric.
+Multistep training changes the metric in which the one-step target's roughness is measured, from K to K M_v.
+
+PROPOSITION D2 (metric sandwich; the most one step of unrolling can gain). For M positive definite,
+        lambda_min(M)^{1/2} F_I(s)  <=  F_M(s)  <=  lambda_max(M)^{1/2} F_I(s),
+and the step that is best in the Euclidean metric, g_I(s), has ||E + Phi g_I(s)||_M <= kappa(M)^{1/2} F_M(s). For one
+first-order step of length s, the best step for the rollout target beats the best step for the one-step loss, measured
+on the rollout target, by at most sqrt(cond M_v). Together with B1(a): there is no gain without anisotropy of M_v, and
+at most sqrt(cond M_v) per step with it.
+Proof. lambda_min(M) |y|^2 <= y^T M y <= lambda_max(M) |y|^2 applied to the minimisers.  []
+This is loose for long windows (cond M_v grows like p^2 from accumulation and e^{2 Lambda tau} from growth). It says only
+that room exists, and how much at most.
+
+PROPOSITION D3 (a local-complexity floor at a fixed horizon). This answers the draft's open item "no local-complexity
+floor is known for the error at a fixed horizon". First order in eps, learned propagators frozen. For each start take
+the SVD of its horizon block L_{k,p} (d x pd):
+        L_{k,p} = G_k xi_k alpha_k^T + R_k,     G_k = sigma_1(L_{k,p}),  |xi_k| = |alpha_k| = 1,  xi_k orthogonal to range(R_k),
+||R_k|| = sigma_2(L_{k,p}). Let s_k = alpha_k^T eps_k: the start's one-step error sequence projected on its leading adjoint
+pattern. Exactly, by Pythagoras,
+        ||e(tau)||_rms^2 = (1/n) sum_k G_k^2 s_k^2 + (1/n) sum_k |R_k eps_k|^2  >=  ||s||^2_{D_G},    D_G = diag(G_k^2)/n.
+s is a sampled function of the start with features Phi_s = Acal^T Phi (each start's one-step features projected on its
+adjoint pattern) and target Acal^T U (the method's one-step target U projected the same way). D1 with the metric D_G
+therefore gives, for any update rule and any S:
+ - the signed floor ||e_S(tau)||_rms >= [ <phi, s_0>_{D_G} - sum_{s<S} ||Phibar_{s,s}^T D_G phi|| |d_s| ]_+ for every phi with ||phi||_{D_G} = 1;
+ - for every roughness function R (norm constant and peak feature roughness in D_G),
+        ||e(tau)||_rms  >=  ||s_{D_G,gamma}||_{D_G}  >=  ( R(Acal^T U) - R(Acal^T c_p N) - sigma_R Upsilon(gamma)^{1/2} ) / C_R.
+The fixed-horizon target is the scalar function x_0 -> sum_i alpha_i(x_0)^T U(x_i): the one-step target transported along the
+trajectory from x_0 and projected on the leading adjoint pattern. It is measured in the metric that weights each start
+by its squared growth.
+Proof. SVD; xi_k is orthogonal to range(R_k), so the two parts of e_k(tau) = G_k xi_k s_k + R_k eps_k are orthogonal. s_S - s_0 =
+sum Acal^T Phibar_s d_s exactly at first order with Acal frozen. Apply D1 on R^n with metric D_G.  []
+No hypothesis H is needed here: the SVD is exact, and H (C1) is only needed to say that the dropped part
+|R_k eps_k| is small (sigma_2/sigma_1 = 0.21 at tau = 1.28 and 0.10 at 2.56 on L63, C1's check).
+
+PROPOSITION D4 (growth does not make the fixed-horizon target rougher; it makes the metric intermittent). For
+positive weights G_k, the minimum-norm step that fits the fixed-horizon target exactly at first order,
+min { |g| : Acal^T Phi g = -s }, does not depend on G. Equivalently the RKHS norm of D_G^{1/2} s under the kernel
+D_G^{1/2} K_s D_G^{1/2} equals s^T K_s^{-1} s, with K_s = Acal^T K Acal. What does depend on G is how the target's energy is spread
+over the spectrum of D_G^{1/2} K_s D_G^{1/2}, i.e. the slow part at finite gamma and the stable learning rate
+(lambda_max grows with max_k G_k^2).
+Proof. The constraint is the same linear system with or without the weights.
+(D_G^{1/2} s)^T (D_G^{1/2} K_s D_G^{1/2})^{-1} (D_G^{1/2} s) = s^T K_s^{-1} s.  []
+CHECK (2026-10-14, true L63 tangent flow, 2,000-4,000 starts on the attractor, top singular vectors and value of P(tau, 0)):
+   tau                                              0.16    0.32    0.64    0.96    1.28    1.92
+   median |d alpha|/|dx|  (adjoint direction field)     0.027   0.036   0.060   0.063   0.072   0.079
+   median |d xi|/|dx|     (forward direction field)     0.056   0.076   0.17    0.27    0.33    0.68
+   median |d ln G|/|dx|   (growth field)                0.023   0.044   0.12    0.17    0.28    0.60
+The last row is identical at separations 1e-7, 1e-3 and 1e-1, so the field is smooth at those scales with a shrinking
+length scale. The adjoint direction field, which builds the projected target, stays smooth (its Lipschitz constant
+roughly triples and levels off). The growth field sharpens at about 1.9 per time unit, the known sharpening of
+finite-time-Lyapunov ridges.
+Earlier conjecture, now refuted: that the long-horizon target becomes rough through the adjoint direction field. It
+does not on L63.
+What D3-D4 say about the relation to roughness.
+ - The projected fixed-horizon target is about as smooth as the one-step target, so the distance the parameters must
+   move (D4) does not blow up with the horizon.
+   CONSISTENT: check (v) of results_main, where the first-order optimal step removes 70-90 % of the error at window 1.28
+   while gradient and Adam steps of the same length increase it. A good nearby step exists; gradient rules cannot take it.
+ - What blows up is the metric: its weights G_k^2 are heavy-tailed across starts (the statistical face, C2 and C3) and
+   concentrated on thinner and thinner ridges of the growth field (the spatial face, this check). This is the same
+   object in two views.
+ - Spatially: once the ridge width ~ 1/|grad ln G| falls below the spacing of the training starts on the attractor
+   (~ n^{-1/d_A}, d_A ~ 2.06 for L63), the starts no longer resolve where the weight sits. This is the spatial form of C3's
+   ln(n)/kappa. PREDICTION: tau_res ~ [ln(n)/d_A + ln(L_A |grad ln G|_0^{-1})] / r_G with r_G ~ 1.9 on L63, compared with
+   C3b's horizons from the same n. Not computed.
+
+The relation to roughness theory, in one paragraph. Roughness is relative to a metric (D1). One-step training sees the
+one-step target's roughness in K. The rollout target sees it in K M_v, and multistep training on that target removes
+error in that order. Unrolling helps when the one-step held rough error, which is slow in K, is fast in K M_v and
+amplified by M_v (B1, B2): a pure roughness statement. It stops helping when the rollout metric degrades, not when the
+target gets rougher. The projected target stays about as smooth as the one-step target (D3, D4, check). The rollout
+metric becomes ill-conditioned (C1), and intermittent across starts both statistically (C2, C3) and spatially (D4's
+check). The off-data part (MULTISTEP_CHAIN M8-M10) is the roughness theory applied to the operator targets, the
+Jacobian first.
+
+Still open in D.
+ - The local-complexity floor of D3 for a fixed seminorm on the start set needs R(Acal^T U) bounded below for a
+   concrete R. That requires the regularity of alpha, which is measured (smooth on L63) but not proved.
+ - D4's resolution horizon is a prediction.
+ - D1 is first order in the step, like the paper.
 
 ## Paper skeleton (separate paper)
  1. Setting; one-step versus unrolled as two drives through one kernel (M1, M2).
