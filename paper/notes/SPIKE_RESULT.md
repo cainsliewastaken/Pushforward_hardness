@@ -58,3 +58,12 @@ Jobs 59767397 (scale_spikefield, crashed at the realised-change logger, onsets o
    float64 Householder fallbacks in the last third of training.
 Next: the guard on by default; basis rotations, transports and the rotated-parametrisation products in fp32 with TF32 kept for the
 network's own matmuls (removes the drift at a fraction of full fp32's 1.7-1.9x runtime).
+
+## The refactor (kronq_orig.py, --orig 1; job 59769038, frozen code 70a9e8d; orig_summary.py)
+CPU, fp32, width 96, 200 steps: trajectory within 2.4e-4 of KronQFast, refresh function change exactly 0, basis error 6.5e-8.
+GPU, all TF32, guard on: smooth preset 1.26e-4 / 1.25e-4 (KronQFast 1.42e-4 / 1.38e-4: 10 % better); smooth B1024 T10000 seeds 1-4:
+0 / 1 / 4 / 0 spikes (mild), finals 3.0e-5 - 7.8e-5, refresh change 0, basis error 1e-5 (the guard still fires 1500-9500 times);
+rough preset 0.099 / 0.0999 (KronQFast 0.0622 / 0.0626: 60 % WORSE, from step 250 on: 0.44 vs 0.35, 0.19 vs 0.135 at 1000);
+rough B1024 T10000 0.0111 / 0.0113, no spikes (KronQFast TF32 best 0.0073, fp32 0.0033); runtime 5000 steps: batch 4096 100 s
+(KronQFast 127 s), batch 1024 62 s (59 s). Not adopted: the rough deficit is open; scale_orighp.sh tests whether TF32 in the
+refactor's own products (gradient rotation, statistics in ordinary coordinates, refresh) causes it.

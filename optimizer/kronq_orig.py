@@ -13,7 +13,15 @@ the two basis rotations to the activations in every layer. Here:
 In exact arithmetic the update equals KronQFast's. Only the reference configuration is supported (sign rule, learned weights, compressed
 normaliser, MC probe); any other option raises instead of being ignored.
 """
-import math, torch
+import math, torch, contextlib
+
+@contextlib.contextmanager
+def full_fp32(on):
+    """matmuls inside run in full fp32 (no TF32) when on; restores the previous setting."""
+    if not on: yield; return
+    prev = torch.backends.cuda.matmul.allow_tf32; torch.backends.cuda.matmul.allow_tf32 = False
+    try: yield
+    finally: torch.backends.cuda.matmul.allow_tf32 = prev
 import kronq_fast as kf
 from kronq_fast import Basis, fused_update
 
@@ -69,6 +77,7 @@ class KronQOrig:
         self.E0_norm = None; self.kept_prev = 1.0; self.last_rho = None; self.last_rho_real = float('nan'); self.rem_dyn = None
         self.cache = {}; self.xv_fresh = None; self.eta = [1.0] * self.L
         kf.QR_GUARD = bool(a.qr_guard); kf.QR_TOL = a.qr_tol; kf.CHOLQR = bool(a.cholqr)
+        hp = set(x for x in a.orig_hp.split(',') if x); self.hp_rot = 'rot' in hp; self.hp_stats = 'stats' in hp; self.hp_refresh = 'refresh' in hp
 
     def parameters(self): return self.Wt
 
@@ -102,8 +111,10 @@ class KronQOrig:
         return s + sum(B.state_bytes() for B in self.A + self.S)
 
     # ---------------- basis helpers
-    def to_basis(self, l, M): return self.A[l].cols_to_basis(self.S[l].rows_to_basis(M))       # U_S^T M U_A
-    def from_basis(self, l, M): return self.S[l].rows_from_basis(self.A[l].cols_from_basis(M))  # U_S M U_A^T
+    def to_basis(self, l, M):                                                    # U_S^T M U_A
+        with full_fp32(self.hp_rot): return self.A[l].cols_to_basis(self.S[l].rows_to_basis(M))
+    def from_basis(self, l, M):                                                  # U_S M U_A^T
+        with full_fp32(self.hp_rot): return self.S[l].rows_from_basis(self.A[l].cols_from_basis(M))
 
     def _dir(self, l, g, lr):
         """the push direction (units of lr) for the adaptive-refresh criterion, as KronQFast.direction in the reference configuration."""
@@ -129,8 +140,9 @@ class KronQOrig:
             with torch.enable_grad():
                 eps = self.draw_eps(out.shape)
                 gz = torch.autograd.grad((out * eps).sum(), self.cache['z'])
-            for l in range(L):
-                self.A[l].update(self.cache['a'][l], a.beta_stats); self.S[l].update(gz[l].detach(), a.beta_stats)
+            with full_fp32(self.hp_stats):
+                for l in range(L):
+                    self.A[l].update(self.cache['a'][l], a.beta_stats); self.S[l].update(gz[l].detach(), a.beta_stats)
             if tm is not None: tm['stats'] += t() - t0
         with torch.no_grad():
             Gr = [self.to_basis(l, G[l]) for l in range(L)]
@@ -144,7 +156,7 @@ class KronQOrig:
                     old_ok = self.S[l].e is not None and self.A[l].e is not None
                     if a.adapt_refresh > 0 and old_ok: gd_old = float((Gr[l] * self._dir(l, Gr[l], lr)).sum())
                     self.nref[l] += 1
-                    VS = self.S[l].refresh(a.eig_iters); VA = self.A[l].refresh(a.eig_iters)
+                    with full_fp32(self.hp_refresh): VS = self.S[l].refresh(a.eig_iters); VA = self.A[l].refresh(a.eig_iters)
                     tr = lambda T, sq=False: self.A[l].transport(self.S[l].transport(T, VS, 'L', sq), VA, 'R', sq)
                     self.C[l] = tr(self.C[l].float()).to(self.C[l].dtype)
                     self.u[l] = tr(self.u[l].float(), True).to(self.u[l].dtype)
