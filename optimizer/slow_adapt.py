@@ -34,7 +34,7 @@ class SlowAdapt:
         self.gen = torch.Generator(device=dev); self.gen.manual_seed(seed)
         self.ritz = None; self.prev = None; self.cs = []; self.rs = []; self.ff = None; self.step_fast = []
         self.regime = 'rough'; self.rem = a.rem; self.nwin = 0
-        KQ.rem_dyn = a.rem if a.rem > 0 else None
+        KQ.rem_dyn = (a.rem if a.rem > 0 else None) if not a.sa_measure else None
 
     def f(self, plist, x): return fwd_lins(plist, x, self.act, self.L)
     def active(self, step): return (step - 1) % self.every < self.win
@@ -53,7 +53,7 @@ class SlowAdapt:
             return Kv.reshape(-1)
         _, self.ritz = lanczos_topk(matvec, N, self.dev, self.m, self.k, self.gen)
         cE = self.ritz.T @ E; self.ff = float((cE @ cE) / (E @ E + 1e-30)); self.conc = self.ff * N / self.ritz.shape[1]   # concentration over the uniform share k / N
-        self.prev = None; self.cs = []; self.rs = []; self.step_fast = []
+        self.prev = None; self.cs = []; self.rs = []; self.step_fast = []; self.E0 = E.clone(); self.Jds = []; self.ratios = []
 
     @torch.no_grad()
     def run(self, p_before, p_after, emit, step):
@@ -64,11 +64,33 @@ class SlowAdapt:
         self.cs.append(float(-(E @ Jd) / (E.norm() * Jd.norm() + 1e-30)))
         self.step_fast.append(float((PJd @ PJd) / (Jd @ Jd + 1e-30)))
         if self.prev is not None: self.rs.append(float(-(PJd @ self.prev) / (self.prev @ self.prev + 1e-30)))
-        self.prev = PJd
+        self.prev = PJd; self.Jds.append(Jd)
+        rho_b = getattr(self.KQ, 'last_rho', None)                      # the batch output change the budget acts on, vs the held-out one
+        if rho_b is not None: self.ratios.append(rho_b / (float(Jd.norm() / (E.norm() + 1e-30)) + 1e-30))
         if (step - 1) % self.every == self.win - 1: self.update(emit, step)
+
+    def window_kappas(self):
+        """kappa over horizons W: the net first-order output displacement D of W consecutive steps against the residual at the
+        block start (E_0 + the displacement so far), kappa_W = (||D|| / ||E||) / (2 cos(-E, D)); W = 1 is the per-step rule,
+        W = 2 the two-stage formula's setting; medians over the non-overlapping blocks in the window."""
+        out = {}
+        for W in (1, 2, 5, 10, 20, 40):
+            ks = []; E = self.E0.clone(); i = 0
+            while i + W <= len(self.Jds):
+                D = torch.stack(self.Jds[i:i + W]).sum(0); cD = float(-(E @ D) / (E.norm() * D.norm() + 1e-30)); rD = float(D.norm() / (E.norm() + 1e-30))
+                ks.append(rD / (2.0 * cD) if cD > 1e-4 else float('inf')); E = E + D; i += W
+            if ks: out[W] = float(torch.tensor(ks).median())
+        return out
 
     def update(self, emit, step):
         a = self.a; self.nwin += 1
+        for W, kW in self.window_kappas().items(): emit(f'sa_kappaW{W}', kW, step)
+        if self.ratios: emit('sa_rho_batch_over_heldout', float(torch.tensor(self.ratios).median()), step)
+        if a.sa_measure:                                                   # measurement only: nothing is changed
+            c = float(torch.tensor(self.cs).median()); r = float(torch.tensor(self.rs).median()) if self.rs else 0.0
+            emit('sa_c', c, step); emit('sa_r', r, step); emit('sa_fastfrac', self.ff, step); emit('sa_conc', self.conc, step)
+            kw = self.window_kappas(); print(f"slow_adapt measure step {step}: c {c:.3f} r {r:+.3f} conc {self.conc:.1f}x; kappa_W " + ' '.join(f'{W}:{v:.2f}' for W, v in kw.items()) + (f"; rho batch/held-out {float(torch.tensor(self.ratios).median()):.2f}" if self.ratios else ''), flush=True)
+            return
         c = float(torch.tensor(self.cs).median()); r = float(torch.tensor(self.rs).median()) if self.rs else 0.0
         kappa = min(a.sa_kappa_max, max(0.5, 1.0 / (2.0 * (1.0 - min(r, 0.49)))))
         target = min(a.sa_rem_max, max(a.sa_rem_min, kappa * 2.0 * c))

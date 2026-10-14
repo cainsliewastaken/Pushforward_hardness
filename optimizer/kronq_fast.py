@@ -657,6 +657,7 @@ class KronQFast:
             rem_now = self.rem_dyn if self.rem_dyn is not None else a.rem          # rem_dyn: set by --rem_val_track or by slow_adapt.SlowAdapt
             if a.rem > 0:
                 f_after = self.forward(xb); rho = float((f_after - f_before).norm() / ((f_before - yb).norm() + 1e-30))
+                self.last_rho = rho                                        # before the budget acts (slow_adapt measurement)
                 if rho > rem_now:
                     sc = 1.0 - rem_now / rho
                     for l in range(L): self.Wt[l].data.add_(sc * lr * self.eta[l] * Dws[l])
