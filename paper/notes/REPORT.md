@@ -1920,6 +1920,26 @@ Caveats: one seed; baselines untuned (3 fixed lrs, no schedule, beta2 = 0.99); 5
    the step's output energy is on the true top-32 directions (30 % by step 1000): the "fast modes carry the quadratic cost"
    premise (item 28, measured in the Kronecker basis) is not what the TRUE kernel's top-32 see at the start. Phase 2 (kappa
    = 0.5 / 0.75 / 1.0 both targets, 0.3 on smooth; c measured every 10 steps; no lr schedule) running.
+39. KAPPA TEST, PHASE 2 (same job; scale_kappa.sh; runs/scale_kappa/res_j*). rho_t = kappa x 2 c_t with c_t the EMA (0.9 per
+   measurement) of the held-out alignment measured every 10 steps, applied to the batch output change every step; lr 3e-3
+   nominal, no decay. Reference 0.062 / 1.38e-4.
+   | kappa | rough | smooth |   | 0.3 | - | 1.02e-3 |   | 0.5 | 0.1153 | 7.5e-4 |   | 0.75 | 3.07 (collapse by step 250) | 4.8e-4 |
+   | 1.0 | 0.93 (collapse) | 7.6e-4 |
+   ALL LOSE: rough 1.9x (0.5) or collapse (>= 0.75); smooth 3.5-7x. Two failure modes, both the "alignment feedback" the
+   plan listed as the stage without a closed form. (a) EARLY LAG: c is 0.2-0.37 at step 0 and ~0.1 by step 250 (items 22,
+   38); the EMA lags the fall, so kappa >= 0.75 holds the target at 0.3-0.55 for the first hundred steps, beyond the
+   break-even of the state the run has moved to, and the rough run collapses exactly as the fixed budget 0.2 did at lr
+   2e-3 (item 31). (b) LATE STARVATION: once the run slows, the measured single-step held-out alignment of ITS OWN steps
+   falls to 0.012-0.02 (the alignment is a property of the state the rule produced, not an exogenous quantity), the target
+   hits the floor 0.02, the steps shrink to 1/50-1/100 of the natural step, and the run stalls (rough 0.115 flat from step
+   1000; smooth flat). The reference's own steps at the same stages are rho ~ 0.05-0.1 with c ~ 0.06 (item 22): kappa_eff ~
+   0.5-0.8, i.e. the reference's alignment is 3-5x higher than the tracked runs' because its longer steps keep the
+   hypergradient and momentum state informative. The break-even is therefore not a target one can track with a constant:
+   the alignment that defines it depends on the length through the state.
+   Verdict: the two-stage formula reproduces the reference's kappa band qualitatively on rough (phase 1) but neither a
+   constant kappa nor the tracked break-even is a usable rule; the length stays lr x schedule x fixed budget, and item 32's
+   closure stands. The kappa picture's value is explanatory (why 0.2 at lr 1e-3 works and 2e-3 collapses), and the
+   numerical stage model of the plan's step 3 is the only route to a derived rule; not pursued now.
 
 25 (this fork). APPROXIMATION CONTROLS AND BASIS TRACKING (job 59749741, 1 node, 12 min; optimizer/tracking.py, --track;
    scale_exact.sh; runs/scale_exact/). Width 4096, both targets: reference fast configuration (blocks 256, bf16 state, two
