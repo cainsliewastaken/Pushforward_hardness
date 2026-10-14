@@ -91,3 +91,15 @@ Basis error 1e-5 - 7e-5 (was 1.0). Runtime: rough preset 66-67 s (KronQFast TF32
 rough B1024 T10000 with the instrument 187-191 s (KronQFast TF32 with the instrument 160 s, +19 %). The per-refresh function change is still
 ~5 % of the residual in TF32: it is now the rotated forward pass's own TF32 rounding (the two forwards compared use different bases), not
 stored-weight error. Open: --rot_hp at batch 1024 / 10000 steps (the long run where fp32 is 2.2x better) and its cost at large batch.
+
+## The hybrid on turbulence (job 59785657, 2 nodes, frozen code 439a9b0; scale_turbhybrid.sh, turbhybrid_summary.py)
+400k pairs, 20 epochs, batch 256, TF32, guard + fp32 refresh + re-orthonormalisation transport; with / without fp32 activation rotations.
+| setting | hybrid | + fp32 rotations | KronQFast (other session) | AdamW best |
+| increment, capped budget, wd 1.0 | 0.1114 | 0.1114 (seed 2: 0.1119) | 0.1109 | 0.1563 |
+| increment, no budget, lr 2e-4, decay 1e-3 / step | 0.1150 | 0.1149 | 0.1148 | |
+| direct, capped budget, wd 0.3 | 0.0631 (best 0.0609) | 0.0630 | 0.0628 / 0.0631 | 0.0600 |
+| direct, no budget, lr 2e-4, decay 1e-3 / step | 0.0478 (best 0.0477) | not run | not run before | 0.0600 |
+1. On turbulence the hybrid equals KronQFast within 0.5 % and fp32 rotations change nothing: with decay at batch 256 this problem is not
+   precision-limited (unlike the long fresh-data rough runs). No spikes in any run. Runtime +10-14 % for the capped runs (488-507 s vs 445 s).
+2. NEW: the direct target without the budget (lr 2e-4, decay 1e-3 per step) reaches 0.0478, 20 % below AdamW's best (0.0600) and 24 %
+   below the capped KronQ (0.063). One seed; the no-budget setting had only been run on the increment (item 57).
