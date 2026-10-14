@@ -2381,6 +2381,44 @@ Caveats: one seed; baselines untuned (3 fixed lrs, no schedule, beta2 = 0.99); 5
    clamp e^4.6 = 100; or at budget 0.15 with w ~ 8), the linear rescale is wrong by orders of magnitude and the applied step's actual
    output change is unbounded. Gradient-norm clipping cannot act here (the step is sign-based: the gradient's magnitude never enters);
    the relevant clip is on the realised output change, or on the learned weights.
+56. THE SPIKES ARE NOT THE BUDGET'S (critical-batch scan of the xfold session, runs/scale_crit/, 222 runs, AdamW and KronQ, both targets, batch
+   256-4096, 625-40000 steps, no decay anywhere; read 2026-10-14 at the user's request). AdamW spikes too: 28 of its smooth-target runs, 10-21
+   spikes per run at lr 1e-3 and 20000-40000 steps, 8-9 at 3e-4, none at 1e-4; its rough runs never spike because they never get below 0.18.
+   KronQ's first spike comes at a loss ~0.02 (rough) / 7e-5 (smooth), at 60 % of the run, and the count grows with steps, lr and batch; a run
+   refreshing its basis every 5 steps spikes as often as one with periods near 1000. So neither the one-forward budget rescale (item 55's
+   hypothesis) nor the stale-basis transport is the common cause: what every spiking run shares is a low loss under a step that has not shrunk
+   enough, i.e. progressive sharpening at a fixed step (the chain section's edge of stability), later in training because that is when the loss
+   is low, more at large batch because the loss gets there sooner, the noise is smaller and the budgets used were larger. scale_spike.sh is
+   therefore not run; the xfold session's --spike_diag is the instrument to use if the onset is to be located. Gradient-norm clipping stays a
+   no-op for the sign step; the stability bound in the theory is the per-mode Newton bound (the cap), untested at > 5000 steps, and decay was
+   absent from every spiking run, so "decay first, then the cap" is the order of any test.
+57. INVENTORY OF THE FAST PATH AND THE METHOD WITHOUT THE BUDGET (job 59767821, 1 node, 18 min, released by the chain; scale_nobudget.sh;
+   runs/scale_nobudget/; 9 runs). What the preset runs: (1) the per-layer blocked Kronecker eigenbasis (input covariance every step, probe
+   backprop covariance every step, two subspace iterations when due, adaptive period 5-1000, state transported); (2) sign of the momentum
+   (0.9) on all modes; (3) learned per-mode weight (normalised one-step hypergradient, rate 0.01, memory 100, clamp e^+-4.6); (4) lr with linear
+   decay AND the output budget (one extra forward, linear undo of the excess over rem x min(current, initial) residual); (5) decoupled decay
+   on replayed data. Inert in the preset: cap, slow adaptation, fresh-batch budget / line search, pre-activation budget, sphere / kappa
+   controllers, adaptive momentum, weight shrink, gated decay, tracking lr, gradient clip, basis freeze. No field run had ever used rem 0.
+   TEST: no budget, no cap, lr {1e-4, 2e-4, 4e-4}; field 5000 steps no decay; turbulence 400k increment 20 epochs, decay 1e-3 per step.
+   | | lr 1e-4 | lr 2e-4 | lr 4e-4 | reference with the budget |
+   | turbulence increment | 0.121 (train 0.078) | 0.1148 (train 0.072) | 0.181 (spike to 0.42 at 20000) | 0.111 capped / 0.120 fixed 0.03 (wd 1.0) |
+   | field smooth | 1.68e-4 | 1.39e-4 | collapses at the end (best 1.7e-4, final 0.43) | 1.42e-4 |
+   | field rough | 0.1159 | 0.1162 | 0.1128 | 0.0622 |
+   (a) TURBULENCE AND THE SMOOTH FIELD DO NOT NEED THE BUDGET: lr 2e-4 + decay reproduces the capped result within 4 % (0.115 vs 0.111) with
+   no budget forward, no anchor, no windows; the smooth field at lr 2e-4 equals the reference. The usable lr is 1e-4 to 2e-4 at batch 256;
+   4e-4 is past the stability edge on both (a spike on turbulence, a terminal collapse on the smooth field). On turbulence the method is now:
+   basis + sign of momentum + learned weights + lr 2e-4 with linear decay + decay 1e-3 per step. Prediction (within 15 %) HELD.
+   (b) THE ROUGH FIELD LOSES 1.8x WITHOUT THE BUDGET, AND THE LOSS IS FLAT IN lr (0.113-0.116 across 4x): prediction (within 20 %) FAILED.
+   Flat in lr means lr is not setting the step: the learned weight absorbs it (its fixed point w lam lr = m |g| makes the per-mode step the
+   completion step of the batch gradient, independent of lr), and on the rough target at per-batch SNR 0.2 the completion step of a noisy
+   mode overshoots: train = val = 0.115 (no overfit, fresh data), a NOISE FLOOR. The budget's job on the rough field is to hold the step
+   below the completion step by the noise factor (raw 0.67 -> 0.2; item 44's "noise-set working point"), which the magnitude rule's fixed point
+   does not do. On turbulence the decay plays that role (the equilibrium w/wd bounds the push), which is why the budget is redundant there.
+   What this leaves: the budget is NOT a safety and not a trust region; it is the noise shrinkage of the completion step that ingredient 3 lacks
+   (OPTIMIZER_THEORY 0's conjecture: the shrunk step should be m_k^2 (Wiener), the rule delivers m_k). Replacements to test, none run: decay on
+   the fresh-data field as the shrinkage (prediction: helps rough, costs smooth, as uniform decay bounds the shared fit); a shrunk fixed point
+   for the weight rule (m^2 in place of m, a derivation, not a constant); or keep the budget as the one constant on fresh rough data and drop it
+   everywhere else.
 
 25 (this fork). APPROXIMATION CONTROLS AND BASIS TRACKING (job 59749741, 1 node, 12 min; optimizer/tracking.py, --track;
    scale_exact.sh; runs/scale_exact/). Width 4096, both targets: reference fast configuration (blocks 256, bf16 state, two
