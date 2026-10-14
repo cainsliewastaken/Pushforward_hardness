@@ -67,3 +67,16 @@ rough preset 0.099 / 0.0999 (KronQFast 0.0622 / 0.0626: 60 % WORSE, from step 25
 rough B1024 T10000 0.0111 / 0.0113, no spikes (KronQFast TF32 best 0.0073, fp32 0.0033); runtime 5000 steps: batch 4096 100 s
 (KronQFast 127 s), batch 1024 62 s (59 s). Not adopted: the rough deficit is open; scale_orighp.sh tests whether TF32 in the
 refactor's own products (gradient rotation, statistics in ordinary coordinates, refresh) causes it.
+
+## Precision pairs (job 59769209; scale_precpair.sh), rough preset, batch 256, 5000 steps, seed 1
+| run | 250 | 1000 | 2000 | 3000 | 4000 | 5000 |
+| refactor fp32 | 0.289 | 0.133 | 0.111 | 0.080 | 0.063 | 0.054 |
+| KronQFast fp32 | 0.288 | 0.132 | 0.111 | 0.078 | 0.059 | 0.049 |
+| refactor TF32 | 0.441 | 0.190 | 0.135 | 0.119 | 0.107 | 0.099 |
+| KronQFast TF32 | 0.347 | 0.135 | 0.117 | 0.089 | 0.071 | (end spike) |
+| AdamW lr 3e-4 fp32 / TF32 | 0.593 / 0.593 | 0.502 / 0.503 | 0.454 / 0.456 | 0.423 / 0.423 | 0.402 / 0.403 | 0.390 / 0.390 |
+1. In fp32 the refactor equals KronQFast (to 1 % through step 2000, 10 % at the end): its rough deficit in TF32 is precision, not a
+   difference in the method. 2. KronQFast itself gains in fp32 (0.049 against the TF32 runs' 0.062-0.071). 3. AdamW is identical in fp32
+   and TF32: the rough target's precision sensitivity belongs to a method that reaches the slow modes; AdamW never does.
+Hybrid (KronQFast with --refresh_hp, --reorth_transport, --qr_guard; CPU check: the function change at re-orthonormalisations falls to the
+level of an ordinary refresh) and --rot_hp (activation rotations in fp32): scale_hybrid.sh.

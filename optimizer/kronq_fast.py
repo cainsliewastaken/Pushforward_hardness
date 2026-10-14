@@ -23,6 +23,14 @@ from torch.func import jvp
 
 EIG_DTYPE = None
 CHOLQR = True
+import contextlib
+@contextlib.contextmanager
+def full_fp32(on):
+    """matmuls inside run in full fp32 (no TF32) when on."""
+    if not on: yield; return
+    prev = torch.backends.cuda.matmul.allow_tf32; torch.backends.cuda.matmul.allow_tf32 = False
+    try: yield
+    finally: torch.backends.cuda.matmul.allow_tf32 = prev
 QR_GUARD = False; QR_TOL = 1e-5; QR_FALLBACKS = [0]   # --qr_guard: Cholesky-QR result checked for orthonormality; failing blocks redone by Householder QR in float64
 def solve_gamma(Cabs, lam, target2, iters=40):
     """gamma with sum (Cabs / (lam + gamma))^2 = target2 (decreasing in gamma); bisection in log gamma."""
@@ -157,10 +165,13 @@ class Basis:
         else:
             self.U = torch.bmm(self.U, V); self.nacc = getattr(self, 'nacc', 0) + 1
             if self.rem: self.Ur = self.Ur @ Vr
+            self.reorth_R = None
             if CHOLQR and self.nacc % 10 == 0:                      # re-orthonormalise the accumulated basis (Cholesky-QR drift ~1e-4 per refresh)
                 Ud = self.U.double(); self.sd_U = float((torch.bmm(Ud.transpose(1, 2), Ud) - torch.eye(self.U.shape[-1], device=self.U.device, dtype=torch.float64)).abs().max()); self.sd_reorth = True
+                U_acc, Ur_acc = self.U, self.Ur
                 self.U = cholqr(self.U)
                 if self.rem: self.Ur = cholqr(self.Ur)
+                self.reorth_R = (torch.bmm(self.U.transpose(1, 2), U_acc), (self.Ur.T @ Ur_acc) if self.rem else None)   # U_acc = U_new R
         Ud = self.U.double(); self.sd_Uacc = float((torch.bmm(Ud.transpose(1, 2), Ud) - torch.eye(self.U.shape[-1], device=self.U.device, dtype=torch.float64)).abs().max())
         self.F = torch.bmm(torch.bmm(V.transpose(1, 2), self.F), V)
         if self.rem: self.Fr = Vr.T @ self.Fr @ Vr
@@ -226,10 +237,12 @@ class KronQFast:
         h = x; at_list = []; zt_list = []; h_list = []
         for l in range(self.L):
             a_aug = torch.cat([h, torch.ones(h.shape[0], 1, device=h.device, dtype=h.dtype)], 1)
-            at = self.A[l].cols_to_basis(a_aug)                  # a~ = U_A^T [a;1]  (rows are samples)
+            with full_fp32(bool(getattr(self.a, 'rot_hp', 0))):  # --rot_hp: the activation rotations in full fp32 under TF32
+                at = self.A[l].cols_to_basis(a_aug)              # a~ = U_A^T [a;1]  (rows are samples)
             zt = at @ self.Wt[l].T                                 # z~ = Wt a~
             if keep: zt.retain_grad(); at_list.append(at); zt_list.append(zt)
-            z = self.S[l].cols_from_basis(zt)                      # z = U_S z~
+            with full_fp32(bool(getattr(self.a, 'rot_hp', 0))):
+                z = self.S[l].cols_from_basis(zt)                  # z = U_S z~
             h = self.act(z) if l < self.L - 1 else z
             if keep and l < self.L - 1: h.retain_grad(); h_list.append(h)
         if keep: self.cache = dict(at=at_list, zt=zt_list, h=h_list)
@@ -544,7 +557,7 @@ class KronQFast:
         # ---- refresh of the bases (per-layer period; adaptive by the g.D criterion of kronq2 or the overlap criterion of kronsign)
         if due:
             t0 = t() if t else None
-            with torch.no_grad():
+            with torch.no_grad(), full_fp32(bool(a.refresh_hp)):
                 for l in due:
                     if self.S[l].F is None or self.A[l].F is None: continue
                     old_ok = self.S[l].e is not None and self.A[l].e is not None
@@ -560,6 +573,10 @@ class KronQFast:
                         if VS is not None and VS[0] is not None: emit(f'refresh_ovS_l{l}', float(torch.diagonal(VS[0], dim1=1, dim2=2).abs().mean()), step)
                     tr = lambda T, sq=False: self.A[l].transport(self.S[l].transport(T, VS, 'L', sq), VA, 'R', sq)
                     self.Wt[l].data = tr(self.Wt[l].data); self.C[l] = tr(self.C[l].float()).to(self.C[l].dtype)
+                    if a.reorth_transport:                     # W = U_S Wt U_A^T stays exact across a re-orthonormalisation U_acc = U_new R: Wt <- R_S Wt R_A^T
+                        RS = getattr(self.S[l], 'reorth_R', None) if VS is not None else None; RA = getattr(self.A[l], 'reorth_R', None) if VA is not None else None
+                        if RS is not None: self.Wt[l].data = self.S[l]._apply(self.Wt[l].data, 'L', RS[0], RS[1], False)
+                        if RA is not None: self.Wt[l].data = self.A[l]._apply(self.Wt[l].data, 'R', RA[0], RA[1], False)
                     if a.xfold:
                         for f_ in range(2): self.CF[f_][l] = tr(self.CF[f_][l].float()).to(self.CF[f_][l].dtype)
                     Gr[l] = tr(Gr[l])
