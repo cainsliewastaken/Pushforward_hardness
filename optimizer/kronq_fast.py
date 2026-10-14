@@ -377,6 +377,23 @@ class KronQFast:
             D = torch.sign(D) * torch.minimum(D.abs(), capv)
         return D, lam, live
     # ---------------- one optimizer step; call after loss.backward() on forward(xb, keep=need_keep)
+    @torch.no_grad()
+    def _profile_diag(self, l, D, Dold, g, lam, lr, emit, step):
+        """SIGN_PROCESS.md section 7 (--diag, fused path): per lambda decile the share of the step's Kronecker output energy sum lam D^2,
+        the cap-active fraction, and the lag-1 sign agreement of consecutive steps; and the layer totals (cap_eshare = output energy on
+        capped modes, the quantity that decides between the two cases of section 5)."""
+        Df = D.flatten(); lamf = lam.flatten(); tot = float((lamf * Df * Df).sum()) + 1e-30
+        capf = (Df.abs() >= 0.999 * (g.abs() / (lam.clamp(min=1e-30) * max(lr * self.eta[l], 1e-30) * self.capL)).flatten()) & (Df != 0)
+        emit(f'cap_eshare_l{l}', float((lamf[capf] * Df[capf] ** 2).sum()) / tot, step); emit(f'capfrac_l{l}', float(capf.float().mean()), step)
+        Dof = Dold.float().flatten() if Dold is not None else None
+        if Dof is not None: emit(f'dsign_acf1_l{l}', float((torch.sign(Df) * torch.sign(Dof)).sum() / ((Df != 0).float().sum() + 1e-30)), step)
+        order = torch.argsort(lamf, descending=True); n_ = order.numel()
+        for dec in range(10):
+            seg = order[dec * n_ // 10:(dec + 1) * n_ // 10]
+            emit(f'prof_eshare_d{dec}_l{l}', float((lamf[seg] * Df[seg] ** 2).sum()) / tot, step); emit(f'prof_capfrac_d{dec}_l{l}', float(capf[seg].float().mean()), step)
+            emit(f'prof_Dabs_d{dec}_l{l}', float(Df[seg].abs().median()), step)
+            if Dof is not None: emit(f'prof_dsign_acf1_d{dec}_l{l}', float((torch.sign(Df[seg]) * torch.sign(Dof[seg])).sum() / ((Df[seg] != 0).float().sum() + 1e-30)), step)
+
     def step(self, step, lr, out, xb, yb, loss_fn, tm=None, t=None, emit=None):
         a = self.a; L = self.L; dev = self.dev
         need_stats = (step - 1) % max(1, a.stats_every) == 0
@@ -514,13 +531,13 @@ class KronQFast:
             for l in range(L):
                 g = Gr[l]; C = self.C[l]
                 if self.use_fused and self.S[l].e is not None and self.A[l].e is not None:
-                    self._lr_eta_t.fill_(float(lr * self.eta[l]))
+                    self._lr_eta_t.fill_(float(lr * self.eta[l])); Dold = self.Dprev[l]        # previous step, for the lag-1 sign agreement (SIGN_PROCESS 7)
                     D, lam, live = fused_update(g, C, self.u[l], self.hv[l][0], self.hv[l][1], self.Dprev[l], self.S[l].e, self.A[l].e, self._lr_eta_t,
                                                 2.0 / self.nout, a.b1, a.beta_u, a.u_clamp, a.reltol, self.capL)
                     Cf = C.float(); self.Dprev[l] = D.to(self.u[l].dtype); Dws.append(D)
                     if diag_now:
                         emit(f'livefrac_l{l}', float(live.float().mean()), step); emit(f'wnorm_l{l}', float(self.Wt[l].norm()), step)
-                        emit(f'u_q50_l{l}', float(self.u[l].float().median()), step)
+                        emit(f'u_q50_l{l}', float(self.u[l].float().median()), step); self._profile_diag(l, D, Dold, g, lam, lr, emit, step)
                     continue
                 if a.mom_adapt:                               # per-mode window from the mode's own signal-to-noise (user, 2026-10-13)
                     V2 = self.V2[l]; v = V2.float() * a.b2 + (g * g) * (1 - a.b2); self.V2[l] = v.to(V2.dtype)
@@ -622,9 +639,15 @@ class KronQFast:
                     # step's Kronecker output energy sum lam D^2 per decile (where the budget is spent)
                     order = torch.argsort(lam.flatten(), descending=True); n_ = order.numel(); Df = D.flatten(); lamf = lam.flatten()
                     tot = float((lamf * Df * Df).sum()) + 1e-30; uf = self.u[l].float().flatten() if a.hyper else None
+                    Dof = Dold.float().flatten() if (self.use_fused and Dold is not None) else None                              # SIGN_PROCESS 7: sign agreement and cap share
+                    capf = (Df.abs() >= 0.999 * (g.abs() / (lam.clamp(min=1e-30) * max(lr * self.eta[l], 1e-30) * self.capL)).flatten()) & (Df != 0)
+                    emit(f'cap_eshare_l{l}', float((lamf[capf] * Df[capf] ** 2).sum()) / tot, step); emit(f'capfrac_l{l}', float(capf.float().mean()), step)
+                    if Dof is not None: emit(f'dsign_acf1_l{l}', float((torch.sign(Df) * torch.sign(Dof)).sum() / ((Df != 0).float().sum() + 1e-30)), step)
                     for dec in range(10):
                         seg = order[dec * n_ // 10:(dec + 1) * n_ // 10]; Dd = Df[seg].abs()
                         emit(f'prof_Dabs_d{dec}_l{l}', float(Dd.median()), step); emit(f'prof_eshare_d{dec}_l{l}', float((lamf[seg] * Df[seg] ** 2).sum()) / tot, step)
+                        emit(f'prof_capfrac_d{dec}_l{l}', float(capf[seg].float().mean()), step)
+                        if Dof is not None: emit(f'prof_dsign_acf1_d{dec}_l{l}', float((torch.sign(Df[seg]) * torch.sign(Dof[seg])).sum() / ((Df[seg] != 0).float().sum() + 1e-30)), step)
                         if uf is not None:
                             emit(f'prof_w_d{dec}_l{l}', float(torch.exp(uf[seg]).median()), step); emit(f'prof_Dw_d{dec}_l{l}', float((Dd / (torch.exp(uf[seg]) + 1e-30)).median()), step)
                     if a.hyper and a.hyper_rule == 'signcorr' and self.sc[l] is not None:
