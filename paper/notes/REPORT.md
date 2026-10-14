@@ -2061,6 +2061,33 @@ Caveats: one seed; baselines untuned (3 fixed lrs, no schedule, beta2 = 0.99); 5
    the final error. Next test on the length (not run): the batch-size scaling of the optimal budget and lr (grid protocol at
    batch 512 / 1024), which would turn the constant into one calibration of a predicted law, or refute the noise picture.
 
+44. BATCH-SIZE SCALING OF THE OPTIMAL LENGTH (job 59762672, 2 nodes, 13 min; scale_bs.sh, scale_bs_summary.py; runs/scale_bs/;
+   minimal method, cap off; batch 512 and 1024, lr {1e-3, 2e-3, 4e-3} x budget {0.15, 0.3, 0.6}, both targets, 2 seeds, 5000
+   steps; batch 256 from item 40). Prediction stated beforehand (SIGN_PROCESS 2: drift per step ~ mean sign ~ sqrt(n_B), cost
+   independent of n_B): optimal lr AND budget ~ sqrt(n_B). Null: neither moves.
+   ROUGH (lr rows x budget cols):  256: 1e-3 -> 0.055 / 0.064 / 0.065 at 0.15 / 0.2 / 0.3, 1.5e-3 diverges above 0.15.
+     512: 1e-3 -> 0.080 / 0.0174 / 0.0185 at 0.15 / 0.3 / 0.6; 2e-3 -> 0.067 / div / div; 4e-3 -> 0.040 / div / 3.3.
+     1024: 1e-3 -> 0.120 / 0.0098 / 0.0109; 2e-3 -> 0.107 / 0.044 / div; 4e-3 -> 0.12 / div / div.
+     Optimum: lr 1e-3 at every batch; budget 0.15 -> 0.3 -> 0.3 (0.6 within 10 % at 512 and 1024).
+   SMOOTH: 256: 1e-3 -> 1.78 / 1.41 / 1.23 e-4 at 0.15 / 0.2 / 0.3.
+     512: 1e-3 -> 1.23e-4 / 8.4e-5 / 3e-3; 2e-3 -> 1.19e-4 / 7.6e-5 / 0.12; 4e-3 -> 1.27e-4 / 7.8e-5 / 0.05.
+     1024: 1e-3 -> 8.5e-5 / 6.7e-5 / 8.6e-3; 2e-3 -> 8.4e-5 / 5.85e-5 / 0.17; 4e-3 -> 8.8e-5 / 6.2e-5 / 2.8e-3.
+     Optimum: budget 0.3 at every batch (0.6 catastrophic at every batch); lr 1e-3 -> 2e-3 -> 2e-3 (4e-3 within 5 %).
+   Reading. (a) ONE CONSTANT IS A DETERMINISTIC CEILING, THE OTHER A NOISE OPTIMUM, AND THE ROLES SWAP WITH THE TARGET. On
+   rough the lr ceiling (1e-3; 2e-3 diverges at any budget >= 0.3) does not move with the batch at all, and the budget's
+   optimum rises with it (x2, then flat). On smooth the budget ceiling (0.3; 0.6 diverges) does not move, and the lr optimum
+   rises (x2, then flat). A ceiling that ignores the batch size is not set by noise: it is the stability / Taylor envelope,
+   which is the user's reading (OPTIMIZER_THEORY 0, ingredient 4), now identified per target without any local probe.
+   (b) The prediction was wrong as stated: it treated both constants as noise optima. For the one that is, the grid's x2
+   spacing cannot separate sqrt(n_B) from n_B (observed x2 at 512, flat to 1024): the exponent is unresolved, and a finer
+   grid (budget 0.2 / 0.4 on rough, lr 1.4e-3 / 2.8e-3 on smooth) at 512 and 2048 would resolve it.
+   (c) Which constant is the ceiling follows from item 42d: on smooth the batch output change is 10-20x the held-out one, so
+   the batch budget is the quantity that touches the nonlinearity; on rough batch and held-out changes agree and the lr
+   (the per-mode step itself) is. (d) EQUAL-WALL GAIN FROM LARGER BATCHES: the step is eigendecomposition-dominated, so
+   wall per run barely moves (rough 65 / 68 / 62 s at 256 / 512 / 1024) while the rough result improves 3.2x and 5.6x at
+   equal steps (0.055 -> 0.0174 -> 0.0098) and smooth 1.6x and 2.1x. Not yet compared with AdamW at the same batch at
+   equal wall; the item-40 baseline is at batch 256 only.
+
 25 (this fork). APPROXIMATION CONTROLS AND BASIS TRACKING (job 59749741, 1 node, 12 min; optimizer/tracking.py, --track;
    scale_exact.sh; runs/scale_exact/). Width 4096, both targets: reference fast configuration (blocks 256, bf16 state, two
    subspace iterations, refresh floor 5) against "exact Kronecker" (full factors, fp32 state, float64 eigh, refresh floor
