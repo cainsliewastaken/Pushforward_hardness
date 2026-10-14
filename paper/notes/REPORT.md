@@ -2466,6 +2466,21 @@ Caveats: one seed; baselines untuned (3 fixed lrs, no schedule, beta2 = 0.99); 5
    ~5 % of the residual is now the rotated forward's own TF32 rounding. Consequence for the method statement: fp32 for the basis work and
    the rotations (gradient in, update out, activations in the per-sample form), reduced precision for the network's matmuls; everything else
    as in item 58.
+60. THE HYBRID WITH fp32 ACTIVATION ROTATIONS ON THE LONG RUNS (job 59785584, 1 node, 10 min, released by the chain; scale_rothp.sh;
+   runs/scale_rothp/; 4 runs: the xfold session's configurations and seeds, --refresh_hp 1 --reorth_transport 1 --qr_guard 1 --rot_hp 1,
+   network TF32, with the spike instrument). Prediction: rough within 20 % of fp32; null: the gap stays and the forward itself needs fp32.
+   | | seed 1 | seed 2 | hybrid without --rot_hp (SPIKE_RESULT) | KronQFast fp32 | KronQFast TF32 |
+   | rough B1024 T10000 final | 0.00325 | 0.00330 | 0.0079 / 0.0076 (best) | 0.0033 / 0.0034 | 0.0073 / 0.0078 + spikes |
+   | smooth B1024 T10000 final (best) | 3.73e-5 | 6.76e-5 (5.11e-5) | 4.2e-5 / 5.1e-5 | - | 5.5e-3 / 4.8e-4 (11 spikes each) |
+   | spikes | 0 | 0 | 0 | 0 | 3 / 1 |
+   | wall with the instrument | 156 s | 158 s | 187-191 s | - | 160 s |
+   Basis error 1e-5 - 2e-5 throughout (max of the orthogonality diagnostics). The rough gap is CLOSED: the hybrid with the activation rotations
+   in fp32 equals full fp32 to 1 % on both seeds, with no spikes, at the TF32 wall (156 s against 160 s for KronQFast TF32 and 256-259 s for
+   full fp32 on the preset, per SPIKE_RESULT). Smooth: one small spike per seed (at 7750 / 7500; finals 3.7e-5 and 6.8e-5 against the hybrid's
+   4.2e-5 / 5.1e-5): the small smooth spikes are not the rotations' precision and remain unexplained, at a 10-30 % level rather than the
+   10-700x of the unguarded runs. PRECISION BOUNDARY, SETTLED: the refresh, the transports and the activation (or gradient) rotations in fp32;
+   the network's own matmuls in reduced precision. Everything the slow modes need is in the small operations. This is the configuration for
+   the method statement and for the rough references (0.0033 at B1024 T10000; the TF32 0.0073 and the 0.0062 preset values are superseded).
 
 25 (this fork). APPROXIMATION CONTROLS AND BASIS TRACKING (job 59749741, 1 node, 12 min; optimizer/tracking.py, --track;
    scale_exact.sh; runs/scale_exact/). Width 4096, both targets: reference fast configuration (blocks 256, bf16 state, two
