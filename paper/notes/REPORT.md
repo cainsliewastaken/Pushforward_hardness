@@ -2466,6 +2466,20 @@ Caveats: one seed; baselines untuned (3 fixed lrs, no schedule, beta2 = 0.99); 5
    ~5 % of the residual is now the rotated forward's own TF32 rounding. Consequence for the method statement: fp32 for the basis work and
    the rotations (gradient in, update out, activations in the per-sample form), reduced precision for the network's matmuls; everything else
    as in item 58.
+60. THE HYBRID WITH fp32 ACTIVATION ROTATIONS ON THE LONG RUNS (job 59785584, 1 node, 10 min; scale_rothp.sh; runs/scale_rothp/; 4 runs;
+   the launch chain died with a Claude Code restart, the runs survived and a watcher cancelled the job after the fourth result). KronQFast
+   with --qr_guard --refresh_hp --reorth_transport --rot_hp, network TF32; B1024 T10000, budget 0.3, the configurations and seeds of
+   SPIKE_RESULT's hybrid table. Prediction: rough within 20 % of fp32; null: the gap stays and the forward itself needs fp32.
+   | | seed 1 | seed 2 | hybrid without --rot_hp | KronQFast fp32 | KronQFast TF32 |
+   | rough, final | 0.00325, no spikes | 0.00330, no spikes | 0.0079 / 0.0076 | 0.0033 / 0.0034 | 0.0073 / 0.0078, 3 / 1 spikes |
+   | smooth, final (best) | 3.73e-5 (3.73e-5), 1 small spike at 7750 | 6.76e-5 (5.11e-5), 1 small spike at 7500 | 4.2e-5 / 5.1e-5, 1 / 2 spikes | - | 5.5e-3 / 4.8e-4, 11 / 11 spikes |
+   HELD, within 2 %: with the activation rotations in fp32 the TF32 network reaches the full-fp32 rough result (0.00325 vs 0.0033) with no
+   spikes, so the rough target's precision requirement is the ROTATIONS (refresh, transports, the activation and backprop rotations of the
+   per-sample form; the gradient and update rotations of the summed form), not the network's matmuls. The remaining small smooth spikes
+   (one per seed, 1.5-5x, recovering) are unchanged by --rot_hp and are therefore not in the rotations; they stay open and minor. The
+   precision boundary of the method is now measured on both targets at 10000 steps: fp32 for the basis work and the rotations, reduced
+   precision for the network. Cost at batch 256 was unmeasurable (SPIKE_RESULT); at large batch the fp32 rotations are the 4b/(3m) term of
+   item 57's accounting, under 1 %.
 60. THE HYBRID WITH fp32 ACTIVATION ROTATIONS ON THE LONG RUNS (job 59785584, 1 node, 10 min, released by the chain; scale_rothp.sh;
    runs/scale_rothp/; 4 runs: the xfold session's configurations and seeds, --refresh_hp 1 --reorth_transport 1 --qr_guard 1 --rot_hp 1,
    network TF32, with the spike instrument). Prediction: rough within 20 % of fp32; null: the gap stays and the forward itself needs fp32.
