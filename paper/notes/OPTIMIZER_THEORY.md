@@ -76,6 +76,16 @@ sequence, and the sequence estimate is always smaller), the regime switch (retra
 38-42), the per-layer and per-mode budgets (items 32, 39), the lift (LIFT_GRADIENT.md), and the speed engineering
 (blocks, bf16 state, Cholesky-QR, fused update, adaptive refresh), which changes wall time and not the method.
 
+Constants flagged for testing (user, 2026-10-14; none has been swept since it was set):
+  - the momentum horizon (b1 0.9, 10 steps); the weight-adaptation rate (beta_u 0.01) and its normaliser memory (0.99, 100 steps); the
+    clamp (e^+-4.6). The smooth-target lr dependence within 5000 steps (item 58) is the weights' adaptation transient, so the rate and the
+    starting weight scale (u = 0, w = 1) are the first to test: prediction, a larger rate or a larger start removes the lr dependence on
+    smooth and changes nothing on rough (where the loss is already flat in lr).
+  - the refresh schedule's constants: adaptation 0.1, floor 5, cap 1000 (lower to ~100 now that the guard removes the stale-basis failure),
+    two subspace iterations, statistics EMA 0.95 (insensitive at 0.9, item 25). These trade eigen-work for basis fidelity; more often is not
+    worse, so the test is a cost curve, not a search.
+  - the block size 256: the one genuine design choice (blocks 2x better than full factors on rough, 3x worse on smooth, item 25).
+
 Conjecture (stated, untested): sign(C) x learned w is a per-mode Wiener-shrunk Gauss-Newton step, m_k^2 in place of
 Q_k^2 / (1 + Q_k^2) (within 15 % at the measured Q), with the completion distance from a secant estimate. If the ratio
 test above holds on the fast deciles, the method is "shrunk secant-Newton in the Kronecker basis", and the three

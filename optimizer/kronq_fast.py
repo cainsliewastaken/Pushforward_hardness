@@ -456,6 +456,8 @@ class KronQFast:
         for dec in range(10):
             seg = order[dec * n_ // 10:(dec + 1) * n_ // 10]
             emit(f'prof_eshare_d{dec}_l{l}', float((lamf[seg] * Df[seg] ** 2).sum()) / tot, step); emit(f'prof_capfrac_d{dec}_l{l}', float(capf[seg].float().mean()), step)
+            newt = (g.abs() / lam.clamp(min=1e-30)).flatten()[seg]; stp = (Df[seg].abs() * lr * self.eta[l])          # item 59: the mode's Newton step |g| / lam and the actual step lr w, parameter units
+            emit(f'prof_newton_d{dec}_l{l}', float(newt.median()), step); emit(f'prof_step_d{dec}_l{l}', float(stp.median()), step)
             emit(f'prof_Dabs_d{dec}_l{l}', float(Df[seg].abs().median()), step)
             if Dof is not None: emit(f'prof_dsign_acf1_d{dec}_l{l}', float((torch.sign(Df[seg]) * torch.sign(Dof[seg])).sum() / ((Df[seg] != 0).float().sum() + 1e-30)), step)
 

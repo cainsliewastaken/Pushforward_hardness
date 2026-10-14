@@ -2381,6 +2381,120 @@ Caveats: one seed; baselines untuned (3 fixed lrs, no schedule, beta2 = 0.99); 5
    clamp e^4.6 = 100; or at budget 0.15 with w ~ 8), the linear rescale is wrong by orders of magnitude and the applied step's actual
    output change is unbounded. Gradient-norm clipping cannot act here (the step is sign-based: the gradient's magnitude never enters);
    the relevant clip is on the realised output change, or on the learned weights.
+56. THE SPIKES ARE NOT THE BUDGET'S (critical-batch scan of the xfold session, runs/scale_crit/, 222 runs, AdamW and KronQ, both targets, batch
+   256-4096, 625-40000 steps, no decay anywhere; read 2026-10-14 at the user's request). AdamW spikes too: 28 of its smooth-target runs, 10-21
+   spikes per run at lr 1e-3 and 20000-40000 steps, 8-9 at 3e-4, none at 1e-4; its rough runs never spike because they never get below 0.18.
+   KronQ's first spike comes at a loss ~0.02 (rough) / 7e-5 (smooth), at 60 % of the run, and the count grows with steps, lr and batch; a run
+   refreshing its basis every 5 steps spikes as often as one with periods near 1000. So neither the one-forward budget rescale (item 55's
+   hypothesis) nor the stale-basis transport is the common cause: what every spiking run shares is a low loss under a step that has not shrunk
+   enough, i.e. progressive sharpening at a fixed step (the chain section's edge of stability), later in training because that is when the loss
+   is low, more at large batch because the loss gets there sooner, the noise is smaller and the budgets used were larger. scale_spike.sh is
+   therefore not run; the xfold session's --spike_diag is the instrument to use if the onset is to be located. Gradient-norm clipping stays a
+   no-op for the sign step; the stability bound in the theory is the per-mode Newton bound (the cap), untested at > 5000 steps, and decay was
+   absent from every spiking run, so "decay first, then the cap" is the order of any test.
+   CORRECTION (2026-10-14, from the xfold session's SPIKE_RESULT.md, TF32 test, 16 runs, 2-4 seeds per configuration): the sharpening reading
+   above is WRONG for KronQ's spikes. Measured cause: at some late refresh the Cholesky-QR returns a non-orthonormal rotation (the 1e-12 jitter
+   lets the Cholesky succeed on an ill-conditioned Gram instead of falling back to QR), the accumulated basis error jumps from < 1e-4 to > 0.5
+   within 50-300 steps, and the loss spikes 250-1500 steps later; in every smooth run, in both precisions. On the rough target TF32 itself is
+   the cause: fp32 removes the spikes and reaches a 2.2x LOWER loss (0.0033 vs 0.0073, batch 1024, 10000 steps): TF32 sets a floor there, and
+   every result of this line ran with --tf32 1. Fix under test there: an orthogonality guard after Cholesky-QR with a float64 Householder QR
+   fallback, basis rotations and transports in fp32, TF32 kept for the network's matmuls. Consequences here: the cap test proposed above is
+   moot for the spikes; the large-batch "stability bound" argument drops (large batch: no budget, no cap, a numerically guarded basis); the
+   rough-field references (0.0622 etc.) may be TF32-limited and need re-measuring once the guard lands. AdamW's own spikes at lr 1e-3 are a
+   separate matter and were not examined by that test.
+57. INVENTORY OF THE FAST PATH AND THE METHOD WITHOUT THE BUDGET (job 59767821, 1 node, 18 min, released by the chain; scale_nobudget.sh;
+   runs/scale_nobudget/; 9 runs). What the preset runs: (1) the per-layer blocked Kronecker eigenbasis (input covariance every step, probe
+   backprop covariance every step, two subspace iterations when due, adaptive period 5-1000, state transported); (2) sign of the momentum
+   (0.9) on all modes; (3) learned per-mode weight (normalised one-step hypergradient, rate 0.01, memory 100, clamp e^+-4.6); (4) lr with linear
+   decay AND the output budget (one extra forward, linear undo of the excess over rem x min(current, initial) residual); (5) decoupled decay
+   on replayed data. Inert in the preset: cap, slow adaptation, fresh-batch budget / line search, pre-activation budget, sphere / kappa
+   controllers, adaptive momentum, weight shrink, gated decay, tracking lr, gradient clip, basis freeze. No field run had ever used rem 0.
+   TEST: no budget, no cap, lr {1e-4, 2e-4, 4e-4}; field 5000 steps no decay; turbulence 400k increment 20 epochs, decay 1e-3 per step.
+   | | lr 1e-4 | lr 2e-4 | lr 4e-4 | reference with the budget |
+   | turbulence increment | 0.121 (train 0.078) | 0.1148 (train 0.072) | 0.181 (spike to 0.42 at 20000) | 0.111 capped / 0.120 fixed 0.03 (wd 1.0) |
+   | field smooth | 1.68e-4 | 1.39e-4 | collapses at the end (best 1.7e-4, final 0.43) | 1.42e-4 |
+   | field rough | 0.1159 | 0.1162 | 0.1128 | 0.0622 |
+   (a) TURBULENCE AND THE SMOOTH FIELD DO NOT NEED THE BUDGET: lr 2e-4 + decay reproduces the capped result within 4 % (0.115 vs 0.111) with
+   no budget forward, no anchor, no windows; the smooth field at lr 2e-4 equals the reference. The usable lr is 1e-4 to 2e-4 at batch 256;
+   4e-4 is past the stability edge on both (a spike on turbulence, a terminal collapse on the smooth field). On turbulence the method is now:
+   basis + sign of momentum + learned weights + lr 2e-4 with linear decay + decay 1e-3 per step. Prediction (within 15 %) HELD.
+   (b) THE ROUGH FIELD LOSES 1.8x WITHOUT THE BUDGET, AND THE LOSS IS FLAT IN lr (0.113-0.116 across 4x): prediction (within 20 %) FAILED.
+   Flat in lr means lr is not setting the step: the learned weight absorbs it (its fixed point w lam lr = m |g| makes the per-mode step the
+   completion step of the batch gradient, independent of lr), and on the rough target at per-batch SNR 0.2 the completion step of a noisy
+   mode overshoots: train = val = 0.115 (no overfit, fresh data), a NOISE FLOOR. The budget's job on the rough field is to hold the step
+   below the completion step by the noise factor (raw 0.67 -> 0.2; item 44's "noise-set working point"), which the magnitude rule's fixed point
+   does not do. On turbulence the decay plays that role (the equilibrium w/wd bounds the push), which is why the budget is redundant there.
+   What this leaves: the budget is NOT a safety and not a trust region; it is the noise shrinkage of the completion step that ingredient 3 lacks
+   (OPTIMIZER_THEORY 0's conjecture: the shrunk step should be m_k^2 (Wiener), the rule delivers m_k). Replacements to test, none run: decay on
+   the fresh-data field as the shrinkage (prediction: helps rough, costs smooth, as uniform decay bounds the shared fit); a shrunk fixed point
+   for the weight rule (m^2 in place of m, a derivation, not a constant); or keep the budget as the one constant on fresh rough data and drop it
+   everywhere else.
+58. SMALL NETWORK, SMALL AND LARGE BATCH, NO CAP, NO BUDGET, SPIKE FIX (job 59768756, 1 node, 12 min, released by the chain; scale_smallnet.sh;
+   runs/scale_smallnet/; 20 runs). Branch xfold merged into main (b51d653): the QR guard (--qr_guard 1: each Cholesky-QR rotation checked for
+   orthonormality in float64, failing blocks redone by Householder QR; SPIKE_RESULT.md, the cause of the late spikes) and full fp32 (--tf32 0:
+   the guarded fp32 configuration is the one verified spike-free; TF32 sets a floor on the rough target). Field, width 1024, depth 2, 5000
+   steps, seed 1, both targets, batch 256 and 2048; KronQ lr grids {1e-4, 2e-4, 4e-4} / {2e-4, 4e-4, 8e-4}; AdamW {3e-4, 1e-3} / {1e-3, 3e-3}.
+   | | KronQ batch 256 | KronQ batch 2048 | AdamW batch 256 | AdamW batch 2048 |
+   | rough | 0.118-0.121 (flat in lr) | 0.107-0.109 (flat in lr) | 0.443 (1e-3), 0.510 (3e-4) | 0.423 (1e-3), 0.634 (3e-3) |
+   | smooth | 5.7e-4 / 3.5e-4 / 2.35e-4 (1e-4 / 2e-4 / 4e-4) | 1.15e-4 / 9.6e-5 / 8.8e-5 | 2.8e-3 (3e-4), 1.2e-3 (1e-3) | 8.6e-4 (1e-3), 9.1e-3 (3e-3) |
+   | wall (5000 steps) | 52-56 s | 58-60 s | 7 s | 11 s |
+   Spikes (> 30 % jump below 0.3): none in 11 of the 12 KronQ runs, one in the smooth batch-2048 lr 8e-4 run; the guard holds.
+   (a) NO CAP AND NO BUDGET WORKS AT BOTH BATCHES on the small network: KronQ leads AdamW by 3.7x (256) and 3.9x (2048) on rough and by 5x
+   (256) and 10x (2048) on smooth. Prediction "> 3x on rough at 2048" held; "within 20 % of AdamW on smooth" was WRONG in KronQ's favour (the
+   earlier "tie on smooth" in these notes referred to the turbulence direct target against AdamW with decay, and to SOAP / full-factor
+   variants on the field, not to AdamW on the field, where KronQ has led 5x since item 1861's table).
+   (b) The rough result at width 1024 is CAPACITY-LIMITED, not noise-limited: 0.107 at batch 2048 against 0.118 at 256, flat in lr at both,
+   so this test cannot see the budget's noise shrinkage (item 57's 1.8x at width 4096, batch 256), and the budgeted reference at width 1024
+   was not run. The prediction that the rough gap narrows at 256 held only trivially (3.9x -> 3.7x).
+   (c) Large batch at equal steps: 10 % better on rough, 2.5x on smooth (8x the samples), with the lr window shifted up as the batch law says
+   (smooth at 256 still improving at 4e-4; at 2048 lr 8e-4 is fine).
+   (d) Per-step cost at this width: KronQ 5x AdamW's wall (the eigen-refresh and the probe dominate a 3M-parameter network); at equal wall
+   AdamW would get 25000 steps, which on the rough target does not reach 0.17 at any length in the critical-batch scan (item 56 data).
+   Method as run here: blocked Kronecker basis with the guarded refresh, sign of momentum, learned weights, lr with linear decay. Nothing else.
+59. MERGE OF THE XFOLD SESSION'S REFACTOR AND PRECISION WORK (2026-10-14; branch xfold merged into main after its jobs 59769209 / 59769295;
+   details in paper/notes/SPIKE_RESULT.md, sections "Precision pairs" and "Hybrid"). (a) The refactor (kronq_orig.KronQOrig, --orig 1: weights
+   in ordinary coordinates, statistics there, bases recomputed at each refresh, the summed gradient rotated in and the update out) equals the
+   per-sample KronQFast in fp32 (rough preset 0.054 vs 0.049; to 1 % through step 2000) and runs 21 % faster at batch 4096: the large-batch
+   form of item 57's cost accounting, built and validated. In TF32 it is 2x worse on rough (0.099): the rotation of the summed gradient in
+   reduced precision destroys the slow-mode components (the cancellation argument), so the two rotations must be fp32. (b) AdamW is identical
+   in fp32 and TF32 (0.390): the precision sensitivity belongs to a method that reaches the slow modes. (c) KronQFast itself in fp32: 0.049
+   against 0.062-0.071 in TF32; the rough references of this line are TF32-limited and should be re-quoted from fp32 runs (8x over AdamW at
+   equal steps on the rough preset). (d) Hybrid on KronQFast (refresh in fp32, weights transformed at re-orthonormalisation, QR guard, network
+   TF32): catastrophic spikes gone (basis error 1e-5 - 7e-5, was 1.0); rough preset 0.057-0.060, and 0.052-0.054 with the activation rotations
+   in fp32 too (--rot_hp), at no measurable cost at batch 256; smooth B1024 T10000 1-2 small spikes against 11. Open there: the long rough run
+   (B1024 T10000), where the hybrid's 0.0079 is still 2.4x above fp32's 0.0033 and --rot_hp was not run; the per-refresh function change of
+   ~5 % of the residual is now the rotated forward's own TF32 rounding. Consequence for the method statement: fp32 for the basis work and
+   the rotations (gradient in, update out, activations in the per-sample form), reduced precision for the network's matmuls; everything else
+   as in item 58.
+60. THE HYBRID WITH fp32 ACTIVATION ROTATIONS ON THE LONG RUNS (job 59785584, 1 node, 10 min; scale_rothp.sh; runs/scale_rothp/; 4 runs;
+   the launch chain died with a Claude Code restart, the runs survived and a watcher cancelled the job after the fourth result). KronQFast
+   with --qr_guard --refresh_hp --reorth_transport --rot_hp, network TF32; B1024 T10000, budget 0.3, the configurations and seeds of
+   SPIKE_RESULT's hybrid table. Prediction: rough within 20 % of fp32; null: the gap stays and the forward itself needs fp32.
+   | | seed 1 | seed 2 | hybrid without --rot_hp | KronQFast fp32 | KronQFast TF32 |
+   | rough, final | 0.00325, no spikes | 0.00330, no spikes | 0.0079 / 0.0076 | 0.0033 / 0.0034 | 0.0073 / 0.0078, 3 / 1 spikes |
+   | smooth, final (best) | 3.73e-5 (3.73e-5), 1 small spike at 7750 | 6.76e-5 (5.11e-5), 1 small spike at 7500 | 4.2e-5 / 5.1e-5, 1 / 2 spikes | - | 5.5e-3 / 4.8e-4, 11 / 11 spikes |
+   HELD, within 2 %: with the activation rotations in fp32 the TF32 network reaches the full-fp32 rough result (0.00325 vs 0.0033) with no
+   spikes, so the rough target's precision requirement is the ROTATIONS (refresh, transports, the activation and backprop rotations of the
+   per-sample form; the gradient and update rotations of the summed form), not the network's matmuls. The remaining small smooth spikes
+   (one per seed, 1.5-5x, recovering) are unchanged by --rot_hp and are therefore not in the rotations; they stay open and minor. The
+   precision boundary of the method is now measured on both targets at 10000 steps: fp32 for the basis work and the rotations, reduced
+   precision for the network. Cost at batch 256 was unmeasurable (SPIKE_RESULT); at large batch the fp32 rotations are the 4b/(3m) term of
+   item 57's accounting, under 1 %.
+60. THE HYBRID WITH fp32 ACTIVATION ROTATIONS ON THE LONG RUNS (job 59785584, 1 node, 10 min, released by the chain; scale_rothp.sh;
+   runs/scale_rothp/; 4 runs: the xfold session's configurations and seeds, --refresh_hp 1 --reorth_transport 1 --qr_guard 1 --rot_hp 1,
+   network TF32, with the spike instrument). Prediction: rough within 20 % of fp32; null: the gap stays and the forward itself needs fp32.
+   | | seed 1 | seed 2 | hybrid without --rot_hp (SPIKE_RESULT) | KronQFast fp32 | KronQFast TF32 |
+   | rough B1024 T10000 final | 0.00325 | 0.00330 | 0.0079 / 0.0076 (best) | 0.0033 / 0.0034 | 0.0073 / 0.0078 + spikes |
+   | smooth B1024 T10000 final (best) | 3.73e-5 | 6.76e-5 (5.11e-5) | 4.2e-5 / 5.1e-5 | - | 5.5e-3 / 4.8e-4 (11 spikes each) |
+   | spikes | 0 | 0 | 0 | 0 | 3 / 1 |
+   | wall with the instrument | 156 s | 158 s | 187-191 s | - | 160 s |
+   Basis error 1e-5 - 2e-5 throughout (max of the orthogonality diagnostics). The rough gap is CLOSED: the hybrid with the activation rotations
+   in fp32 equals full fp32 to 1 % on both seeds, with no spikes, at the TF32 wall (156 s against 160 s for KronQFast TF32 and 256-259 s for
+   full fp32 on the preset, per SPIKE_RESULT). Smooth: one small spike per seed (at 7750 / 7500; finals 3.7e-5 and 6.8e-5 against the hybrid's
+   4.2e-5 / 5.1e-5): the small smooth spikes are not the rotations' precision and remain unexplained, at a 10-30 % level rather than the
+   10-700x of the unguarded runs. PRECISION BOUNDARY, SETTLED: the refresh, the transports and the activation (or gradient) rotations in fp32;
+   the network's own matmuls in reduced precision. Everything the slow modes need is in the small operations. This is the configuration for
+   the method statement and for the rough references (0.0033 at B1024 T10000; the TF32 0.0073 and the 0.0062 preset values are superseded).
 
 25 (this fork). APPROXIMATION CONTROLS AND BASIS TRACKING (job 59749741, 1 node, 12 min; optimizer/tracking.py, --track;
    scale_exact.sh; runs/scale_exact/). Width 4096, both targets: reference fast configuration (blocks 256, bf16 state, two
