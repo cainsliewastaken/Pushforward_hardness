@@ -88,6 +88,12 @@ the resolved configuration). Add --lr 2e-4 --wd_abs 1e-3 on finite data. The cap
    on finite data the budget is already unnecessary (lr 2e-4 + decay, item 57). Note for that regime only: keep the budget there.
 3. SPEED (engineering, after 1-2): subsample the probe and the budget forward, fuse the rotated forward pass, remove the per-step GPU
    synchronisations, run the refresh on a side stream. Target 1.1-1.3x AdamW per step.
+   SPLIT-PRECISION ROTATIONS (flagged 2026-10-14, not implemented): the refactor's gradient / update rotations must be fp32-accurate for the
+   slow modes; plain fp32 runs ~8x slower than TF32 on an A100. 3xTF32 (CUTLASS): a = a_hi + a_lo with a_hi = a rounded to TF32 (mask the
+   13 low mantissa bits), a_lo = a - a_hi exact; a.b ~ a_hi.b_hi + a_hi.b_lo + a_lo.b_hi (dropped term ~2^-22), three TF32 products with fp32
+   accumulation: ~fp32 accuracy at 3x TF32 cost (~2.7x faster than fp32). The bases' hi / lo parts change only at a refresh (precompute);
+   per step only the gradient and the update are split. On bf16-only hardware ~6 bf16 products for fp32-level accuracy. Needed only where
+   the rotations are compute-bound: at width 4096 plain-fp32 rotations showed no measurable cost (overhead-bound), so test at scale.
 4. CRITICAL BATCH REPORT (no compute): re-summarise scale_crit (223 runs) with best-along-run values now that the spikes are explained.
 5. bf16: the hybrid under bf16 autocast on the rough preset and turbulence.
 6. Notes: correct THEORY.md / MECHANISM.md on the Kronecker basis (section 4).
