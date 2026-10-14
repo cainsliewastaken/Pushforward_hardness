@@ -2134,6 +2134,34 @@ Caveats: one seed; baselines untuned (3 fixed lrs, no schedule, beta2 = 0.99); 5
    fixed per target (rough lr 1e-3; smooth budget 0.3), the noise-set constant b0 (n_B / 256)^alpha with alpha in [0.5, 0.8]
    (rough budget b0 = 0.15; smooth lr b0 = 1e-3). Which constant is which is decided by item 42d's batch / held-out ratio.
 
+47. TURBULENCE DIAGNOSTICS: WHY ADAMW WINS THERE (job 59763625, 1 node, 10 min; scale_turbdiag.sh, scale_turbdiag_summary.py;
+   runs/scale_turbdiag/; 100000-pair 64 x 64 cache; 5000 steps; training batch loss logged beside validation; KronQ runs with the
+   measurement windows). Four magnitude rules on both targets: AdamW lr 1e-4; minimal KronQ hard sign; the Adam rule in the
+   Kronecker basis; the soft sign (floor 0.1). Prediction beforehand (the sign push's fixed per-mode magnitude pays the noise cost
+   on modes without signal, Prop. 2): the Adam rule and the soft sign close the gap to AdamW, the hard sign does not. OUTCOME: NULL.
+   | increment | train batch @5000 | val @5000 | gap | best val (step) |   | AdamW | 0.163 | 0.273 | 1.7x | 0.273 (5000, still falling) |
+   | KronQ hard sign | 0.033 | 0.409 | 12.5x | 0.355 (250) |   | KronQ Adam rule | 0.027 | 0.393 | 14x | 0.331 (250) |
+   | KronQ soft sign | 0.034 | 0.449 | 13x | 0.352 (500) |
+   | direct | AdamW 0.057 / 0.113 / 2.0x / 0.113 (5000) | KronQ hard sign 0.009 / 0.166 / 18x / 0.128 (250) | Adam rule 0.008 / 0.170 / 20x / 0.134 (250) | soft sign 0.010 / 0.171 / 18x / 0.127 (500) |
+   (a) OVERFITTING, NOT THE MAGNITUDE RULE. All three KronQ rules drive the training loss 5x below AdamW's and their validation
+       loss rises from step 250-500 on; they are indistinguishable from each other. The magnitude story is retracted.
+   (b) KronQ is the better optimizer of the training loss by a wide margin and is ahead of AdamW on validation at step 250
+       (0.355 vs 0.43 increment, 0.128 vs 0.18 direct; ~3 s of wall). In a finite-data setting with a target that is partly
+       not a function of the input (the coarse increment: subgrid and chaotic part), fast removal of the slow-mode residual
+       is memorisation of the sample-specific part. The field problem is online (fresh batch every step): nothing to memorise.
+   (c) The held-out alignment of KronQ's own steps collapses from 0.14 (step 40) to 0.03 (step 4000) while the batch loss keeps
+       falling: steps that reduce the batch loss and not the population loss. Corollary 24a's cross-kernel quantity is the
+       online signature of memorisation, readable by a preflight or a stopping rule.
+   (d) REGIME: the increment reads 3.9x uniform at step 1 (rough; field rough 6x), 25-60x from step 290 on (after the fast part
+       is removed); the direct target reads 95x at step 1 (smooth: near the identity). The target is rough at init; the earlier
+       "smooth-regime" reading (window at step 1790) was a late window, withdrawn.
+   (e) With the 100000-pair slab AdamW itself improves from 0.453 to 0.273 (increment) and 0.207 to 0.113 (direct) over item 45:
+       the first pass was data-limited for both methods.
+   Consequence: the clean test of the method on this data is the online regime the theory is about: a single pass over the
+   400000 available frames (no sample seen twice), KronQ vs AdamW at equal wall. Memorisation is excluded by construction and
+   the comparison measures optimization speed on a rough target. Separately (user's question): whether the 256 x 256 target
+   is rougher at step 1 than the 64 x 64 one (scale_turbres.sh, measurement only).
+
 25 (this fork). APPROXIMATION CONTROLS AND BASIS TRACKING (job 59749741, 1 node, 12 min; optimizer/tracking.py, --track;
    scale_exact.sh; runs/scale_exact/). Width 4096, both targets: reference fast configuration (blocks 256, bf16 state, two
    subspace iterations, refresh floor 5) against "exact Kronecker" (full factors, fp32 state, float64 eigh, refresh floor
