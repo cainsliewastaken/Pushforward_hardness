@@ -2429,6 +2429,28 @@ Caveats: one seed; baselines untuned (3 fixed lrs, no schedule, beta2 = 0.99); 5
    the fresh-data field as the shrinkage (prediction: helps rough, costs smooth, as uniform decay bounds the shared fit); a shrunk fixed point
    for the weight rule (m^2 in place of m, a derivation, not a constant); or keep the budget as the one constant on fresh rough data and drop it
    everywhere else.
+58. SMALL NETWORK, SMALL AND LARGE BATCH, NO CAP, NO BUDGET, SPIKE FIX (job 59768756, 1 node, 12 min, released by the chain; scale_smallnet.sh;
+   runs/scale_smallnet/; 20 runs). Branch xfold merged into main (b51d653): the QR guard (--qr_guard 1: each Cholesky-QR rotation checked for
+   orthonormality in float64, failing blocks redone by Householder QR; SPIKE_RESULT.md, the cause of the late spikes) and full fp32 (--tf32 0:
+   the guarded fp32 configuration is the one verified spike-free; TF32 sets a floor on the rough target). Field, width 1024, depth 2, 5000
+   steps, seed 1, both targets, batch 256 and 2048; KronQ lr grids {1e-4, 2e-4, 4e-4} / {2e-4, 4e-4, 8e-4}; AdamW {3e-4, 1e-3} / {1e-3, 3e-3}.
+   | | KronQ batch 256 | KronQ batch 2048 | AdamW batch 256 | AdamW batch 2048 |
+   | rough | 0.118-0.121 (flat in lr) | 0.107-0.109 (flat in lr) | 0.443 (1e-3), 0.510 (3e-4) | 0.423 (1e-3), 0.634 (3e-3) |
+   | smooth | 5.7e-4 / 3.5e-4 / 2.35e-4 (1e-4 / 2e-4 / 4e-4) | 1.15e-4 / 9.6e-5 / 8.8e-5 | 2.8e-3 (3e-4), 1.2e-3 (1e-3) | 8.6e-4 (1e-3), 9.1e-3 (3e-3) |
+   | wall (5000 steps) | 52-56 s | 58-60 s | 7 s | 11 s |
+   Spikes (> 30 % jump below 0.3): none in 11 of the 12 KronQ runs, one in the smooth batch-2048 lr 8e-4 run; the guard holds.
+   (a) NO CAP AND NO BUDGET WORKS AT BOTH BATCHES on the small network: KronQ leads AdamW by 3.7x (256) and 3.9x (2048) on rough and by 5x
+   (256) and 10x (2048) on smooth. Prediction "> 3x on rough at 2048" held; "within 20 % of AdamW on smooth" was WRONG in KronQ's favour (the
+   earlier "tie on smooth" in these notes referred to the turbulence direct target against AdamW with decay, and to SOAP / full-factor
+   variants on the field, not to AdamW on the field, where KronQ has led 5x since item 1861's table).
+   (b) The rough result at width 1024 is CAPACITY-LIMITED, not noise-limited: 0.107 at batch 2048 against 0.118 at 256, flat in lr at both,
+   so this test cannot see the budget's noise shrinkage (item 57's 1.8x at width 4096, batch 256), and the budgeted reference at width 1024
+   was not run. The prediction that the rough gap narrows at 256 held only trivially (3.9x -> 3.7x).
+   (c) Large batch at equal steps: 10 % better on rough, 2.5x on smooth (8x the samples), with the lr window shifted up as the batch law says
+   (smooth at 256 still improving at 4e-4; at 2048 lr 8e-4 is fine).
+   (d) Per-step cost at this width: KronQ 5x AdamW's wall (the eigen-refresh and the probe dominate a 3M-parameter network); at equal wall
+   AdamW would get 25000 steps, which on the rough target does not reach 0.17 at any length in the critical-batch scan (item 56 data).
+   Method as run here: blocked Kronecker basis with the guarded refresh, sign of momentum, learned weights, lr with linear decay. Nothing else.
 
 25 (this fork). APPROXIMATION CONTROLS AND BASIS TRACKING (job 59749741, 1 node, 12 min; optimizer/tracking.py, --track;
    scale_exact.sh; runs/scale_exact/). Width 4096, both targets: reference fast configuration (blocks 256, bf16 state, two
