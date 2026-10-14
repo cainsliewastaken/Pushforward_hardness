@@ -564,8 +564,8 @@ for step in range(1, a.steps + 1):
         if not math.isfinite(v): emit('diverged', 1, step); break
 peak = torch.cuda.max_memory_allocated() if DEV == 'cuda' else 0
 sb = opt_state_bytes()
-VAL_FINAL = [r_['value'] for r_ in rows if r_['metric'] == 'val'][-1]
-for k_, v_ in (('val_final', VAL_FINAL), ('state_bytes', sb), ('state_per_param', sb / (4 * P)),
+VAL_FINAL = [r_['value'] for r_ in rows if r_['metric'] == 'val'][-1]; VAL_BEST = min(r_['value'] for r_ in rows if r_['metric'] == 'val' and math.isfinite(r_['value']))
+for k_, v_ in (('val_final', VAL_FINAL), ('val_best', VAL_BEST), ('state_bytes', sb), ('state_per_param', sb / (4 * P)),
                ('peak_mem_bytes', peak), ('t_fb', tm['fb']), ('t_stats', tm['stats']), ('t_eig', tm['eig']), ('t_upd', tm['upd']), ('wall_total', time.time() - t_start)):
     emit(k_, v_, a.steps)
 os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)

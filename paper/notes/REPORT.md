@@ -2088,6 +2088,29 @@ Caveats: one seed; baselines untuned (3 fixed lrs, no schedule, beta2 = 0.99); 5
    equal steps (0.055 -> 0.0174 -> 0.0098) and smooth 1.6x and 2.1x. Not yet compared with AdamW at the same batch at
    equal wall; the item-40 baseline is at batch 256 only.
 
+45. 2D TURBULENCE ONE-STEP EMULATOR, FIRST PASS (job 59763189, 2 nodes, 14 min; scale_study.py --problem turb, make_turb_cache.py,
+   scale_turb.sh, scale_turb_summary.py; runs/scale_turb/). Flop_Constrained_Temporal_Scaling vorticity (256^2 per frame, the user's
+   own data, not built for this paper), coarsened to 64 x 64 by block means, lead 10 (time step 0.1), 20000 training pairs
+   after the 20000-frame spinup, 2048 validation pairs from the test region; MLP 4096 -> 4096 x 2 -> 4096. Targets: the
+   normalised increment (delta, the rough target: the Euler step's residual) and the next state (direct, the smooth control).
+   Minimal KronQ (cap off) lr {5e-4, 1e-3, 2e-3} x budget {0.15, 0.3}; AdamW lr {1e-4, 3e-4, 1e-3} at 5000 and 25000 steps;
+   2 seeds. Validation MSE in units of the target variance, mean of 2 seeds:
+   | | increment | direct | wall |   | AdamW 1e-4, 5000 | 0.453 | 0.207 | 18 s |   | AdamW 3e-4, 5000 | 0.544 | 0.233 | 18 s |
+   | AdamW 1e-4, 25000 | 0.541 | 0.252 | 89 s |   | AdamW 3e-4, 25000 | 0.576 | 0.279 | 89 s |
+   | KronQ 5e-4 / 1e-3 / 2e-3, budget 0.15 | 0.489 / 0.478 / 0.471 | 0.220 / 0.220 / 0.222 | 55-62 s |
+   | KronQ budget 0.3 | 0.61 (5e-4), 0.77 (1e-3), diverges (2e-3) | 0.43 (5e-4), diverges (1e-3, 2e-3) | |
+   (a) KRONQ DOES NOT BEAT TUNED ADAMW HERE: AdamW at 5000 steps is better on both targets (0.453 vs 0.471; 0.207 vs 0.220) at a
+       third of the wall. The nominal equal-wall comparison (25000 steps: AdamW 0.541 vs 0.471, "1.15x for KronQ") is
+       CONFOUNDED: every AdamW lr is worse at 25000 steps than at 5000, i.e. the longer runs overfit the 20000-pair slab
+       (320 passes), and the lower lr wins for the same reason. Not a usable comparison.
+   (b) The budget's ceiling is 0.15-0.3 on this problem too (0.3 diverges at lr >= 1e-3 on both targets): a third target where
+       the budget is the deterministic envelope (item 44), and the only usable value here is the field problem's rough optimum.
+   (c) Absolute errors are large (45 % / 21 % of the variance): a 64 x 64 MLP at lead 10 is a hard emulation problem.
+   Fix before the verdict: a 100000-pair training slab (the data has 400000), the best validation along the run reported
+   beside the final, and the same grid; then the equal-wall statement is meaningful. If AdamW stays ahead, the method's
+   demonstrated advantage is the field problem's rough target and a tie on raw-coordinate image fitting, and the paper
+   says so.
+
 25 (this fork). APPROXIMATION CONTROLS AND BASIS TRACKING (job 59749741, 1 node, 12 min; optimizer/tracking.py, --track;
    scale_exact.sh; runs/scale_exact/). Width 4096, both targets: reference fast configuration (blocks 256, bf16 state, two
    subspace iterations, refresh floor 5) against "exact Kronecker" (full factors, fp32 state, float64 eigh, refresh floor
