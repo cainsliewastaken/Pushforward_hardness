@@ -415,7 +415,7 @@ for step in range(1, a.steps + 1):
         KQ.step(step, lr, out, xb, yb, mse, tm, time.time, emit if a.diag else None)
         if a.spike_diag and step >= a.spike_diag:
             with torch.no_grad():
-                pl = float(mse(KQ.forward(Xv[:512]), Yv[:512])); rec = dict(getattr(KQ, 'sd_last', {}))
+                pl = float(mse(KQ.forward(Xv[:512]), Yv[:512])); rec = dict(getattr(KQ, 'sd_last', {})); KQ.sd_last = {}   # refresh records only on refresh steps
                 rec.update(probe=pl, rho_raw=float(getattr(KQ, 'last_rho', float('nan')) or float('nan')), rho_real=float(getattr(KQ, 'last_rho_real', float('nan'))),
                            umax=max(float(u.float().abs().max()) for u in KQ.u) if KQ.u is not None else float('nan'),
                            umean=float(sum(float(u.float().sum()) for u in KQ.u) / sum(u.numel() for u in KQ.u)) if KQ.u is not None else float('nan'),
