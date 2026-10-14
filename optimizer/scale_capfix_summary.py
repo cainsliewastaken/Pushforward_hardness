@@ -16,8 +16,9 @@ def label(a):
     if '--rem_anchor' in a: parts.append(f"anchor {arg(a, 'rem_anchor')}")
     if '--slow_adapt 1' in a: parts.append(('held-out CAP' if '--sa_cap 1' in a else 'held-out budget') + f" kappa {arg(a, 'sa_kappa_max') or '1.0'}")
     if '--wd' in a and arg(a, 'wd') not in (None, '0.0', '0'): parts.append(f"wd {arg(a, 'wd')}")
-    for k in ('wd_abs', 'wd_gate', 'wd_gate_q0', 'lr_track', 'batch', 'rem_iter', 'clip_grad', 'u_clamp', 'rem_check'):
-        if f'--{k} ' in a and arg(a, k) not in ('0', '0.0', '4.6', '0.5', '256'): parts.append(f"{k} {arg(a, k)}")
+    for k in ('width', 'wd_abs', 'wd_gate', 'wd_gate_q0', 'lr_track', 'batch', 'rem_iter', 'clip_grad', 'u_clamp', 'rem_check', 'qr_guard', 'tf32'):
+        if f'--{k} ' in a and arg(a, k) not in ('0', '0.0', '4.6', '0.5', '256', '4096', '1'): parts.append(f"{k} {arg(a, k)}")
+        if k == 'tf32' and arg(a, k) == '0': parts.append('fp32')
     if '--steps' in a and arg(a, 'steps') not in ('5000', '31240'): parts.append(f"steps {arg(a, 'steps')}")
     if '--u_decay' in a and arg(a, 'u_decay') not in (None, '0.0', '0'): parts.append(f"u_decay {arg(a, 'u_decay')} floor {arg(a, 'u_floor') or '-2.3'}")
     return ' | '.join(parts)
@@ -39,6 +40,8 @@ add = [f for f in glob.glob(f'{S}/scale_turbfull/res_j*.jsonl') if int(os.path.b
 if add: show(sorted(add), 'mechanism test (scale_turbfull, indices 100+)')
 fix = glob.glob(f'{S}/scale_capfix/res_j*.jsonl')
 if fix: show(sorted(fix), 'capped-budget fix (scale_capfix)')
+sn = glob.glob(f'{S}/scale_smallnet/res_j*.jsonl')
+if sn: show(sorted(sn), 'small network, small and large batch, no cap or budget, guarded fp32 (scale_smallnet)')
 nb = glob.glob(f'{S}/scale_nobudget/res_j*.jsonl')
 if nb: show(sorted(nb), 'no budget, no cap: lr + decay only (scale_nobudget)')
 gt = glob.glob(f'{S}/scale_gate/res_j*.jsonl')
