@@ -2301,6 +2301,31 @@ Caveats: one seed; baselines untuned (3 fixed lrs, no schedule, beta2 = 0.99); 5
    (3) PROBE STATISTICS EVERY k STEPS (--stats_every): k = 2: rough 0.0680 (+9 %), smooth 1.44e-4 (+1 %); k = 5: rough 0.0831 (+34 %),
    smooth 1.50e-4 (+6 %). The rough target needs the probe every step; the smooth one does not. Prediction held.
    Also: every run now prints step / val / train-batch loss / wall at each eval (user request), so a run can be killed from its log.
+53. FAIR WEIGHT-DECAY COMPARISON ON TURBULENCE, AND WHITENED ADAMW THERE (job 59765780, 2 nodes, 20 min, released by the chain;
+   scale_fairwd.sh; runs/scale_fairwd/; 16 runs, 20 epochs, batch 256). Predictions beforehand: AdamW gains less from decay than KronQ did
+   (its gap was 1.4x, KronQ's 3x); KronQ wd 1.0 over-regularises; whitening helps AdamW on the increment and not on direct.
+   | increment | wd 0 | wd 0.3 | wd 1.0 |        | direct | wd 0 | wd 0.3 | wd 1.0 |
+   | AdamW lr 1e-4 | 0.1563 | 0.1570 | 0.1669 |   | AdamW lr 1e-4 | 0.0706 | 0.0678 | 0.0649 |
+   | AdamW lr 1e-3 | 0.1826 | 0.1623 | 0.1705 |   | AdamW lr 1e-3 | 0.0660 | 0.0600 | 0.0636 |
+   | KronQ seed 1 | 0.1946 | 0.1273 | 0.1109 |    | KronQ seed 1 | 0.1002 | 0.0628 (best 0.0606) | 0.0688 (best 0.0626; spike to 43 at ~18500, recovered) |
+   | KronQ seed 2 | - | 0.1267 | - |              | KronQ seed 2 | - | 0.0631 (best 0.0611) | - |
+   Train-batch loss at the end: AdamW 0.12-0.14 (increment) / 0.042-0.045 (direct) at every decay; KronQ 0.060-0.068 / 0.023-0.030.
+   INCREMENT (rough): AdamW does not gain from decay at any lr (best 0.156, unchanged). KronQ gains and keeps gaining at 1.0: 0.111, 29 %
+   below AdamW's best, and the wd 0.3 value reproduces on seed 2 to three digits (0.1273 / 0.1267). DIRECT (smooth): a tie. AdamW gains
+   9 % from wd 0.3 (0.060); KronQ wd 0.3 is 0.063 final / 0.061 best on both seeds. At wd 1.0 KronQ spikes once (to 43 at step 18500)
+   and recovers to 0.069, the anchor-min recovery pattern of item 49: the decay strength has a target-dependent ceiling on direct as the
+   budget has. Prediction (2) failed in the direction of KronQ: wd 1.0 is its best increment value, not an over-regularised one.
+   WHITENED ADAMW ON TURBULENCE (lr 1e-3, wd 0): increment pca 0.216, full 0.294 (unwhitened 0.183 at this lr, 0.156 best); direct pca
+   0.122, full 0.117 (unwhitened 0.066). Training loss far below the unwhitened runs (increment pca 0.063 vs 0.13; direct pca 0.021 vs
+   0.044). Prediction (3) FAILED: whitening hurts on both targets, and it hurts by overfitting. Reading, consistent with items 51-52:
+   whitening lets Adam reach the slow input directions, and on replayed data whoever reaches them fits the sample; KronQ did the same
+   without decay (0.195, train 0.063). Reaching the slow directions is one property with two faces, the rough-target gain and the
+   memorisation, and the explicit regulariser is what separates them. Whitened AdamW with decay was not run.
+   WHERE THE LINE STANDS AFTER ITEMS 50-53. Field (fresh data): KronQ 3.8x on rough, tie / small win on smooth; most of the rough gap to
+   AdamW is the input-side basis (whitened AdamW 0.109 vs 0.062 vs 0.39). Turbulence (400k pairs, 20 epochs): with weight decay 0.3-1.0
+   KronQ is 19-29 % below AdamW's best on the rough target and ties on the smooth one; without decay it loses by overfitting. The same
+   pattern on both problems. Open: a second AdamW seed; the decay ceiling on direct; wd 1.0 vs 3.0 on the increment; whitened AdamW with
+   decay (the cheapest competitor to the full method on finite data, untested).
 
 25 (this fork). APPROXIMATION CONTROLS AND BASIS TRACKING (job 59749741, 1 node, 12 min; optimizer/tracking.py, --track;
    scale_exact.sh; runs/scale_exact/). Width 4096, both targets: reference fast configuration (blocks 256, bf16 state, two
