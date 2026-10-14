@@ -36,6 +36,8 @@ add = [f for f in glob.glob(f'{S}/scale_turbfull/res_j*.jsonl') if int(os.path.b
 if add: show(sorted(add), 'mechanism test (scale_turbfull, indices 100+)')
 fix = glob.glob(f'{S}/scale_capfix/res_j*.jsonl')
 if fix: show(sorted(fix), 'capped-budget fix (scale_capfix)')
+bg = glob.glob(f'{S}/scale_budget/res_j*.jsonl')
+if bg: show(sorted(bg), 'budget with strong decay, no slow adaptation (scale_budget)')
 fg = glob.glob(f'{S}/scale_forget/res_j*.jsonl')
 if fg: show(sorted(fg), 'forgetting-rate test: decay vs dataset size (scale_forget)')
 sm = glob.glob(f'{S}/scale_simple/res_j*.jsonl')

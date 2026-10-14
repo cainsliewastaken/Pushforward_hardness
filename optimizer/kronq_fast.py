@@ -676,7 +676,8 @@ class KronQFast:
                 f_before = out.detach()
             for l in range(L): self.Wt[l].data.sub_(lr * self.eta[l] * Dws[l])
             if a.wd > 0:                                                      # decoupled weight decay on the weight part (not the bias column): bounds the sign push's weight diffusion
-                for l in range(L): self.Wt[l].data[:, :-1].mul_(1.0 - lr * a.wd)
+                gam_wd = a.wd_abs * (lr / a.lr) if a.wd_abs > 0 else lr * a.wd      # --wd_abs: decay per step at full lr as its own constant (the budget, not lr, sets the step; item 55)
+                for l in range(L): self.Wt[l].data[:, :-1].mul_(1.0 - gam_wd)
             if a.zbud:                                       # per-layer pre-activation budget (TRUST_REGION: the layer's radius is a sphere in z-space)
                 for l in range(L - 1):
                     at = self.cache['at'][l].detach(); zt = self.cache['zt'][l].detach()
