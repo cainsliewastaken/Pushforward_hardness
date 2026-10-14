@@ -2,7 +2,7 @@
 target, so 1.0 = predicting zero), seed values, and mean wall; the best KronQ against the best AdamW at equal wall."""
 import json, glob, os, sys, collections
 F = sys.argv[1] if len(sys.argv) > 1 else os.path.expandvars('$SCRATCH/l63_held_rough/runs/scale_turb2')
-def arg(args, k): return args.split(f'--{k} ')[1].split()[0] if f'--{k} ' in args else None
+def arg(args, k): return args.split(f'--{k} ')[-1].split()[0] if f'--{k} ' in args else None   # last occurrence (argparse semantics)
 res = collections.defaultdict(list)
 for fn in glob.glob(f'{F}/res_j*.jsonl'):
     rows = [json.loads(l) for l in open(fn)]

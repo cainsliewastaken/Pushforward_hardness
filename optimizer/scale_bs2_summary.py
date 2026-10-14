@@ -3,7 +3,7 @@ batch-256 grid (runs/scale_grid); per target the lr x budget table at each batch
 optimal constants; AdamW at batch 1024 (scale_bs2) against KronQ at batch 1024 at equal wall."""
 import json, glob, os, sys, collections
 S = os.path.expandvars('$SCRATCH/l63_held_rough/runs')
-def arg(args, k): return args.split(f'--{k} ')[1].split()[0] if f'--{k} ' in args else None
+def arg(args, k): return args.split(f'--{k} ')[-1].split()[0] if f'--{k} ' in args else None   # last occurrence (argparse semantics)
 kq = collections.defaultdict(list); ad = collections.defaultdict(list)
 for folder in ('scale_grid', 'scale_bs', 'scale_bs2'):
     for fn in glob.glob(f'{S}/{folder}/res_j*.jsonl'):

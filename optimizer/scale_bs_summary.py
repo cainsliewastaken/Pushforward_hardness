@@ -3,7 +3,7 @@
 import json, glob, os, sys, collections
 F = sys.argv[1] if len(sys.argv) > 1 else os.path.expandvars('$SCRATCH/l63_held_rough/runs/scale_bs')
 G = os.path.expandvars('$SCRATCH/l63_held_rough/runs/scale_grid')
-def arg(args, k): return args.split(f'--{k} ')[1].split()[0] if f'--{k} ' in args else None
+def arg(args, k): return args.split(f'--{k} ')[-1].split()[0] if f'--{k} ' in args else None   # last occurrence (argparse semantics)
 def load(folder, want_kronq=True):
     res = collections.defaultdict(list)
     for fn in glob.glob(f'{folder}/res_j*.jsonl'):

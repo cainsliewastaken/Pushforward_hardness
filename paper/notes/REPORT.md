@@ -2111,6 +2111,29 @@ Caveats: one seed; baselines untuned (3 fixed lrs, no schedule, beta2 = 0.99); 5
    demonstrated advantage is the field problem's rough target and a tie on raw-coordinate image fitting, and the paper
    says so.
 
+46. BATCH-SIZE SCALING, SECOND PASS, AND THE EQUAL-WALL COMPARISON AT BATCH 1024 (job 59763310, 2 nodes, 13 min; scale_bs2.sh,
+   scale_bs2_summary.py (merged tables over items 40, 44, 46); runs/scale_bs2/; 2 seeds). Finer grid of the noise-set constant
+   at batch 512 and 2048 (rough: lr 1e-3, budget {0.2, 0.4, 0.8}; smooth: budget 0.3, lr {1.4e-3, 2.8e-3, 5.6e-3}), AdamW at
+   batch 1024 (lr {1e-4, 3e-4, 1e-3}, 5000 and 29000 steps).
+   ROUGH, KronQ at lr 1e-3: 512: 0.080 / 0.0142 / 0.0174 / 0.0202 / 0.0185 / 0.0193 at budget 0.15 / 0.2 / 0.3 / 0.4 / 0.6 / 0.8;
+     2048: 0.12 / 0.011 / 0.0086 at 0.2 / 0.4 / 0.8. Optimal budget 0.15 -> 0.2 -> 0.3 -> 0.8 at 256 -> 512 -> 1024 -> 2048
+     (x5.3 over x8 in batch: exponent ~0.8 from the end points, 0.5 from 256 -> 1024; the landscape near the optimum is
+     flat within 1.3x, so 0.5-0.8). lr pinned at 1e-3 at every batch (item 44). Validation 0.055 -> 0.0142 -> 0.0098 -> 0.0086
+     at 65 -> 66 -> 62 -> 75 s wall.
+   SMOOTH, KronQ at budget 0.3: 512: 8.44 / 8.25 / 7.59 / 8.35 / 7.82 / 9.15 e-5 at lr 1e-3 / 1.4e-3 / 2e-3 / 2.8e-3 / 4e-3 / 5.6e-3;
+     2048: 0.184 (1.4e-3; diverged) / 5.37e-5 / 4.79e-5 at 1.4e-3 / 2.8e-3 / 5.6e-3. Optimal lr 1e-3 -> 2e-3 -> 2e-3 -> 5.6e-3
+     (exponent 0.5-0.8 again); budget pinned at 0.3 (item 44). Validation 1.23e-4 -> 7.6e-5 -> 5.85e-5 -> 4.8e-5.
+   ADAMW AT BATCH 1024 (wall 46 s at 5000 steps, 78 s at 29000): rough 5000: 0.40 / 0.30 / 0.45 at lr 1e-4 / 3e-4 / 1e-3;
+     29000: 0.32 / 0.208 / 0.50. Smooth 5000: 8.8e-4 / 3.4e-4 / 3.5e-4; 29000: 1.67e-4 / 6.8e-5 / 2.1e-4.
+   EQUAL WALL AT BATCH 1024: rough KronQ 0.0098 (62 s) vs AdamW 0.208 (78 s): 21x; smooth KronQ 5.85e-5 (50 s) vs AdamW 6.8e-5
+     (78 s): 1.17x for KronQ. At batch 256 (item 40) the same comparison was 3.8x and 0.79x. AdamW gains nothing from the
+     larger batch at equal wall on rough (0.208 at both) because its step cost scales with the batch; KronQ's step is
+     eigendecomposition-dominated and the larger batch is nearly free, so its sign is right more often per step at the
+     same wall. This is the first setting where KronQ leads on the smooth target too.
+   Standing form of the two constants (OPTIMIZER_THEORY 0, ingredient 4), with the measured uncertainty: the ceiling constant
+   fixed per target (rough lr 1e-3; smooth budget 0.3), the noise-set constant b0 (n_B / 256)^alpha with alpha in [0.5, 0.8]
+   (rough budget b0 = 0.15; smooth lr b0 = 1e-3). Which constant is which is decided by item 42d's batch / held-out ratio.
+
 25 (this fork). APPROXIMATION CONTROLS AND BASIS TRACKING (job 59749741, 1 node, 12 min; optimizer/tracking.py, --track;
    scale_exact.sh; runs/scale_exact/). Width 4096, both targets: reference fast configuration (blocks 256, bf16 state, two
    subspace iterations, refresh floor 5) against "exact Kronecker" (full factors, fp32 state, float64 eigh, refresh floor
