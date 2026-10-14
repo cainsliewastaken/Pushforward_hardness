@@ -23,3 +23,22 @@ Jobs 59767397 (scale_spikefield, crashed at the realised-change logger, onsets o
 5. What remains consistent with every observation: spikes need a low loss and many steps, are transient with recovery, appear in AdamW too
    (21 of 149 runs at lr 1e-3 / 3e-3), and occur with the budget slack. That is the profile of the chain's sharpening / edge-of-stability
    statement (THEORY.md); untested. The test: the top kernel eigenvalue times the effective step along spiking runs, several seeds each.
+
+## TF32 on vs off (job 59768403, 4 nodes, 16 runs, frozen code 5f824ee; tf32_summary.py)
+| config | TF32 on: seeds spiked, best | fp32: seeds spiked, best | median function change per refresh (on / off) |
+| smooth B1024 T10000 | 4 of 4, 4.7-5.0e-5 | 4 of 4, 3.9-4.9e-5 | 5.9e-2 / 5.0e-5 |
+| smooth B512 T20000 | 2 of 2, 6.5-8.4e-5 | 2 of 2, 7.7-8.5e-5 | 2.0e-2 / 3.7e-5 |
+| rough B1024 T10000 | 2 of 2, 0.0073-0.0078 | 0 of 2, 0.0033-0.0034 | 1.9e-2 / 3.9e-5 |
+1. Precision is not the cause on the smooth target (fp32 spikes in every seed, at the same steps), although fp32 cuts the per-refresh
+   function change ~1000x. On the rough target fp32 removes the spikes AND reaches 2.2x lower loss (0.0033 vs 0.0073): TF32 sets a floor.
+2. THE BASIS BREAKS FIRST, in every smooth run in both precisions: the accumulated basis error (max |U^T U - I|, float64) jumps from <1e-4
+   to > 0.5 within 50-300 steps, at the same refresh where the new rotation V from Cholesky-QR has error > 1e-2, and the probe loss first
+   jumps 250-1500 steps later (e.g. fp32 seed 1: basis > 0.5 at 7450, probe at 7747; TF32 seed 1: 6997, 7252). Rough fp32: the basis never
+   leaves 1e-5 and nothing spikes. Rough TF32: basis failure at 5535 / 6022; the earliest probe jumps (2200) precede it and are early-training
+   noise; the validation spikes are not all after it, so the rough case is less clean.
+3. Cause, as measured: the refresh's Cholesky-QR returns a non-orthonormal rotation at some point late in the run (the jitter 1e-12 x mean
+   diagonal lets the Cholesky succeed on an ill-conditioned Gram instead of falling back to QR); the basis loses orthonormality; the loss
+   spikes a few hundred steps later. Open: the earlier --cholqr 0 run also spiked, without the basis being logged, so whether exact QR
+   avoids the failure is not known. Fix to test (a numerical guard, no new constant in the method): check V^T V after Cholesky-QR and fall
+   back to Householder QR in float64 when it is not orthonormal to working precision; rotations and transports in fp32 with TF32 kept for the
+   network's own matmuls.
