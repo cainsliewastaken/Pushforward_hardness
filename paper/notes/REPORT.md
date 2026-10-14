@@ -2018,12 +2018,23 @@ Caveats: one seed; baselines untuned (3 fixed lrs, no schedule, beta2 = 0.99); 5
        held-out) falling to 1.5-2 late. The budget is a batch quantity; the theory's break-even is held-out. On smooth the
        budget never constrained the held-out step.
    (e) Coordinates raw: N = 256 per fresh batch, kappa_W noisy (0.1-1.9), c -> 0 repeatedly: no conclusion from this probe.
-   Candidate mechanism for (c): the learned per-mode weights (one-step hypergradient u -= beta_u hg, hg = -lr g_t D_{t-1})
+   CORRECTION (same day, after the user's challenge). (c) is a tautology, not a finding: kappa_W = 1 - (net progress) / (gross
+   gain), and item 21b already had progress ~ 1e-3 of the per-step batch decrease; over 40 steps the gross terms are ~ 0.4
+   ||E||^2 against ~ 0.007 ||E||^2 of progress, so kappa_W = 0.98 for ANY optimizer in this regime and the fresh batch's +-5 %
+   cannot resolve it. "c proportional to rho" is the same equation rearranged. Consequence: every kappa-based measurement
+   (items 38-42) compares gross gain with gross cost and has no power to locate the optimal length; the only measurement
+   that does is net progress over hundreds of steps against the length, i.e. the lr grid (item 40). A local length rule
+   reads a quantity below the noise of what it can measure; that, not a missing formula, is why items 31, 39, 41 lost.
+   Candidate mechanism for the weights (status: a derivation for DECOUPLED modes only, untested): the learned per-mode weights (one-step hypergradient u -= beta_u hg, hg = -lr g_t D_{t-1})
    move each mode to zero correlation between the next batch gradient and the last step, i.e. to the one-step optimum
    along the mode on the population, which is an online per-mode LENGTH controller; a global budget on top is undone by
    the weights. Test (not run): the same measurement on the uniform-weight run (--hyper 0): if kappa_W departs from 1 and
    moves with rho there, the weights are the controller and the length line closes with "the per-mode weights set the
-   length; the budget and lr are its stability envelope".
+   length; the budget and lr are its stability envelope". RETRACTED as a test: by the correction above the uniform-weight run
+   also shows kappa_W ~ 1, so it discriminates nothing. The fixed point E[g_{t+1,k} D_{t,k}] = 0 gives w_k lam_k lr = m_k |grad_k|
+   only where the mode's response is its own (fast deciles; item 25c says not the slow ones) and only if u is off the clamp
+   (unchecked). The discriminating test, if run: the ratio w_k lam_k lr / |grad_k| per decile with grad_k from a slow EMA and
+   m_k from the long-run mean sign per mode; prediction m_k within 2x on the fast deciles, null: scatter over decades.
 
 25 (this fork). APPROXIMATION CONTROLS AND BASIS TRACKING (job 59749741, 1 node, 12 min; optimizer/tracking.py, --track;
    scale_exact.sh; runs/scale_exact/). Width 4096, both targets: reference fast configuration (blocks 256, bf16 state, two

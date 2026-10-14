@@ -164,3 +164,11 @@ gross gain as progress, and the alignment of its steps is proportional to their 
 property of the direction cannot work, which is why items 31, 39 and 41 all lost. The candidate controller that holds
 kappa at 1 is the learned per-mode weight (the one-step hypergradient drives <g_{t+1}, D_t> to zero per mode, the
 one-step optimum along the mode); the test is the same measurement with uniform weights (--hyper 0).
+
+Correction (same day). The two sentences above on kappa_W = 1 as "the run holds gain = cost" and "the alignment is
+proportional to the length" are one tautology: kappa_W = 1 - progress / gross gain, and progress is 1-2 % of the gross
+terms here (REPORT 61 item 21b), so kappa_W = 1 within the probe's resolution for any optimizer in this regime. The
+measurement says nothing about what controls the length, and the uniform-weight comparison would not either. What stands
+from this note: section 2 (confirmed), the inertness of the cap, the additivity of the output changes (section 3's
+output-space claim refuted by the coupling), and the fixed point of the weight rule as a derivation for decoupled modes
+(REPORT 61 item 42, correction) with its discriminating test stated there.
