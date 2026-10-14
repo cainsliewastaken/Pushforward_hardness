@@ -63,8 +63,9 @@ def _fused_update(g, C, u, r_, c_, Dprev, Se, Ae, lr_eta, lam_scale, b1, beta_u,
         un = u.float() - beta_u * hg / (den + 1e-30); u.copy_(un.clamp(-u_clamp, u_clamp).to(u.dtype))
     lam = Se[:, None] * Ae[None, :] * lam_scale; lmax = lam.max(); live = lam > reltol * lmax
     D = torch.where(live, torch.exp(u.float()) * torch.sign(Cf), torch.zeros_like(Cf))
-    capv = g.abs() / (lam.clamp(min=1e-30) * (lr_eta * L))
-    D = torch.sign(D) * torch.minimum(D.abs(), capv)
+    if L > 0:                                                  # L = 0: --cap 0 (no bound; a 1e-30 divisor gave 0/0 on zero gradients)
+        capv = g.abs() / (lam.clamp(min=1e-30) * (lr_eta * L))
+        D = torch.sign(D) * torch.minimum(D.abs(), capv)
     return D, lam, live
 try:
     fused_update = torch.compile(_fused_update, dynamic=False)
@@ -186,7 +187,7 @@ class KronQFast:
         self.use_fused = bool(a.fused) and a.hyper and a.compress and a.rule == 'sign' and a.wrule == 'learned' and not a.dprev_bits and a.horizon <= 1 \
             and not a.hyper_shape and a.q == 0 and a.qa == 0 and a.q_in == 0 and a.sign_floor <= 0 and a.topk <= 0 and not a.alloc and not a.alloc2 \
             and not a.mom_adapt and a.hyper_rule == 'idbd' and not a.gnls and not a.ekfac and not a.lr_kappa and not a.sphere and not a.radius_scan and not a.check_curv
-        self.nref = [0] * self.L; self._lr_eta_t = torch.zeros((), device=dev); self.capL = (float(self.L) if a.cap_L else 1.0) if a.cap else 1e-30; self.c_ema = None; self.rem_dyn = None   # --cap 0: the bound is pushed to infinity (fused path kept)
+        self.nref = [0] * self.L; self._lr_eta_t = torch.zeros((), device=dev); self.capL = (float(self.L) if a.cap_L else 1.0) if a.cap else 0.0; self.c_ema = None; self.rem_dyn = None   # --cap 0: the bound is pushed to infinity (fused path kept)
         self.xv_fresh = None   # (x, y) fresh batch for --rem_val, set by the harness each step
         self.zbud = [float(x) for x in a.zbud.split(',')] if a.zbud else []
         self.scan_steps = set(int(x) for x in a.radius_scan.split(',')) if a.radius_scan else set()
