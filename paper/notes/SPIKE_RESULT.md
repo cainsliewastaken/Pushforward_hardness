@@ -58,3 +58,36 @@ Jobs 59767397 (scale_spikefield, crashed at the realised-change logger, onsets o
    float64 Householder fallbacks in the last third of training.
 Next: the guard on by default; basis rotations, transports and the rotated-parametrisation products in fp32 with TF32 kept for the
 network's own matmuls (removes the drift at a fraction of full fp32's 1.7-1.9x runtime).
+
+## The refactor (kronq_orig.py, --orig 1; job 59769038, frozen code 70a9e8d; orig_summary.py)
+CPU, fp32, width 96, 200 steps: trajectory within 2.4e-4 of KronQFast, refresh function change exactly 0, basis error 6.5e-8.
+GPU, all TF32, guard on: smooth preset 1.26e-4 / 1.25e-4 (KronQFast 1.42e-4 / 1.38e-4: 10 % better); smooth B1024 T10000 seeds 1-4:
+0 / 1 / 4 / 0 spikes (mild), finals 3.0e-5 - 7.8e-5, refresh change 0, basis error 1e-5 (the guard still fires 1500-9500 times);
+rough preset 0.099 / 0.0999 (KronQFast 0.0622 / 0.0626: 60 % WORSE, from step 250 on: 0.44 vs 0.35, 0.19 vs 0.135 at 1000);
+rough B1024 T10000 0.0111 / 0.0113, no spikes (KronQFast TF32 best 0.0073, fp32 0.0033); runtime 5000 steps: batch 4096 100 s
+(KronQFast 127 s), batch 1024 62 s (59 s). Not adopted: the rough deficit is open; scale_orighp.sh tests whether TF32 in the
+refactor's own products (gradient rotation, statistics in ordinary coordinates, refresh) causes it.
+
+## Precision pairs (job 59769209; scale_precpair.sh), rough preset, batch 256, 5000 steps, seed 1
+| run | 250 | 1000 | 2000 | 3000 | 4000 | 5000 |
+| refactor fp32 | 0.289 | 0.133 | 0.111 | 0.080 | 0.063 | 0.054 |
+| KronQFast fp32 | 0.288 | 0.132 | 0.111 | 0.078 | 0.059 | 0.049 |
+| refactor TF32 | 0.441 | 0.190 | 0.135 | 0.119 | 0.107 | 0.099 |
+| KronQFast TF32 | 0.347 | 0.135 | 0.117 | 0.089 | 0.071 | (end spike) |
+| AdamW lr 3e-4 fp32 / TF32 | 0.593 / 0.593 | 0.502 / 0.503 | 0.454 / 0.456 | 0.423 / 0.423 | 0.402 / 0.403 | 0.390 / 0.390 |
+1. In fp32 the refactor equals KronQFast (to 1 % through step 2000, 10 % at the end): its rough deficit in TF32 is precision, not a
+   difference in the method. 2. KronQFast itself gains in fp32 (0.049 against the TF32 runs' 0.062-0.071). 3. AdamW is identical in fp32
+   and TF32: the rough target's precision sensitivity belongs to a method that reaches the slow modes; AdamW never does.
+Hybrid (KronQFast with --refresh_hp, --reorth_transport, --qr_guard; CPU check: the function change at re-orthonormalisations falls to the
+level of an ordinary refresh) and --rot_hp (activation rotations in fp32): scale_hybrid.sh.
+
+## Hybrid (job 59769295, frozen code 078a7d0; scale_hybrid.sh): weights in the basis, refresh in fp32, weights transformed at
+## re-orthonormalisation, QR guard; network TF32
+| run | hybrid | hybrid + activation rotations fp32 (--rot_hp) | KronQFast TF32 | KronQFast fp32 |
+| rough preset seed 1 / 2 | 0.0597 / 0.0565 | 0.0536 / 0.0517 | 0.0622 / 0.0626 | 0.049 (seed 1) |
+| rough B1024 T10000 seed 1 / 2, best (final) | 0.0079 (0.0101) / 0.0076 (0.0100), no spikes | not run | 0.0073 / 0.0078, 3 / 1 spikes | 0.0033 / 0.0034 |
+| smooth B1024 T10000 seed 1 / 2 | 1 / 2 small spikes, finals 4.2e-5 / 5.1e-5 | | 11 / 11 spikes, finals 5.5e-3 / 4.8e-4 | |
+Basis error 1e-5 - 7e-5 (was 1.0). Runtime: rough preset 66-67 s (KronQFast TF32 63 s), with --rot_hp 65-67 s (no measurable cost at batch 256);
+rough B1024 T10000 with the instrument 187-191 s (KronQFast TF32 with the instrument 160 s, +19 %). The per-refresh function change is still
+~5 % of the residual in TF32: it is now the rotated forward pass's own TF32 rounding (the two forwards compared use different bases), not
+stored-weight error. Open: --rot_hp at batch 1024 / 10000 steps (the long run where fp32 is 2.2x better) and its cost at large batch.
