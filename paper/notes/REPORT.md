@@ -2326,6 +2326,33 @@ Caveats: one seed; baselines untuned (3 fixed lrs, no schedule, beta2 = 0.99); 5
    KronQ is 19-29 % below AdamW's best on the rough target and ties on the smooth one; without decay it loses by overfitting. The same
    pattern on both problems. Open: a second AdamW seed; the decay ceiling on direct; wd 1.0 vs 3.0 on the increment; whitened AdamW with
    decay (the cheapest competitor to the full method on finite data, untested).
+54. FORGETTING-RATE TEST OF THE DECAY MECHANISM (job 59766222, 1 node, 15 min, released by the chain; scale_forget.sh; runs/scale_forget/;
+   11 runs). Claim: decoupled decay works on replayed data by erasing sample-specific components between visits, so the controlling number is
+   the per-epoch forgetting factor f = exp(-lr wd N/B), not wd. Test: 100k pairs (N/B 390, 20 epochs = 7810 steps) with wd chosen to match
+   the 400k factors. Predictions: wd 0.3 (f 0.89) < 15 % gain; wd 1.2 (f 0.63) ~ -35 % as 400k wd 0.3 did; wd 4.0 (f 0.21) ~ -43 % unless
+   the equilibrium cap w/wd over-regularises (training loss up); AdamW insensitive; 400k wd 3.0 (f 0.009) over-regularised. Null: the gain
+   follows wd (100k wd 0.3 gives ~ -35 % again).
+   | 100k increment | wd 0 | wd 0.3 | wd 1.2 (seeds 1 / 2) | wd 4.0 |   AdamW lr 1e-4: wd 0 0.2708, 0.3 0.2678, 1.2 0.2644 (train 0.12-0.14)
+   | KronQ final | 0.4259 | 0.3495 (-18 %) | 0.3061 / 0.3050 (-28 %) | 0.2988 (-30 %; spike to 1.08 at step 4000) |
+   | KronQ best along run | 0.3426 | 0.3191 | 0.2640 / 0.2627 | 0.2565 |
+   | KronQ train-batch at the end | 0.027 | 0.028 | 0.039 | 0.055 |
+   | 100k direct | wd 0: 0.1714 (best 0.1267, train 0.008) | wd 1.2: 0.1370 (best 0.1106, train 0.015) |  (no AdamW direct reference at 100k)
+   | 400k increment wd 3.0 | diverged (val 1.02 by step 2250, 2.6e4 at 6250; killed at 20000 after the result was clear) |
+   READING. (a) The null is rejected: at fixed wd 0.3 the gain halves when the epoch is 4x shorter (-18 % vs -35 %). (b) Across both datasets
+   the gain is monotone in f (f 0.98: 0 %; 0.89: -18 %; 0.63: -28 % and -35 %; 0.21: -30 % and -43 %), so f is the first-order variable,
+   but the 100k values run below the 400k ones at equal f and the wd 4.0 run shows the second effect predicted as its caveat: the training
+   loss doubles (0.027 -> 0.055) and the run spikes; the equilibrium cap w/wd bounds the shared fit at large wd independently of f. The 400k
+   wd 3.0 divergence is the same cap at its extreme. So: the forgetting argument holds in direction and order of magnitude, the value of wd is
+   bracketed between the forgetting floor (f <~ 0.6) and the cap ceiling (wd <~ 1-2 at lr 1e-3), and neither constant is derived.
+   (c) THE RESULT THAT MATTERS FOR THE CLAIM: at 100k pairs KronQ does not beat AdamW. AdamW 0.264-0.271 at every decay (insensitive, as
+   predicted) against KronQ's best final 0.299 and best-along-run 0.257-0.264: a tie at the best early-stopped value and a 13 % loss at the
+   end, because the KronQ validation still rises after step ~2000 at every decay (0.264 -> 0.306 at wd 1.2) while AdamW's keeps falling.
+   The decay slows the memorisation at 100k, it does not stop it. With 400k pairs KronQ wins by 29 % (item 53). The advantage therefore GROWS
+   WITH THE DATASET, from a tie at 100k x 20 epochs through 29 % at 400k x 20 epochs to 3.8x on fresh data: the method's regime is
+   data-rich, and the decay extends it downward by a finite amount. This is the statement for the paper, with the dataset size as the
+   axis; a third point (the full 580k, or 400k at 5 epochs) would fix the curve.
+   Operational note: the launcher waited for the 7.5-minute 400k run before starting wave 2; the diverged run was killed by hand (pkill inside
+   the allocation) so the remaining seven fit the 15 minutes. Put long runs on their own node or last in future launchers.
 
 25 (this fork). APPROXIMATION CONTROLS AND BASIS TRACKING (job 59749741, 1 node, 12 min; optimizer/tracking.py, --track;
    scale_exact.sh; runs/scale_exact/). Width 4096, both targets: reference fast configuration (blocks 256, bf16 state, two
