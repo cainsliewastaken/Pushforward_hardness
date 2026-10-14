@@ -40,7 +40,7 @@ p.add_argument('--compress', type=int, default=0); p.add_argument('--mom_bf16', 
 p.add_argument('--reltol', type=float, default=1e-10); p.add_argument('--beta_stats', type=float, default=0.95)
 p.add_argument('--nval', type=int, default=4096); p.add_argument('--eval_every', type=int, default=250)
 p.add_argument('--seed', type=int, default=1); p.add_argument('--out', required=True)
-p.add_argument('--u_clamp', type=float, default=4.6, help='clamp on the log push weight u (push w = exp(u) in [e^-c, e^c])')
+p.add_argument('--u_decay', type=float, default=0.0, help='kronqf: per-step shrink of the log push weight toward --u_floor, u -= u_decay (u - u_floor): the hypergradient (next-batch agreement with the last push) has zero mean on a mode whose push does not transfer, so without a shrink u random-walks; with it a weight above the floor needs sustained agreement (REPORT 61 item 51)'); p.add_argument('--u_floor', type=float, default=-2.3, help='kronqf u_decay: the floor of the log weight (w = exp(u_floor), default 0.1)'); p.add_argument('--u_clamp', type=float, default=4.6, help='clamp on the log push weight u (push w = exp(u) in [e^-c, e^c])')
 p.add_argument('--gmask', type=float, default=0.0, help='>0: push only modes with |G_ij| > gmask * rms(G) (gradient-energy mask, basis independent)')
 p.add_argument('--bcurv', type=int, default=0, help='1: live mask and GN cap from the CURRENT batch Kronecker curvature (extra backward per step)')
 p.add_argument('--rem', type=float, default=0.0, help='>0: scale the whole step so that ||f(theta+d) - f(theta)|| <= rem * ||E|| on the batch (extra forward per step)')

@@ -13,6 +13,7 @@ def label(a):
     if '--rem_anchor' in a: parts.append(f"anchor {arg(a, 'rem_anchor')}")
     if '--slow_adapt 1' in a: parts.append(('held-out CAP' if '--sa_cap 1' in a else 'held-out budget') + f" kappa {arg(a, 'sa_kappa_max') or '1.0'}")
     if '--wd' in a and arg(a, 'wd') not in (None, '0.0', '0'): parts.append(f"wd {arg(a, 'wd')}")
+    if '--u_decay' in a and arg(a, 'u_decay') not in (None, '0.0', '0'): parts.append(f"u_decay {arg(a, 'u_decay')} floor {arg(a, 'u_floor') or '-2.3'}")
     return ' | '.join(parts)
 def show(files, title):
     print(f'==== {title}')
@@ -32,3 +33,5 @@ add = [f for f in glob.glob(f'{S}/scale_turbfull/res_j*.jsonl') if int(os.path.b
 if add: show(sorted(add), 'mechanism test (scale_turbfull, indices 100+)')
 fix = glob.glob(f'{S}/scale_capfix/res_j*.jsonl')
 if fix: show(sorted(fix), 'capped-budget fix (scale_capfix)')
+ud = glob.glob(f'{S}/scale_udecay/res_j*.jsonl')
+if ud: show(sorted(ud), 'weight shrink toward the floor and weight-decay sweep (scale_udecay)')
