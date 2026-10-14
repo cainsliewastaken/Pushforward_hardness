@@ -654,7 +654,7 @@ class KronQFast:
                     zb = self.zbud[min(l, len(self.zbud) - 1)]
                     if rz > zb: self.Wt[l].data.add_((1.0 - zb / rz) * lr * self.eta[l] * Dws[l])
                     if diag_now: emit(f'zbud_rho_l{l}', rz, step)
-            rem_now = self.rem_dyn if (a.rem_val_track > 0 and self.rem_dyn is not None) else a.rem
+            rem_now = self.rem_dyn if self.rem_dyn is not None else a.rem          # rem_dyn: set by --rem_val_track or by slow_adapt.SlowAdapt
             if a.rem > 0:
                 f_after = self.forward(xb); rho = float((f_after - f_before).norm() / ((f_before - yb).norm() + 1e-30))
                 if rho > rem_now:

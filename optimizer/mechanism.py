@@ -27,14 +27,16 @@ def lanczos_topk(matvec, N, dev, m=48, k=32, gen=None):
         w = matvec(V[j])
         if vprev is not None: w = w - beta * vprev
         alpha = float(w @ V[j]); w = w - alpha * V[j]
-        for u in V: w = w - float(w @ u) * u          # full reorthogonalisation
+        for _ in range(2):                            # full reorthogonalisation, twice (once is not enough near breakdown in float32)
+            for u in V: w = w - float(w @ u) * u
         beta = float(w.norm()); al.append(alpha)
-        if beta < 1e-10 or j == m - 1: break
+        if beta < 1e-6 * max(abs(x) for x in al) or j == m - 1: break   # relative breakdown test (small kernels, e.g. one output, exhaust the Krylov space)
         be.append(beta); vprev = V[j]; V.append(w / beta)
     n = len(al); T = torch.diag(torch.tensor(al, dtype=torch.float64)) + torch.diag(torch.tensor(be[:n - 1], dtype=torch.float64), 1) + torch.diag(torch.tensor(be[:n - 1], dtype=torch.float64), -1)
     ev, Q = torch.linalg.eigh(T); kk = min(k, n); idx = torch.argsort(ev, descending=True)[:kk]
     Vm = torch.stack(V[:n], 1)                           # N x n
     ritz = Vm @ Q[:, idx].to(Vm.dtype).to(dev)         # N x kk
+    ritz, _ = torch.linalg.qr(ritz)                    # exact orthonormality (projections onto the Ritz space must be <= 1)
     return ev[idx].to(dev, torch.float32), ritz
 
 class Mechanism:

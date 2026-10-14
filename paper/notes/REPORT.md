@@ -1941,6 +1941,31 @@ Caveats: one seed; baselines untuned (3 fixed lrs, no schedule, beta2 = 0.99); 5
    closure stands. The kappa picture's value is explanatory (why 0.2 at lr 1e-3 works and 2e-3 collapses), and the
    numerical stage model of the plan's step 3 is the only route to a derived rule; not pursued now.
 
+40. LEARNING-RATE x BUDGET GRID WITH TUNED BASELINES (job 59760310, 3 nodes, 37 min; scale_grid.sh, scale_grid_summary.py;
+   runs/scale_grid/, 120 runs). Width 4096, 5000 steps, seeds 1-3, both targets. KronQ reference configuration (fused, blocks
+   256, refresh floor 5) at lr {5e-4, 1e-3, 1.5e-3} x budget {0.15, 0.2, 0.3}; AdamW lr {1e-4, 3e-4, 1e-3, 3e-3} at 5000 steps
+   and at 29000 steps (equal wall, ~62 s); SOAP blocks 256 lr {1e-3, 2e-3, 3e-3} at 5000 steps (~144 s, 2.2x our wall).
+   Mean of 3 seeds (max/min over seeds):
+   | ROUGH | budget 0.15 | 0.2 | 0.3 |   | KronQ lr 5e-4 | 0.1135 (1.06) | 0.1231 (1.26) | 0.1189 (1.15) |
+   | KronQ lr 1e-3 | 0.0552 (1.09) | 0.0641 (1.09) | 0.0649 (1.04) |   | KronQ lr 1.5e-3 | 0.0714 (1.43) | 13.8 (diverged) | 21.8 (diverged) |
+   | AdamW 5000 steps: lr 1e-4 0.496, 3e-4 0.392, 1e-3 0.431, 3e-3 0.636 (collapse to the mean) |
+   | AdamW 29000 steps: lr 1e-4 0.349, 3e-4 0.208, 1e-3 0.521, 3e-3 0.636 |   | SOAP: lr 1e-3 0.114, 2e-3 0.110, 3e-3 0.0909 |
+   | SMOOTH | 0.15 | 0.2 | 0.3 |   | KronQ lr 5e-4 | 1.80e-4 | 1.45e-4 | 1.27e-4 |   | KronQ lr 1e-3 | 1.78e-4 | 1.41e-4 | 1.23e-4 |
+   | KronQ lr 1.5e-3 | 1.77e-4 | 1.40e-4 | 1.24e-4 |   | AdamW 5000: 1e-4 2.37e-3, 3e-4 8.5e-4, 1e-3 7.5e-4, 3e-3 5.5e-3 |
+   | AdamW 29000: 1e-4 2.28e-4, 3e-4 9.75e-5, 1e-3 6.5e-4, 3e-3 4.2e-2 |   | SOAP: 1e-3 1.25e-4, 2e-3 1.64e-4, 3e-3 7.7e-4 (one seed 1.4e-3) |
+   Reading. (a) ROUGH: best KronQ 0.0552 (lr 1e-3, budget 0.15) against the best AdamW at equal wall 0.208 (lr 3e-4, 29000
+   steps): 3.8x; against the best SOAP 0.0909 at 2.2x our wall: 1.6x. The lr window is narrow: 5e-4 is 2x worse, 1.5e-3
+   diverges at budget >= 0.2 and is seed-unstable at 0.15 (max/min 1.43). The budget matters little at lr 1e-3 (0.055-0.065)
+   and is the stability control at 1.5e-3, as items 31 / 39 said. Seed spread at the standing point: 1.09.
+   (b) SMOOTH: KronQ is lr-insensitive (1.23-1.27e-4 at budget 0.3 for all three lr) and budget-sensitive (0.15 -> 0.3 gains
+   1.45x); the tuned AdamW at equal wall (9.75e-5, lr 3e-4) is 1.26x BETTER than our best, and SOAP ties us (1.25e-4) at 2.2x
+   our wall. The smooth deficit of item 36 is confirmed with tuned baselines: on a target whose residual sits on the fast
+   modes the sign push with blocks has no advantage over Adam at equal wall (the blocked basis loses the fast directions,
+   item 25 (fork)); the full-factor variant (4.7e-5, item 25) would win but at 11 state/P.
+   (c) The standing configuration (lr 1e-3, budget 0.2) is within 1.16x of the grid's best on both targets; 0.15 is the
+   rough optimum, 0.3 the smooth one: the budget is the one constant that wants to be target-dependent, which is what the
+   slow adaptation (item 41) addresses from measurement.
+
 25 (this fork). APPROXIMATION CONTROLS AND BASIS TRACKING (job 59749741, 1 node, 12 min; optimizer/tracking.py, --track;
    scale_exact.sh; runs/scale_exact/). Width 4096, both targets: reference fast configuration (blocks 256, bf16 state, two
    subspace iterations, refresh floor 5) against "exact Kronecker" (full factors, fp32 state, float64 eigh, refresh floor
