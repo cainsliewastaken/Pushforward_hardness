@@ -437,6 +437,10 @@ class KronQFast:
         T_rem = a.steps - step + 1                      # effective steps left in units of the current lr (linear decay to 0 unless a controller holds lr)
         if a.rem_ctrl or a.sphere: self.T_eff = float(T_rem)
         else: self.T_eff = max(1.0, 0.5 * (T_rem + 1.0))   # sum of the remaining linear-decay factors over the current one: (T_rem + 1) / 2
+        if a.clip_grad > 0:                                             # item 56 control: literal gradient-norm clipping (predicted inert: the step is sign-based)
+            tn = math.sqrt(sum(float(W.grad.norm()) ** 2 for W in self.Wt))
+            if tn > a.clip_grad:
+                for W in self.Wt: W.grad.mul_(a.clip_grad / tn)
         due = [l for l in range(L) if step >= self.next_ref[l]]
         if a.freeze_after > 0 and step > a.freeze_after and all(self.S[l].e is not None and self.A[l].e is not None for l in range(L)): due = []   # item 52: bases fixed after this step
         Gr = [W.grad for W in self.Wt]
@@ -723,7 +727,8 @@ class KronQFast:
                 f_before = out.detach()
             for l in range(L): self.Wt[l].data.sub_(lr * self.eta[l] * Dws[l])
             if a.wd > 0:                                                      # decoupled weight decay on the weight part (not the bias column): bounds the sign push's weight diffusion
-                for l in range(L): self.Wt[l].data[:, :-1].mul_(1.0 - lr * a.wd)
+                gam_wd = a.wd_abs * (lr / a.lr) if a.wd_abs > 0 else lr * a.wd      # --wd_abs: decay per step at full lr as its own constant (the budget, not lr, sets the step; item 55)
+                for l in range(L): self.Wt[l].data[:, :-1].mul_(1.0 - gam_wd)
             if a.zbud:                                       # per-layer pre-activation budget (TRUST_REGION: the layer's radius is a sphere in z-space)
                 for l in range(L - 1):
                     at = self.cache['at'][l].detach(); zt = self.cache['zt'][l].detach()
@@ -742,6 +747,17 @@ class KronQFast:
                 if rho > rem_now:
                     sc = 1.0 - rem_now / rho
                     for l in range(L): self.Wt[l].data.add_(sc * lr * self.eta[l] * Dws[l])
+                    if a.rem_check or a.rem_iter > 0:                        # item 56: the rescale is a LINEAR extrapolation from one forward at the full step
+                        kept = rem_now / rho; it = 0                         # (rho_raw 3.5-4 in item 55's runs, far outside the Taylor radius); measure what it did
+                        while True:
+                            f2 = self.forward(xb); rho2 = float((f2 - f_before).norm() / (En + 1e-30)); self.last_rho_real = rho2
+                            if it == 0 and (diag_now or rho2 > 3.0 * rem_now): emit('rem_rho_real', rho2, step)
+                            if it == 0 and rho2 > 3.0 * rem_now and step % 50 == 0: print(f"step {step}: realised output change {rho2:.3g} vs budget {rem_now:.3g} (raw {rho:.3g})", flush=True)
+                            if it >= a.rem_iter or rho2 <= 1.5 * rem_now: break
+                            sc2 = (1.0 - rem_now / rho2) * kept              # undo that fraction of the step still applied
+                            for l in range(L): self.Wt[l].data.add_(sc2 * lr * self.eta[l] * Dws[l])
+                            kept *= rem_now / rho2; it += 1
+                        if diag_now and a.rem_iter > 0: emit('rem_rho_iter', rho2, step); emit('rem_iters', float(it), step)
                 if diag_now: emit('rem_rho', rho, step); emit('rem_now', rem_now, step)
             if (a.rem_val > 0 or a.ls_val or (a.rem_val_track > 0 and step % a.rem_val_every == 0)) and self.xv_fresh is not None:   # REPORT 61 item 30: the budget on a FRESH batch (the cross-kernel effect, Cor. 24a)
                 xv_, yv_ = self.xv_fresh; sc_b = (1.0 - rem_now / rho) if (a.rem > 0 and rho > rem_now) else 0.0   # fraction already undone by the batch budget

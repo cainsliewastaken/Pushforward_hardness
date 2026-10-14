@@ -2301,6 +2301,86 @@ Caveats: one seed; baselines untuned (3 fixed lrs, no schedule, beta2 = 0.99); 5
    (3) PROBE STATISTICS EVERY k STEPS (--stats_every): k = 2: rough 0.0680 (+9 %), smooth 1.44e-4 (+1 %); k = 5: rough 0.0831 (+34 %),
    smooth 1.50e-4 (+6 %). The rough target needs the probe every step; the smooth one does not. Prediction held.
    Also: every run now prints step / val / train-batch loss / wall at each eval (user request), so a run can be killed from its log.
+53. FAIR WEIGHT-DECAY COMPARISON ON TURBULENCE, AND WHITENED ADAMW THERE (job 59765780, 2 nodes, 20 min, released by the chain;
+   scale_fairwd.sh; runs/scale_fairwd/; 16 runs, 20 epochs, batch 256). Predictions beforehand: AdamW gains less from decay than KronQ did
+   (its gap was 1.4x, KronQ's 3x); KronQ wd 1.0 over-regularises; whitening helps AdamW on the increment and not on direct.
+   | increment | wd 0 | wd 0.3 | wd 1.0 |        | direct | wd 0 | wd 0.3 | wd 1.0 |
+   | AdamW lr 1e-4 | 0.1563 | 0.1570 | 0.1669 |   | AdamW lr 1e-4 | 0.0706 | 0.0678 | 0.0649 |
+   | AdamW lr 1e-3 | 0.1826 | 0.1623 | 0.1705 |   | AdamW lr 1e-3 | 0.0660 | 0.0600 | 0.0636 |
+   | KronQ seed 1 | 0.1946 | 0.1273 | 0.1109 |    | KronQ seed 1 | 0.1002 | 0.0628 (best 0.0606) | 0.0688 (best 0.0626; spike to 43 at ~18500, recovered) |
+   | KronQ seed 2 | - | 0.1267 | - |              | KronQ seed 2 | - | 0.0631 (best 0.0611) | - |
+   Train-batch loss at the end: AdamW 0.12-0.14 (increment) / 0.042-0.045 (direct) at every decay; KronQ 0.060-0.068 / 0.023-0.030.
+   INCREMENT (rough): AdamW does not gain from decay at any lr (best 0.156, unchanged). KronQ gains and keeps gaining at 1.0: 0.111, 29 %
+   below AdamW's best, and the wd 0.3 value reproduces on seed 2 to three digits (0.1273 / 0.1267). DIRECT (smooth): a tie. AdamW gains
+   9 % from wd 0.3 (0.060); KronQ wd 0.3 is 0.063 final / 0.061 best on both seeds. At wd 1.0 KronQ spikes once (to 43 at step 18500)
+   and recovers to 0.069, the anchor-min recovery pattern of item 49: the decay strength has a target-dependent ceiling on direct as the
+   budget has. Prediction (2) failed in the direction of KronQ: wd 1.0 is its best increment value, not an over-regularised one.
+   WHITENED ADAMW ON TURBULENCE (lr 1e-3, wd 0): increment pca 0.216, full 0.294 (unwhitened 0.183 at this lr, 0.156 best); direct pca
+   0.122, full 0.117 (unwhitened 0.066). Training loss far below the unwhitened runs (increment pca 0.063 vs 0.13; direct pca 0.021 vs
+   0.044). Prediction (3) FAILED: whitening hurts on both targets, and it hurts by overfitting. Reading, consistent with items 51-52:
+   whitening lets Adam reach the slow input directions, and on replayed data whoever reaches them fits the sample; KronQ did the same
+   without decay (0.195, train 0.063). Reaching the slow directions is one property with two faces, the rough-target gain and the
+   memorisation, and the explicit regulariser is what separates them. Whitened AdamW with decay was not run.
+   WHERE THE LINE STANDS AFTER ITEMS 50-53. Field (fresh data): KronQ 3.8x on rough, tie / small win on smooth; most of the rough gap to
+   AdamW is the input-side basis (whitened AdamW 0.109 vs 0.062 vs 0.39). Turbulence (400k pairs, 20 epochs): with weight decay 0.3-1.0
+   KronQ is 19-29 % below AdamW's best on the rough target and ties on the smooth one; without decay it loses by overfitting. The same
+   pattern on both problems. Open: a second AdamW seed; the decay ceiling on direct; wd 1.0 vs 3.0 on the increment; whitened AdamW with
+   decay (the cheapest competitor to the full method on finite data, untested).
+54. FORGETTING-RATE TEST OF THE DECAY MECHANISM (job 59766222, 1 node, 15 min, released by the chain; scale_forget.sh; runs/scale_forget/;
+   11 runs). Claim: decoupled decay works on replayed data by erasing sample-specific components between visits, so the controlling number is
+   the per-epoch forgetting factor f = exp(-lr wd N/B), not wd. Test: 100k pairs (N/B 390, 20 epochs = 7810 steps) with wd chosen to match
+   the 400k factors. Predictions: wd 0.3 (f 0.89) < 15 % gain; wd 1.2 (f 0.63) ~ -35 % as 400k wd 0.3 did; wd 4.0 (f 0.21) ~ -43 % unless
+   the equilibrium cap w/wd over-regularises (training loss up); AdamW insensitive; 400k wd 3.0 (f 0.009) over-regularised. Null: the gain
+   follows wd (100k wd 0.3 gives ~ -35 % again).
+   | 100k increment | wd 0 | wd 0.3 | wd 1.2 (seeds 1 / 2) | wd 4.0 |   AdamW lr 1e-4: wd 0 0.2708, 0.3 0.2678, 1.2 0.2644 (train 0.12-0.14)
+   | KronQ final | 0.4259 | 0.3495 (-18 %) | 0.3061 / 0.3050 (-28 %) | 0.2988 (-30 %; spike to 1.08 at step 4000) |
+   | KronQ best along run | 0.3426 | 0.3191 | 0.2640 / 0.2627 | 0.2565 |
+   | KronQ train-batch at the end | 0.027 | 0.028 | 0.039 | 0.055 |
+   | 100k direct | wd 0: 0.1714 (best 0.1267, train 0.008) | wd 1.2: 0.1370 (best 0.1106, train 0.015) |  (no AdamW direct reference at 100k)
+   | 400k increment wd 3.0 | diverged (val 1.02 by step 2250, 2.6e4 at 6250; killed at 20000 after the result was clear) |
+   READING. (a) The null is rejected: at fixed wd 0.3 the gain halves when the epoch is 4x shorter (-18 % vs -35 %). (b) Across both datasets
+   the gain is monotone in f (f 0.98: 0 %; 0.89: -18 %; 0.63: -28 % and -35 %; 0.21: -30 % and -43 %), so f is the first-order variable,
+   but the 100k values run below the 400k ones at equal f and the wd 4.0 run shows the second effect predicted as its caveat: the training
+   loss doubles (0.027 -> 0.055) and the run spikes; the equilibrium cap w/wd bounds the shared fit at large wd independently of f. The 400k
+   wd 3.0 divergence is the same cap at its extreme. So: the forgetting argument holds in direction and order of magnitude, the value of wd is
+   bracketed between the forgetting floor (f <~ 0.6) and the cap ceiling (wd <~ 1-2 at lr 1e-3), and neither constant is derived.
+   (c) THE RESULT THAT MATTERS FOR THE CLAIM: at 100k pairs KronQ does not beat AdamW. AdamW 0.264-0.271 at every decay (insensitive, as
+   predicted) against KronQ's best final 0.299 and best-along-run 0.257-0.264: a tie at the best early-stopped value and a 13 % loss at the
+   end, because the KronQ validation still rises after step ~2000 at every decay (0.264 -> 0.306 at wd 1.2) while AdamW's keeps falling.
+   The decay slows the memorisation at 100k, it does not stop it. With 400k pairs KronQ wins by 29 % (item 53). The advantage therefore GROWS
+   WITH THE DATASET, from a tie at 100k x 20 epochs through 29 % at 400k x 20 epochs to 3.8x on fresh data: the method's regime is
+   data-rich, and the decay extends it downward by a finite amount. This is the statement for the paper, with the dataset size as the
+   axis; a third point (the full 580k, or 400k at 5 epochs) would fix the curve.
+   Operational note: the launcher waited for the 7.5-minute 400k run before starting wave 2; the diverged run was killed by hand (pkill inside
+   the allocation) so the remaining seven fit the 15 minutes. Put long runs on their own node or last in future launchers.
+55. THE BUDGET WITH STRONG DECAY, NO SLOW ADAPTATION (job 59766732, 1 node, 20 min, released by the chain; scale_budget.sh;
+   runs/scale_budget/; 6 runs, 400k pairs, 20 epochs, lr 1e-3). Every turbulence result since item 50 ran at the held-out cap's FLOOR 0.03
+   (chosen, not derived) with the decay per step lr wd at lr 1e-3 while the budget cut the step 20x: the budget set the step, lr set the
+   forgetting. Fixed budgets, wd 1.0, increment:
+   | budget | 0.015 | 0.03 | 0.06 | 0.15 | capped (item 53: 0.15 -> 0.03 over the first 2500 steps) |
+   | final | 0.298 | 0.1196 | 0.1236 | 0.235 | 0.1109 |
+   | train-batch at the end | 0.28 | 0.086 | 0.065 | 0.20 | 0.068 |
+   | trajectory | collapses to the mean (1.05 by step 1000), explodes to 7e4 by 10000, recovers late | monotone, still falling | monotone, faster early (0.169 vs 0.197 at 5000) | spike to 2.26 at 10000, recovers to 0.24 | |
+   Direct, budget 0.03 fixed, wd 0.3: 0.43 at step 250, collapses to the mean by 1500 (0.92), explodes to 4e4 at 10000, recovers to 0.077
+   as lr -> 0 (the capped run at the same wd, with the early 0.15 budget, gave 0.063 without incident).
+   (a) The budget is a WINDOW with the decay's instabilities on both sides: below it the decay overpowers the push and the fit collapses to
+   the mean within ~1000 steps (the equilibrium-cap mechanism of item 54, now seen directly), and the collapse is followed by an
+   explosion (next item); above it the item 48 instability returns as a transient spike. Usable at wd 1.0: 0.03-0.06, i.e. the ratio of
+   budget to decay-per-step is the constant, 30-60, with the collapse edge and the spike edge both measured and neither predicted.
+   The direct target's collapse edge is higher (0.03 collapses at wd 0.3), as its near-identity map needs larger weights.
+   (b) SLOW ADAPTATION CAN GO: fixed 0.03 reproduces the capped result within 8 %, and the 8 % is the capped run's larger budget in its
+   first 2500 steps (faster early progress). A fixed budget with a short warm-start replaces the windows and the alignment measurement.
+   (c) DIAGNOSTIC RUN (budget 0.03, wd 1.0, --diag 1): the PROPOSED step's batch output change rem_rho is 3.5-4.2x the residual for 25000
+   steps (0.67 without decay, item 48), falling to 0.13 only as lr -> 0; the budget undoes 99 % of every step. Learned weights under
+   decay: u medians 0.84 / 1.65-2.05 / 1.8-2.0 on layers 0 / 1 / 2 (w 2.3-7.8x; without decay 0.0-0.7), rising all run as the
+   hypergradient fights the decay (consistent next-batch agreement); weight norms layer 2: 31 -> 166 despite wd 1.0 (the push wins the
+   equilibrium); all modes live, cap fraction 0, lag-1 sign agreement 0.71 on every layer (SIGN_PROCESS 7 again). No spike in this run.
+   The budget rescale (kronq_fast.py) takes the full step, measures its output change with ONE forward, and undoes the fraction
+   1 - rem/rho: a linear extrapolation from a point 100x outside the budget and far outside the Taylor radius, and the realised change
+   after the undo is never measured. Hypothesis for the spikes (item 56): where the weights inflate further (after a collapse, u at the
+   clamp e^4.6 = 100; or at budget 0.15 with w ~ 8), the linear rescale is wrong by orders of magnitude and the applied step's actual
+   output change is unbounded. Gradient-norm clipping cannot act here (the step is sign-based: the gradient's magnitude never enters);
+   the relevant clip is on the realised output change, or on the learned weights.
 
 25 (this fork). APPROXIMATION CONTROLS AND BASIS TRACKING (job 59749741, 1 node, 12 min; optimizer/tracking.py, --track;
    scale_exact.sh; runs/scale_exact/). Width 4096, both targets: reference fast configuration (blocks 256, bf16 state, two

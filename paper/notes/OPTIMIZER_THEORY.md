@@ -58,6 +58,18 @@ Three things determine such a nudge, and each has a theory statement and a statu
      length. Status: a problem-dependent ceiling exists and the method has no rule for it; the cap is a safety that
      substitutes a small constant for the divergence. On turbulence KronQ with it reaches 0.19 (increment; AdamW 0.156) and
      0.079 best / 0.095 final (direct; AdamW 0.066).
+  5. REGULARISER (items 51-53, finite data). The push removes gradient descent's implicit regulariser: the slow modes it reaches are
+     where a finite sample's own structure and the leverage noise sit (Lemma 1), so on replayed data the fit goes to directions
+     that do not transfer (train 0.063 / validation 0.195 on the turbulence increment; at matched training loss 24-34 % worse
+     than AdamW). No per-step, per-mode test sees it (the hypergradient already is one; a shrink on it did nothing on turbulence
+     and cost 1.6-1.8x on the field). Explicit decoupled weight decay does: at wd 0.3-1.0 the training loss is unchanged and the
+     validation falls 35-43 %, to 0.111-0.127 against AdamW's 0.156 (which gains nothing from decay there), reproduced on a
+     second seed; on the smooth target a tie (0.063 vs 0.060). Whitened AdamW overfits the same way (0.216 / 0.122, training
+     loss far below unwhitened): reaching the slow directions is the gain and the memorisation at once, and the decay separates
+     them. The decay strength has a target-dependent ceiling (a transient spike at wd 1.0 on direct). Status: measured, one
+     constant, theory statement at the level of "implicit regulariser removed, explicit one needed"; the value is not derived.
+     On the field (fresh data) the input-side basis alone is most of the rough gain: whitened AdamW 0.109 vs KronQ 0.062 vs
+     AdamW 0.39 (item 52), and the moving hidden-layer bases carry the remaining 1.75x (frozen bases collapse).
 
 Not ingredients: the cap (active on 0.3 % of modes, item 42b; it is ingredient 3 computed from one batch instead of the
 sequence, and the sequence estimate is always smaller), the regime switch (retracted, item 41), the kappa rules (items
