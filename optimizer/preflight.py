@@ -66,7 +66,7 @@ def preflight(a, lins, make_KQ, forward_with_KQ, draw, gtrain, xb, yb, mse, DEV,
         KQ_b = make_KQ(lins_copy, a_b)
         with torch.enable_grad():
             out = KQ_b.forward(xb, keep=True); loss = mse(out, yb); loss.backward(retain_graph=True)
-        KQ_b.step(1, 0.0, out, xb, yb, mse, None, None, None)              # statistics + first refresh, no motion
+        KQ_b.step(1, 1e-9, out, xb, yb, mse, None, None, None)             # statistics + first refresh; lr ~ 0 (exactly 0 makes the cap 0 x inf = NaN)
         fids[b if b else 'full'] = _block_fidelity(KQ_b, xb)
         emit(f'pf_fidelity_b{b if b else "full"}', fids[b if b else 'full'], 0)
         del KQ_b; torch.cuda.empty_cache()
@@ -81,7 +81,7 @@ def preflight(a, lins, make_KQ, forward_with_KQ, draw, gtrain, xb, yb, mse, DEV,
     with torch.no_grad(): f0v = KQ_t.forward(xv)
     with torch.enable_grad():
         out = KQ_t.forward(xb, keep=True); loss = mse(out, yb); loss.backward(retain_graph=True)
-    KQ_t.step(1, 0.0, out, xb, yb, mse, None, None, None)                   # statistics + refresh at zero lr
+    KQ_t.step(1, 1e-9, out, xb, yb, mse, None, None, None)                  # statistics + refresh at lr ~ 0
     with torch.enable_grad():
         out = KQ_t.forward(xb, keep=True); loss = mse(out, yb); loss.backward(retain_graph=True)
     KQ_t.step(2, a.lr, out, xb, yb, mse, None, None, None)                  # the trial step
