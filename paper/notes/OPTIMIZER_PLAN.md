@@ -47,7 +47,7 @@ batch-independent) + ~250P update and state transports: batch 256 ~4,400P (AdamW
 | turbulence increment, capped budget, wd 1.0 | 0.1114 / 0.1119 | 0.1109 | 0.1563 |
 | turbulence increment, no budget, lr 2e-4, decay 1e-3/step | 0.1150 | 0.1148 | |
 | turbulence direct, capped budget, wd 0.3 | 0.0631 | 0.0628 / 0.0631 | 0.0600 |
-| turbulence direct, no budget, lr 2e-4, decay 1e-3/step | 0.0478 (ONE seed) | not run before | 0.0600 |
+| turbulence direct, no budget, lr 2e-4, decay 1e-3/step | 0.0478 / 0.0468 / 0.0476 (seeds 1-3) | not run before | 0.0600 (lr 1e-3 wd 0.3); at the same decay per step 0.0697 (lr 2e-4 wd 5.0), 0.0636 (lr 1e-3 wd 1.0) |
 
 ## 4. Known limitations (stated, not fixed)
 
@@ -73,7 +73,9 @@ batch-independent) + ~250P update and state transports: batch 256 ~4,400P (AdamW
 
 ## 6. Plan
 
-1. CONFIRM THE DIRECT RESULT (running next). Direct, no budget, lr 2e-4, decay 1e-3/step, hybrid, seeds 2 and 3; AdamW at the same decay
+1. CONFIRM THE DIRECT RESULT: DONE (job 59786720, scale_directconfirm.sh): seeds 2 / 3 0.0468 / 0.0476 (seed 1 0.0478); AdamW at the same
+   decay per step 0.0697 / 0.0636; prediction held: KronQ 20-22 % below AdamW's best on direct, 26 % on the increment (0.115 vs 0.156).
+   Original item text: Direct, no budget, lr 2e-4, decay 1e-3/step, hybrid, seeds 2 and 3; AdamW at the same decay
    per step (lr 2e-4 with wd 5.0, lr 1e-3 with wd 1.0). Prediction: KronQ 0.046-0.050 on both seeds; AdamW >= 0.06. Null: a seed above
    0.055, or AdamW at matched decay within 5 % of KronQ.
 2. DROPPED (user, 2026-10-14): replacing the budget by a shrunk fixed point of the learned weight (--wiener; code stashed, not on the
