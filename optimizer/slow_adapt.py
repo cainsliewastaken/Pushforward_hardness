@@ -95,6 +95,10 @@ class SlowAdapt:
         kappa = min(a.sa_kappa_max, max(0.5, 1.0 / (2.0 * (1.0 - min(r, 0.49)))))
         target = min(a.sa_rem_max, max(a.sa_rem_min, kappa * 2.0 * c))
         if self.rem is not None and self.rem > 0: target = min(1.5 * self.rem, max(0.5 * self.rem, target))   # rate limit per window
+        if a.sa_cap:                                                        # cap mode: the fixed budget bounded by the held-out break-even
+            target = min(a.rem, max(a.sa_rem_min, a.sa_kappa_max * 2.0 * c)); self.rem = target; self.KQ.rem_dyn = target
+            for name, v in (('sa_c', c), ('sa_r', r), ('sa_rem', target), ('sa_fastfrac', self.ff), ('sa_conc', self.conc)): emit(name, v, step)
+            print(f"slow_adapt cap step {step}: c {c:.3f} -> budget {target:.3f} (fixed {a.rem})", flush=True); return
         self.rem = target; self.KQ.rem_dyn = target
         switched = 0.0
         if self.regime == 'rough' and self.ff is not None and self.conc >= a.sa_thresh:

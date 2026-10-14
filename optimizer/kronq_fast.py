@@ -671,6 +671,8 @@ class KronQFast:
             if a.rem > 0 or self.kappa > 0:
                 f_before = out.detach()
             for l in range(L): self.Wt[l].data.sub_(lr * self.eta[l] * Dws[l])
+            if a.wd > 0:                                                      # decoupled weight decay on the weight part (not the bias column): bounds the sign push's weight diffusion
+                for l in range(L): self.Wt[l].data[:, :-1].mul_(1.0 - lr * a.wd)
             if a.zbud:                                       # per-layer pre-activation budget (TRUST_REGION: the layer's radius is a sphere in z-space)
                 for l in range(L - 1):
                     at = self.cache['at'][l].detach(); zt = self.cache['zt'][l].detach()
@@ -681,9 +683,9 @@ class KronQFast:
             rem_now = self.rem_dyn if self.rem_dyn is not None else a.rem          # rem_dyn: set by --rem_val_track or by slow_adapt.SlowAdapt
             if a.rem > 0:
                 En = float((f_before - yb).norm())
-                if a.rem_anchor == 'init':                                   # absolute anchor: the residual norm at the first step (no growth loop)
+                if a.rem_anchor in ('init', 'min'):                          # absolute anchor: the residual norm at the first step (no growth loop)
                     if self.E0_norm is None: self.E0_norm = En
-                    En = self.E0_norm
+                    En = self.E0_norm if a.rem_anchor == 'init' else min(En, self.E0_norm)
                 f_after = self.forward(xb); rho = float((f_after - f_before).norm() / (En + 1e-30))
                 self.last_rho = rho                                        # before the budget acts (slow_adapt measurement)
                 if rho > rem_now:
