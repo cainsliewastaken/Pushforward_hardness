@@ -176,6 +176,8 @@ class KronQFast:
         self.S = [Basis(lin.weight.shape[0], a.block, (0 if (a.S_identity or (a.last_S == 'identity' and l == self.L - 1)) else a.max_dim), dev) for l, lin in enumerate(lins)]
         bf = torch.bfloat16 if a.compress else torch.float32
         self.C = [torch.zeros_like(W, dtype=torch.bfloat16 if a.mom_bf16 else torch.float32) for W in self.Wt]
+        self.v2 = [torch.zeros_like(C_) for C_ in self.C] if a.wd_gate else None    # item 57: per-mode EMA of g^2; support s_k = |C_k| / sqrt(v_k) / q0 gates the decay
+        self.lr_scale = 1.0                                                           # item 57: --lr_track: lr follows the budget (proposed step ~ budget, not undone 99 %)
         self.u = [torch.zeros_like(W, dtype=bf) for W in self.Wt] if a.hyper else None
         self.hv = [torch.zeros_like(W, dtype=torch.float32) if not a.compress else (torch.zeros(W.shape[0], device=dev), torch.zeros(W.shape[1], device=dev)) for W in self.Wt] if a.hyper else None
         self.Dprev = [None] * self.L; self.z_tr = [None] * self.L   # eligibility traces (--horizon > 1)
@@ -434,6 +436,8 @@ class KronQFast:
 
     def step(self, step, lr, out, xb, yb, loss_fn, tm=None, t=None, emit=None):
         a = self.a; L = self.L; dev = self.dev
+        sched = lr / a.lr                                                 # the schedule's factor (linear decay); the decay per step follows it, not the tracked scale
+        if a.lr_track: lr = lr * self.lr_scale
         need_stats = (step - 1) % max(1, a.stats_every) == 0
         self.t_step = step
         T_rem = a.steps - step + 1                      # effective steps left in units of the current lr (linear decay to 0 unless a controller holds lr)
@@ -552,6 +556,7 @@ class KronQFast:
                         if a.compress: self.hv[l] = (self.S[l].transport(self.hv[l][0][:, None], VS, 'L', True)[:, 0], self.A[l].transport(self.hv[l][1][None, :], VA, 'R', True)[0])
                         else: self.hv[l] = tr(self.hv[l], True)
                         self.Dprev[l] = None; self.z_tr[l] = None
+                    if self.v2 is not None: self.v2[l] = tr(self.v2[l].float(), True).to(self.v2[l].dtype)
                     if self.V2 is not None: self.V2[l] = tr(self.V2[l].float(), True).to(self.V2[l].dtype)
                     if self.m2s[l] is not None: self.m2s[l] = tr(self.m2s[l].float(), True).to(self.m2s[l].dtype)
                     if self.Dabs[l] is not None: self.Dabs[l] = tr(self.Dabs[l].float(), True).to(self.Dabs[l].dtype)
@@ -590,6 +595,7 @@ class KronQFast:
             Dws = []
             for l in range(L):
                 g = Gr[l]; C = self.C[l]
+                if self.v2 is not None: self.v2[l].mul_(0.99).add_((g.float() * g.float()).to(self.v2[l].dtype), alpha=0.01)
                 if self.use_fused and self.S[l].e is not None and self.A[l].e is not None:
                     self._lr_eta_t.fill_(float(lr * self.eta[l])); Dold = self.Dprev[l]        # previous step, for the lag-1 sign agreement (SIGN_PROCESS 7)
                     Dh = self.Dprev[l]
@@ -738,9 +744,14 @@ class KronQFast:
             if a.rem > 0 or self.kappa > 0:
                 f_before = out.detach()
             for l in range(L): self.Wt[l].data.sub_(lr * self.eta[l] * Dws[l])
-            if a.wd > 0:                                                      # decoupled weight decay on the weight part (not the bias column): bounds the sign push's weight diffusion
-                gam_wd = a.wd_abs * (lr / a.lr) if a.wd_abs > 0 else lr * a.wd      # --wd_abs: decay per step at full lr as its own constant (the budget, not lr, sets the step; item 55)
-                for l in range(L): self.Wt[l].data[:, :-1].mul_(1.0 - gam_wd)
+            if a.wd > 0 or a.wd_abs > 0:                                      # decoupled weight decay on the weight part (not the bias column): bounds the sign push's weight diffusion
+                gam_wd = a.wd_abs * sched if a.wd_abs > 0 else lr * a.wd       # --wd_abs: decay per step at full lr as its own constant (the budget, not lr, sets the step; item 55)
+                for l in range(L):
+                    if self.v2 is not None:                                   # item 57: gated decay in the eigenbasis: a supported mode (momentum SNR >= q0) is not decayed
+                        S_ = (self.C[l].float().abs() / (self.v2[l].float().sqrt() + 1e-12) / a.wd_gate_q0).clamp_(0.0, 1.0)
+                        self.Wt[l].data[:, :-1].mul_(1.0 - gam_wd * (1.0 - S_[:, :-1]))
+                        if diag_now: emit(f'gate_mean_l{l}', float(S_.mean()), step); emit(f'gate_supp_l{l}', float((S_ >= 0.5).float().mean()), step)
+                    else: self.Wt[l].data[:, :-1].mul_(1.0 - gam_wd)
             if a.zbud:                                       # per-layer pre-activation budget (TRUST_REGION: the layer's radius is a sphere in z-space)
                 for l in range(L - 1):
                     at = self.cache['at'][l].detach(); zt = self.cache['zt'][l].detach()
@@ -756,6 +767,9 @@ class KronQFast:
                     En = self.E0_norm if a.rem_anchor == 'init' else min(En, self.E0_norm)
                 f_after = self.forward(xb); rho = float((f_after - f_before).norm() / (En + 1e-30))
                 self.last_rho = rho                                        # before the budget acts (slow_adapt measurement)
+                if a.lr_track:                                             # item 57: lr follows the budget: proposed change -> budget over ~30 steps, bounded [1e-3, 1] x lr
+                    self.lr_scale = float(min(1.0, max(1e-3, self.lr_scale * min(1.25, max(0.8, (rem_now / (rho + 1e-30)) ** 0.3)))))
+                    if diag_now: emit('lr_scale', self.lr_scale, step)
                 if rho > rem_now:
                     sc = 1.0 - rem_now / rho
                     for l in range(L): self.Wt[l].data.add_(sc * lr * self.eta[l] * Dws[l])
