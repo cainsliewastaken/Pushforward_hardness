@@ -1966,6 +1966,65 @@ Caveats: one seed; baselines untuned (3 fixed lrs, no schedule, beta2 = 0.99); 5
    rough optimum, 0.3 the smooth one: the budget is the one constant that wants to be target-dependent, which is what the
    slow adaptation (item 41) addresses from measurement.
 
+41. SLOW ADAPTATION OF BUDGET / KAPPA / REGIME (job 59760962, 1 node, 9 min; optimizer/slow_adapt.py --slow_adapt; scale_slow.sh,
+   scale_slow_summary.py; runs/scale_slow/, 24 runs, seed 1). Windows of 40 steps every 250 on one fixed fresh batch: per-step
+   held-out alignment c, lag-1 fast-mode reversal r (true kernel top-32), residual concentration on those directions; at the
+   window end kappa = clip(1 / (2 (1 - median r)), 1/2, 1), budget = kappa x 2 median c in [0.03, 0.5], rate-limited to
+   [1/2, 3/2] per window; regime -> smooth (MC probe -> empirical signal) once the concentration >= 20x uniform. Two forms:
+   with the linear lr decay (budget binds early) and with --decay none (budget the only length control).
+   | target | fixed (0.2, linear) | slow adapt, linear | slow adapt, no decay | best AdamW equal wall |
+   | field rough | 0.0618 | 0.1097 | 0.0739 | 0.208 (item 40) |   | field smooth | 1.38e-4 | 5.39e-4 | 5.41e-4 | 9.75e-5 |
+   | coord raw (camera 512^2, (x, y) -> gray) | 0.1044 | 0.1179 | 0.1189 | 0.1102 (lr 3e-4, 29000 steps) |
+   | coord Fourier features 8 | 0.0209 | 0.0211 | 0.0210 | 0.00566 |   | coord lowpass 8 (smooth control) | 3.82e-4 | 4.30e-3 | 4.81e-3 | 6.02e-4 |
+   LOSES everywhere (1.2-3.9x on the field, 1.1-12x on the image). The kappa TREND is as item 38 predicted (rough: r +0.1 ->
+   +0.45, kappa 0.57 -> 0.9 over the run; smooth r < 0, kappa 1/2); the LEVEL is wrong: the budget settles at 0.035-0.07 on
+   rough (c of the run's own steps 0.03-0.04) and at the floor 0.03 on smooth (c 0.02), against the fixed run's late
+   rho 0.05-0.1 (item 22). Loss arises after step 1000 (at step 1000 the adaptive runs are level or ahead). No alignment
+   feedback this time (c same as the fixed run's at matched steps, item 38): the rule's level is simply half the useful
+   length. Regime measure: separates the field targets (6x vs 58x uniform at step 1) but not the image variants (raw 11x,
+   Fourier 5x, lowpass 13x; all ~1x by step 300): a kernel of size 256 (one output) is not classified by its top 32
+   directions; retracted as a general measure. Coordinate fitting (the literature's INR benchmark; raw coordinates = the
+   rough form): KronQ ties tuned AdamW at equal wall on raw coordinates, loses 3.7x with Fourier features (the encoding moves
+   the target onto fast modes: a smooth problem, Adam's; and the held-out alignment of our steps is ~0 from step 540, the
+   late-phase degradation on a second problem), wins 1.6x on the lowpass control. Fixed constants + linear schedule stand.
+
+42. THE SIGN-MOMENTUM PROCESS AND THE HORIZON MEASUREMENT (job 59761481, 1 node, 8 min; paper/notes/SIGN_PROCESS.md;
+   --sa_measure 1 --diag 1; scale_measure.sh, scale_measure_summary.py; runs/scale_measure/; fixed reference, rough / smooth
+   field and coordinates raw). Derivation (SIGN_PROCESS.md): per mode the momentum is a Gaussian AR(1) (correlation b1^tau),
+   the step its sign; mean sign erf(Q / sqrt 2) with Q = 4.36 x per-batch SNR (q = 0.2 -> sign right 81 %); lag-tau sign
+   agreement (2 / pi) arcsin(0.9^tau) = 0.71 at lag 1; variance inflation of W uncapped steps Gamma_W (5.6 at W = 10, 13 at
+   infinity); capped modes telescope (cost of one step for any W). Prediction: kappa_W = ||D_W||^2 / (2 <-E, D_W>) over the
+   horizon W rises with W if the output energy sits on uncapped modes and falls if on capped ones.
+   MEASURED (windows of 40 every 250 on a fixed fresh batch; kappa_W for W = 1, 2, 5, 10, 20, 40):
+   (a) kappa_W = 1.00 +- 0.05 AT EVERY HORIZON from step ~500 to 5000 on both field targets (rough 0.92-1.17 apart from W = 40
+       late; smooth 0.91-1.01), while the step length falls 100x (batch rho 0.25 -> 0.002 under the lr decay). The net
+       output displacement is additive, ||D_W||^2 ~ W: the steps' output changes are uncorrelated in aggregate. Neither case
+       of the prediction: the horizon is not the variable.
+   (b) The per-mode sign process is exactly as derived: lag-1 sign agreement of consecutive steps 0.65-0.75 on EVERY decile,
+       layer, target and stage (predicted 0.71), with no decile structure (the slow deciles early on rough 0.8-0.9, the
+       persistent modes of item 24b). The per-mode coherence does not reach the output: the coupling of item 25c decorrelates
+       the responses. Capped modes are absent in this configuration (cap-active fraction <= 0.003 on rough, <= 0.03 on the
+       smooth output layer; capped output-energy share <= 0.08): section 4 is moot, and the lag-1 reversal r = +0.4 on the
+       fast directions late on rough is not the cap's telescoping.
+   (c) kappa_W = 1 at all W and all lengths says: over every window the first-order held-out gain is cancelled by the
+       quadratic cost to within the measurement's +-5 %, while the run's actual progress is ~0.7 % of ||E||^2 per window
+       (0.135 -> 0.070 over 100 windows): the run keeps 1-2 % of its gross gain. And since kappa does not move when the lr
+       decay shrinks rho 100x, the alignment c of the run's own steps is PROPORTIONAL to their length: c is not a property
+       of the direction that a length rule can take as given. This is the measured form of item 39's "feedback" and the
+       reason every length rule tried (exact line search item 31, two-stage item 39, slow adaptation item 41) loses: each
+       rescales the steps assuming c fixed, and c follows.
+   (d) Batch / held-out output-change ratio: rough 0.9-1.3 early falling to 0.13 late; smooth 8-19 early (the batch change is
+       10-20x the held-out one: the step fits the batch's fast-mode sample noise; the budget 0.2 on the batch is 0.01-0.02
+       held-out) falling to 1.5-2 late. The budget is a batch quantity; the theory's break-even is held-out. On smooth the
+       budget never constrained the held-out step.
+   (e) Coordinates raw: N = 256 per fresh batch, kappa_W noisy (0.1-1.9), c -> 0 repeatedly: no conclusion from this probe.
+   Candidate mechanism for (c): the learned per-mode weights (one-step hypergradient u -= beta_u hg, hg = -lr g_t D_{t-1})
+   move each mode to zero correlation between the next batch gradient and the last step, i.e. to the one-step optimum
+   along the mode on the population, which is an online per-mode LENGTH controller; a global budget on top is undone by
+   the weights. Test (not run): the same measurement on the uniform-weight run (--hyper 0): if kappa_W departs from 1 and
+   moves with rho there, the weights are the controller and the length line closes with "the per-mode weights set the
+   length; the budget and lr are its stability envelope".
+
 25 (this fork). APPROXIMATION CONTROLS AND BASIS TRACKING (job 59749741, 1 node, 12 min; optimizer/tracking.py, --track;
    scale_exact.sh; runs/scale_exact/). Width 4096, both targets: reference fast configuration (blocks 256, bf16 state, two
    subspace iterations, refresh floor 5) against "exact Kronecker" (full factors, fp32 state, float64 eigh, refresh floor

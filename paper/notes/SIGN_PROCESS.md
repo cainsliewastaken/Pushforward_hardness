@@ -150,3 +150,17 @@ fresh batch (sa_kappaW*), per-step c and lag-1 r, the batch / held-out output-ch
 change; (0.1) is held-out), the lag-1 sign agreement of consecutive steps per lambda decile (tests R_s(1) = 0.71 on
 uncapped modes against the telescoping sign on capped ones), the per-decile output-energy share and cap-active fraction.
 Decides between the two cases of section 5 and gives W*.
+
+## 8. Outcome of the measurement (REPORT 61 item 42, job 59761481)
+
+Section 2 is confirmed exactly: the lag-1 sign agreement of consecutive steps is 0.65-0.75 on every decile, layer, target
+and stage (0.71 predicted). Section 4 is moot in the reference configuration: the cap is active on <= 0.3 % of modes and
+carries <= 8 % of the step's output energy. Section 5 is refuted in both of its cases: kappa_W = 1.00 +- 0.05 for every W
+from 1 to 40, from step 500 to 5000, on both field targets, while the step length falls 100x under the lr decay. The net
+output displacement is additive (||D_W||^2 ~ W): the per-mode coherence of section 3 does not reach the output, the mode
+coupling (REPORT 61 item 25 (fork) c) decorrelates the responses, and the horizon is not the variable. What the flat
+kappa_W = 1 does say: the run holds gain = cost on held-out data at every horizon and every length, keeping 1-2 % of its
+gross gain as progress, and the alignment of its steps is proportional to their length. A length rule that takes c as a
+property of the direction cannot work, which is why items 31, 39 and 41 all lost. The candidate controller that holds
+kappa at 1 is the learned per-mode weight (the one-step hypergradient drives <g_{t+1}, D_t> to zero per mode, the
+one-step optimum along the mode); the test is the same measurement with uniform weights (--hyper 0).
