@@ -8,6 +8,60 @@ configuration is the "fast path" of optimizer/kronq_fast.py (stats every step, s
 with floor 5, sign push, cap, learned per-mode weight, output budget 0.2, lr 1e-3 with linear decay). This note is
 meant to be reusable on the next problems: section 6 lists what to re-measure there.
 
+## 0. The method from first principles (2026-10-13, after items 37-42): three ingredients and a safety
+
+What the optimizer is for: a rough target's residual sits on the kernel's slow modes (THEORY.md, held rough error), and
+gradient descent moves mode k's residual coordinate by lr lam_k e_k per step, so the slow modes are never reached within
+the budget. The nudge must move every live mode by a fraction of its residual coordinate that does not scale with lam_k.
+Three things determine such a nudge, and each has a theory statement and a status:
+
+  1. WHICH MODES (basis). The per-layer Kronecker eigenbasis of the Gauss-Newton factors (Theorem 2's per-sample outer
+     products under the Kronecker factorisation). Status: derived up to the factorisation; the factorisation is wrong on
+     the slow deciles (coupling 10^3-10^6, item 25 (fork) c) and right within 2x on the fast ones. Measured as necessary:
+     without it the same rule collapses on rough (T2, item 37).
+  2. DIRECTION. The sign of the momentum per mode. Theory: Lemma 1 (noise follows leverage) and Prop. 2 (a bounded flat
+     profile beats the lambda-weighted and the flat-noise rules under batch noise), comparative statements; and the sign
+     process (SIGN_PROCESS.md 2): the momentum raises the per-batch SNR 4.36x and the sign is right 81 % of the time at
+     q = 0.2; lag-1 agreement 0.71, CONFIRMED on every decile (item 42b). Status: derived as a comparison, confirmed as a
+     process; the momentum horizon (10 steps) is an empirical constant whose scale the theory names (coherence time
+     30-50 steps from the 2-3 % per step kernel motion, item 21e) but does not set.
+  3. MAGNITUDE. Per mode, lr x w_k with w_k learned so that the next batch gradient and the last step are uncorrelated.
+     Theory: the fixed point of that rule is the completion step on the population gradient times the mean sign,
+     w_k lam_k lr = m_k |grad_k|, FOR A MODE WHOSE RESPONSE IS ITS OWN (REPORT 61 item 42, correction): a secant estimate
+     of the per-mode completion distance that never reads the Kronecker lam (which is why the method survives the
+     curvature mispricing that sinks the ridge and Adam-in-basis rules). Status: the weakest of the three. The derivation
+     needs decoupled modes (false on the slow deciles, exactly where the rough residual lives) and convergence off the
+     clamp (medians of u are 0.0-0.7, so the bulk is off the clamp; the tails are unmeasured). Its one discriminating
+     test (the ratio w lam lr / |grad| per decile against m_k on the fast deciles) has not been run. What is measured:
+     the learned weights are worth 2x over uniform ones (items 13, 22), the median weight is ~1-2 x lr, so the gain is in
+     the per-mode SHAPE, not in the overall length, which lr sets. The averaging horizon of the weights (100 steps) is
+     an empirical constant like the momentum's.
+  4. SAFETY (the envelope). An output-space trust region, batch output change <= rem ||E_B||, with the lr schedule. Theory:
+     the Taylor radius of the chain (THEORY.md): the expansion about the current state holds inside it, and a slow mode's
+     radius is small because its direction rotates quickly under the step (the rotation remainder; near-degenerate slow
+     eigenvalues rotate fastest, which is the coupling of item 25 (fork) c seen from the chain's side). The radius is a
+     deterministic function of the state, not a noise quantity; it is the ceiling, and the noise-shrunk completion step
+     of ingredient 3 is the working point below it. Measured: at the working length the remainder is 0.2-6 % of the
+     first-order term (item 21a), so the ceiling is not binding there; at lr 1.5e-3 the budget is the difference between
+     0.07 and divergence (item 40), so the ceiling is where the budget acts. Status: the per-mode radius of a slow mode
+     is not computable from the Kronecker model (the gaps are degenerate; the object that has a finite radius is the
+     near-degenerate SUBSPACE, and the equal-magnitude sign push on such a subspace is a subspace push); the output-space
+     constant 0.2 and the lr are empirical, set by the grid (item 40), and item 42's correction says why no local rule
+     can set them: the quantity a local rule reads (gain minus cost over a window) is 1-2 % of the terms it sits between.
+
+Not ingredients: the cap (active on 0.3 % of modes, item 42b; it is ingredient 3 computed from one batch instead of the
+sequence, and the sequence estimate is always smaller), the regime switch (retracted, item 41), the kappa rules (items
+38-42), the per-layer and per-mode budgets (items 32, 39), the lift (LIFT_GRADIENT.md), and the speed engineering
+(blocks, bf16 state, Cholesky-QR, fused update, adaptive refresh), which changes wall time and not the method.
+
+Conjecture (stated, untested): sign(C) x learned w is a per-mode Wiener-shrunk Gauss-Newton step, m_k^2 in place of
+Q_k^2 / (1 + Q_k^2) (within 15 % at the measured Q), with the completion distance from a secant estimate. If the ratio
+test above holds on the fast deciles, the method is "shrunk secant-Newton in the Kronecker basis", and the three
+ingredients are one.
+
+What this section does NOT claim: that the 3.8x on the field problem generalises. It is one problem, one width, one
+architecture; the raw-coordinate image is a tie with tuned AdamW (item 41). Breadth before any further component.
+
 ## 1. The method, stated
 
 Per layer, with the eigenbases of the Gauss-Newton factors A = E[a a^T] (inputs) and S = E[delta delta^T] (backpropagated
