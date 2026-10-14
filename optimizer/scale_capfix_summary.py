@@ -16,8 +16,8 @@ def label(a):
     if '--rem_anchor' in a: parts.append(f"anchor {arg(a, 'rem_anchor')}")
     if '--slow_adapt 1' in a: parts.append(('held-out CAP' if '--sa_cap 1' in a else 'held-out budget') + f" kappa {arg(a, 'sa_kappa_max') or '1.0'}")
     if '--wd' in a and arg(a, 'wd') not in (None, '0.0', '0'): parts.append(f"wd {arg(a, 'wd')}")
-    for k in ('rem_iter', 'clip_grad', 'u_clamp', 'rem_check'):
-        if f'--{k} ' in a and arg(a, k) not in ('0', '0.0', '4.6'): parts.append(f"{k} {arg(a, k)}")
+    for k in ('wd_abs', 'wd_gate', 'wd_gate_q0', 'lr_track', 'batch', 'rem_iter', 'clip_grad', 'u_clamp', 'rem_check'):
+        if f'--{k} ' in a and arg(a, k) not in ('0', '0.0', '4.6', '0.5', '256'): parts.append(f"{k} {arg(a, k)}")
     if '--steps' in a and arg(a, 'steps') not in ('5000', '31240'): parts.append(f"steps {arg(a, 'steps')}")
     if '--u_decay' in a and arg(a, 'u_decay') not in (None, '0.0', '0'): parts.append(f"u_decay {arg(a, 'u_decay')} floor {arg(a, 'u_floor') or '-2.3'}")
     return ' | '.join(parts)
@@ -39,6 +39,10 @@ add = [f for f in glob.glob(f'{S}/scale_turbfull/res_j*.jsonl') if int(os.path.b
 if add: show(sorted(add), 'mechanism test (scale_turbfull, indices 100+)')
 fix = glob.glob(f'{S}/scale_capfix/res_j*.jsonl')
 if fix: show(sorted(fix), 'capped-budget fix (scale_capfix)')
+gt = glob.glob(f'{S}/scale_gate/res_j*.jsonl')
+if gt: show(sorted(gt), 'gated decay and budget-tracking lr on turbulence (scale_gate)')
+fs = glob.glob(f'{S}/scale_fieldspike/res_j*.jsonl')
+if fs: show(sorted(fs), 'field spikes: decay, gated decay, cap (scale_fieldspike)')
 sp = glob.glob(f'{S}/scale_spike/res_j*.jsonl')
 if sp: show(sorted(sp), 'spike mechanism: realised output change, iterated rescale, u clamp, gradient clip (scale_spike)')
 bg = glob.glob(f'{S}/scale_budget/res_j*.jsonl')
