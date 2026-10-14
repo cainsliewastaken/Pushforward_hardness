@@ -763,13 +763,13 @@ class KronQFast:
                         kept = rem_now / rho; it = 0                         # (rho_raw 3.5-4 in item 55's runs, far outside the Taylor radius); measure what it did
                         while True:
                             f2 = self.forward(xb); rho2 = float((f2 - f_before).norm() / (En + 1e-30)); self.last_rho_real = rho2
-                            if it == 0 and (diag_now or rho2 > 3.0 * rem_now): emit('rem_rho_real', rho2, step)
+                            if it == 0 and (diag_now or rho2 > 3.0 * rem_now) and emit is not None: emit('rem_rho_real', rho2, step)
                             if it == 0 and rho2 > 3.0 * rem_now and step % 50 == 0: print(f"step {step}: realised output change {rho2:.3g} vs budget {rem_now:.3g} (raw {rho:.3g})", flush=True)
                             if it >= a.rem_iter or rho2 <= 1.5 * rem_now: break
                             sc2 = (1.0 - rem_now / rho2) * kept              # undo that fraction of the step still applied
                             for l in range(L): self.Wt[l].data.add_(sc2 * lr * self.eta[l] * Dws[l])
                             kept *= rem_now / rho2; it += 1
-                        if diag_now and a.rem_iter > 0: emit('rem_rho_iter', rho2, step); emit('rem_iters', float(it), step)
+                        if diag_now and a.rem_iter > 0 and emit is not None: emit('rem_rho_iter', rho2, step); emit('rem_iters', float(it), step)
                 if diag_now: emit('rem_rho', rho, step); emit('rem_now', rem_now, step)
             if (a.rem_val > 0 or a.ls_val or (a.rem_val_track > 0 and step % a.rem_val_every == 0)) and self.xv_fresh is not None:   # REPORT 61 item 30: the budget on a FRESH batch (the cross-kernel effect, Cor. 24a)
                 xv_, yv_ = self.xv_fresh; sc_b = (1.0 - rem_now / rho) if (a.rem > 0 and rho > rem_now) else 0.0   # fraction already undone by the batch budget
