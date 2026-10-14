@@ -187,7 +187,7 @@ class KronQFast:
         self.use_fused = bool(a.fused) and a.hyper and a.compress and a.rule == 'sign' and a.wrule == 'learned' and not a.dprev_bits and a.horizon <= 1 \
             and not a.hyper_shape and a.q == 0 and a.qa == 0 and a.q_in == 0 and a.sign_floor <= 0 and a.topk <= 0 and not a.alloc and not a.alloc2 \
             and not a.mom_adapt and a.hyper_rule == 'idbd' and not a.gnls and not a.ekfac and not a.lr_kappa and not a.sphere and not a.radius_scan and not a.check_curv
-        self.nref = [0] * self.L; self._lr_eta_t = torch.zeros((), device=dev); self.capL = (float(self.L) if a.cap_L else 1.0) if a.cap else 0.0; self.c_ema = None; self.rem_dyn = None   # --cap 0: the bound is pushed to infinity (fused path kept)
+        self.nref = [0] * self.L; self._lr_eta_t = torch.zeros((), device=dev); self.capL = (float(self.L) if a.cap_L else 1.0) if a.cap else 0.0; self.c_ema = None; self.rem_dyn = None; self.E0_norm = None   # --cap 0: the bound is pushed to infinity (fused path kept)
         self.xv_fresh = None   # (x, y) fresh batch for --rem_val, set by the harness each step
         self.zbud = [float(x) for x in a.zbud.split(',')] if a.zbud else []
         self.scan_steps = set(int(x) for x in a.radius_scan.split(',')) if a.radius_scan else set()
@@ -680,7 +680,11 @@ class KronQFast:
                     if diag_now: emit(f'zbud_rho_l{l}', rz, step)
             rem_now = self.rem_dyn if self.rem_dyn is not None else a.rem          # rem_dyn: set by --rem_val_track or by slow_adapt.SlowAdapt
             if a.rem > 0:
-                f_after = self.forward(xb); rho = float((f_after - f_before).norm() / ((f_before - yb).norm() + 1e-30))
+                En = float((f_before - yb).norm())
+                if a.rem_anchor == 'init':                                   # absolute anchor: the residual norm at the first step (no growth loop)
+                    if self.E0_norm is None: self.E0_norm = En
+                    En = self.E0_norm
+                f_after = self.forward(xb); rho = float((f_after - f_before).norm() / (En + 1e-30))
                 self.last_rho = rho                                        # before the budget acts (slow_adapt measurement)
                 if rho > rem_now:
                     sc = 1.0 - rem_now / rho

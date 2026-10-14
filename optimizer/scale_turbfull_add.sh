@@ -1,17 +1,21 @@
 #!/bin/bash
-# Addendum to scale_turbfull.sh (revised after the lr 1e-3 long runs diverged at every budget): KronQ at lower lr for the long run:
-# batch 256 lr {5e-4, 2.5e-4} budget 0.15; batch 1024 lr 5e-4 budgets 0.1 / 0.15; both targets, seed 1. 8 runs.
-# (original: KronQ at batch 1024 with budgets 0.1 / 0.15 (the batch-law values 0.3 / 0.6 diverged on the increment:
-# the budget ceiling on this problem is 0.15-0.3 at batch 256, item 45). Both targets, seeds 1-2, 7810 steps (20 epochs). 8 runs.
-# usage: scale_turbfull_add.sh NODE NNODES  (indices offset by 100 so they do not collide with the main set)
+# Addendum to scale_turbfull.sh, third revision (2026-10-13): WHY the 20-epoch KronQ runs diverge at lr 1e-3 (every budget, both
+# batches) when 5000-step runs do not. Two candidate mechanisms without a restoring force: (1) the learned weights drift (log w random-walks
+# at rate 0.01 on signal-free modes; the cap, removed in item 43 on 5000-step evidence, was their absolute bound); (2) the budget is
+# relative to the CURRENT batch residual (a worsening model is granted larger steps). Long run, lr 1e-3, budget 0.15, batch 256, 31240 steps,
+# --diag 1 (u quantiles over time), both targets, seed 1:
+#   a. cap back on;  b. weight clamp e^+-1 (--u_clamp 1.0);  c. budget anchored to the step-1 residual norm (--rem_anchor init);
+#   d. lr 5e-4 and e. lr 2.5e-4 as the plain lower-lr controls.   10 runs.   usage: scale_turbfull_add.sh NODE NNODES  (indices 100+)
 HERE="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"; F=$SCRATCH/l63_held_rough/runs/scale_turbfull; mkdir -p $F
-C="--problem turb --turb_cache $SCRATCH/l63_held_rough/data/turb64_lead10_400k.npz --turb_cpu 1 --turb_onepass 1 --width 4096 --depth 2 --eval_every 250 --tf32 1 --nval 4096"
-K="--opt kronqf --block 256 --compress 1 --mom_bf16 1 --stats_every 1 --eig_iters 2 --refresh 20 --adapt_refresh 0.1 --refresh_min 5 --reltol 1e-12 --hyper 1 --fused 1 --cap 0 --lr 1e-3"
+C="--problem turb --turb_cache $SCRATCH/l63_held_rough/data/turb64_lead10_400k.npz --turb_cpu 1 --turb_onepass 1 --width 4096 --depth 2 --eval_every 250 --tf32 1 --nval 4096 --seed 1 --batch 256 --steps 31240 --diag 1"
+K="--opt kronqf --block 256 --compress 1 --mom_bf16 1 --stats_every 1 --eig_iters 2 --refresh 20 --adapt_refresh 0.1 --refresh_min 5 --reltol 1e-12 --hyper 1 --fused 1 --rem 0.15"
 JOBS=()
-K="${K/--lr 1e-3/}"
 for tg in delta direct; do
-  for lr in 5e-4 2.5e-4; do JOBS+=("$C $K --lr $lr --batch 256 --steps 31240 --seed 1 --turb_target $tg --rem 0.15"); done
-  for rem in 0.1 0.15; do JOBS+=("$C $K --lr 5e-4 --batch 1024 --steps 7810 --seed 1 --turb_target $tg --rem $rem"); done
+  JOBS+=("$C $K --turb_target $tg --lr 1e-3 --cap 1")
+  JOBS+=("$C $K --turb_target $tg --lr 1e-3 --cap 0 --u_clamp 1.0")
+  JOBS+=("$C $K --turb_target $tg --lr 1e-3 --cap 0 --rem_anchor init")
+  JOBS+=("$C $K --turb_target $tg --lr 5e-4 --cap 0")
+  JOBS+=("$C $K --turb_target $tg --lr 2.5e-4 --cap 0")
 done
 NODE=${1:-0}; NN=${2:-1}; i=0; k=0
 for job in "${JOBS[@]}"; do
