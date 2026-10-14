@@ -2036,6 +2036,31 @@ Caveats: one seed; baselines untuned (3 fixed lrs, no schedule, beta2 = 0.99); 5
    (unchecked). The discriminating test, if run: the ratio w_k lam_k lr / |grad_k| per decile with grad_k from a slow EMA and
    m_k from the long-run mean sign per mode; prediction m_k within 2x on the fast deciles, null: scatter over decades.
 
+43. MINIMAL METHOD: CAP OFF, BUDGET AS SAFETY (job 59762364, 1 node, 14 min; --cap 0 on the fused path; scale_min.sh,
+   scale_min_summary.py; runs/scale_min/; 3 seeds, both field targets). A = reference (cap on, budget 0.2); B = cap off,
+   budget 0.2; C = cap off, budget 0.5. Prediction (OPTIMIZER_THEORY 0): B = A within the seed spread; null: B worse > 1.2x on
+   rough. (A first launch of B / C crashed at once: --cap 0 was a 1e-30 divisor and 0/0 on exactly-zero gradients at width
+   4096; fixed as a static branch in the fused update; the reference runs of that launch were kept.)
+   | | A | B | C |   | rough | 0.0634 (0.0646 0.0618 0.0639; 1.05) | 0.0622 (0.0626 0.0618 0.0622; 1.01) | 0.0773 (0.100 0.0682 0.0632; 1.59) |
+   | smooth | 1.385e-4 (1.38 1.38 1.39; 1.01) | 1.409e-4 (1.38 1.42 1.42; 1.03) | 4.64e-4 (9.01 2.47 2.43; 3.70) |
+   (a) THE CAP GOES. B = A within 2 % on both targets with the tightest seed spread of the line (1.01-1.03); the prediction
+       holds and the null is excluded. Consistent with item 42b (cap active on 0.3 % of modes): the learned weights sit below
+       the batch completion step, and the cap covers for nothing in the standing configuration.
+   (b) THE BUDGET IS NOT A SAFETY. At 0.5 the smooth target loses 3.4x with a 3.7x seed spread (one seed 9e-4) and the rough
+       target 1.2x with a 1.6x spread (one seed 0.100). On smooth the budget is the length control every run (item 42d: the
+       batch output change is 10-20x the held-out one; at 0.2 the held-out step is 0.01-0.02); on rough it is the stability
+       envelope (item 40: 1.5e-3 diverges above 0.2). The budget does two different jobs on the two targets, which is why
+       the grid's optima differ (0.15 rough, 0.3 smooth) and no single constant is right for both.
+   Standing minimal method (OPTIMIZER_THEORY 0): basis, sign of the momentum, learned per-mode magnitude, output trust region
+   0.2, lr 1e-3 with linear decay. Why the budget exists: the sign step has no scale (its output change is lr sqrt(sum lam w^2),
+   constant while ||E|| falls), so either the schedule or a residual-proportional trust region must tie it to the residual.
+   Why 0.2 is not derived: the Taylor remainder at the working length is 2-6 % (item 21a) and the remainder controllers did not
+   beat the fixed budget (item 32), so the deterministic radius only bounds it from above; the one-step noise optimum rho = c
+   is wrong by ~2x in both directions (items 31, 41: too long early, too short late) because the length is a multi-step
+   control problem through the state; and no theorem yet relates the tolerable kernel motion per step (2-3 %, item 21e) to
+   the final error. Next test on the length (not run): the batch-size scaling of the optimal budget and lr (grid protocol at
+   batch 512 / 1024), which would turn the constant into one calibration of a predicted law, or refute the noise picture.
+
 25 (this fork). APPROXIMATION CONTROLS AND BASIS TRACKING (job 59749741, 1 node, 12 min; optimizer/tracking.py, --track;
    scale_exact.sh; runs/scale_exact/). Width 4096, both targets: reference fast configuration (blocks 256, bf16 state, two
    subspace iterations, refresh floor 5) against "exact Kronecker" (full factors, fp32 state, float64 eigh, refresh floor
