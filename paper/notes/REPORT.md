@@ -2353,6 +2353,34 @@ Caveats: one seed; baselines untuned (3 fixed lrs, no schedule, beta2 = 0.99); 5
    axis; a third point (the full 580k, or 400k at 5 epochs) would fix the curve.
    Operational note: the launcher waited for the 7.5-minute 400k run before starting wave 2; the diverged run was killed by hand (pkill inside
    the allocation) so the remaining seven fit the 15 minutes. Put long runs on their own node or last in future launchers.
+55. THE BUDGET WITH STRONG DECAY, NO SLOW ADAPTATION (job 59766732, 1 node, 20 min, released by the chain; scale_budget.sh;
+   runs/scale_budget/; 6 runs, 400k pairs, 20 epochs, lr 1e-3). Every turbulence result since item 50 ran at the held-out cap's FLOOR 0.03
+   (chosen, not derived) with the decay per step lr wd at lr 1e-3 while the budget cut the step 20x: the budget set the step, lr set the
+   forgetting. Fixed budgets, wd 1.0, increment:
+   | budget | 0.015 | 0.03 | 0.06 | 0.15 | capped (item 53: 0.15 -> 0.03 over the first 2500 steps) |
+   | final | 0.298 | 0.1196 | 0.1236 | 0.235 | 0.1109 |
+   | train-batch at the end | 0.28 | 0.086 | 0.065 | 0.20 | 0.068 |
+   | trajectory | collapses to the mean (1.05 by step 1000), explodes to 7e4 by 10000, recovers late | monotone, still falling | monotone, faster early (0.169 vs 0.197 at 5000) | spike to 2.26 at 10000, recovers to 0.24 | |
+   Direct, budget 0.03 fixed, wd 0.3: 0.43 at step 250, collapses to the mean by 1500 (0.92), explodes to 4e4 at 10000, recovers to 0.077
+   as lr -> 0 (the capped run at the same wd, with the early 0.15 budget, gave 0.063 without incident).
+   (a) The budget is a WINDOW with the decay's instabilities on both sides: below it the decay overpowers the push and the fit collapses to
+   the mean within ~1000 steps (the equilibrium-cap mechanism of item 54, now seen directly), and the collapse is followed by an
+   explosion (next item); above it the item 48 instability returns as a transient spike. Usable at wd 1.0: 0.03-0.06, i.e. the ratio of
+   budget to decay-per-step is the constant, 30-60, with the collapse edge and the spike edge both measured and neither predicted.
+   The direct target's collapse edge is higher (0.03 collapses at wd 0.3), as its near-identity map needs larger weights.
+   (b) SLOW ADAPTATION CAN GO: fixed 0.03 reproduces the capped result within 8 %, and the 8 % is the capped run's larger budget in its
+   first 2500 steps (faster early progress). A fixed budget with a short warm-start replaces the windows and the alignment measurement.
+   (c) DIAGNOSTIC RUN (budget 0.03, wd 1.0, --diag 1): the PROPOSED step's batch output change rem_rho is 3.5-4.2x the residual for 25000
+   steps (0.67 without decay, item 48), falling to 0.13 only as lr -> 0; the budget undoes 99 % of every step. Learned weights under
+   decay: u medians 0.84 / 1.65-2.05 / 1.8-2.0 on layers 0 / 1 / 2 (w 2.3-7.8x; without decay 0.0-0.7), rising all run as the
+   hypergradient fights the decay (consistent next-batch agreement); weight norms layer 2: 31 -> 166 despite wd 1.0 (the push wins the
+   equilibrium); all modes live, cap fraction 0, lag-1 sign agreement 0.71 on every layer (SIGN_PROCESS 7 again). No spike in this run.
+   The budget rescale (kronq_fast.py) takes the full step, measures its output change with ONE forward, and undoes the fraction
+   1 - rem/rho: a linear extrapolation from a point 100x outside the budget and far outside the Taylor radius, and the realised change
+   after the undo is never measured. Hypothesis for the spikes (item 56): where the weights inflate further (after a collapse, u at the
+   clamp e^4.6 = 100; or at budget 0.15 with w ~ 8), the linear rescale is wrong by orders of magnitude and the applied step's actual
+   output change is unbounded. Gradient-norm clipping cannot act here (the step is sign-based: the gradient's magnitude never enters);
+   the relevant clip is on the realised output change, or on the learned weights.
 
 25 (this fork). APPROXIMATION CONTROLS AND BASIS TRACKING (job 59749741, 1 node, 12 min; optimizer/tracking.py, --track;
    scale_exact.sh; runs/scale_exact/). Width 4096, both targets: reference fast configuration (blocks 256, bf16 state, two
