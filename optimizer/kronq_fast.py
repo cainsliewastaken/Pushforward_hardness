@@ -186,7 +186,7 @@ class KronQFast:
         self.use_fused = bool(a.fused) and a.hyper and a.cap and a.compress and a.rule == 'sign' and a.wrule == 'learned' and not a.dprev_bits and a.horizon <= 1 \
             and not a.hyper_shape and a.q == 0 and a.qa == 0 and a.q_in == 0 and a.sign_floor <= 0 and a.topk <= 0 and not a.alloc and not a.alloc2 \
             and not a.mom_adapt and a.hyper_rule == 'idbd' and not a.gnls and not a.ekfac and not a.lr_kappa and not a.sphere and not a.radius_scan and not a.check_curv
-        self.nref = [0] * self.L; self._lr_eta_t = torch.zeros((), device=dev); self.capL = float(self.L) if a.cap_L else 1.0
+        self.nref = [0] * self.L; self._lr_eta_t = torch.zeros((), device=dev); self.capL = float(self.L) if a.cap_L else 1.0; self.c_ema = None
         self.xv_fresh = None   # (x, y) fresh batch for --rem_val, set by the harness each step
         self.zbud = [float(x) for x in a.zbud.split(',')] if a.zbud else []
         self.scan_steps = set(int(x) for x in a.radius_scan.split(',')) if a.radius_scan else set()
@@ -660,7 +660,7 @@ class KronQFast:
                     sc = 1.0 - a.rem / rho
                     for l in range(L): self.Wt[l].data.add_(sc * lr * self.eta[l] * Dws[l])
                 if diag_now: emit('rem_rho', rho, step)
-            if (a.rem_val > 0 or a.ls_val) and self.xv_fresh is not None:   # REPORT 61 item 30: the budget on a FRESH batch (the cross-kernel effect, Cor. 24a)
+            if (a.rem_val > 0 or a.ls_val or a.rem_val_track > 0) and self.xv_fresh is not None:   # REPORT 61 item 30: the budget on a FRESH batch (the cross-kernel effect, Cor. 24a)
                 xv_, yv_ = self.xv_fresh; sc_b = (1.0 - a.rem / rho) if (a.rem > 0 and rho > a.rem) else 0.0   # fraction already undone by the batch budget
                 steps_taken = [(1.0 - sc_b) * lr * self.eta[l] * Dws[l] for l in range(L)]                   # the step as applied so far
                 f1v = self.forward(xv_)
@@ -668,7 +668,15 @@ class KronQFast:
                 f0v = self.forward(xv_)
                 for l in range(L): self.Wt[l].data.sub_(steps_taken[l])
                 rho_v = float((f1v - f0v).norm() / ((f0v - yv_).norm() + 1e-30))
-                if a.ls_val:                                   # REPORT 61 item 31: exact line search on the fresh batch, alpha = <E_v, -df> / ||df||^2
+                if a.rem_val_track > 0:                        # the budget tracks the held-out break-even: rem_t = m x 2 c_t, c_t = EMA of the alignment
+                    dfv = f1v - f0v; c_now = float(-((f0v - yv_) * dfv).sum() / ((f0v - yv_).norm() * dfv.norm() + 1e-30))
+                    self.c_ema = c_now if self.c_ema is None else 0.9 * self.c_ema + 0.1 * c_now
+                    target = max(0.02, min(0.5, a.rem_val_track * 2.0 * self.c_ema))
+                    if rho_v > target:
+                        scv = 1.0 - target / rho_v
+                        for l in range(L): self.Wt[l].data.add_(scv * steps_taken[l])
+                    if diag_now: emit('remtrack_target', target, step); emit('remtrack_c', self.c_ema, step)
+                elif a.ls_val:                                 # REPORT 61 item 31: exact line search on the fresh batch, alpha = <E_v, -df> / ||df||^2
                     dfv = f1v - f0v; alpha = float(-((f0v - yv_) * dfv).sum() / ((dfv * dfv).sum() + 1e-30)); alpha = min(max(alpha, 0.0), 1.0)
                     for l in range(L): self.Wt[l].data.add_((1.0 - alpha) * steps_taken[l])
                     if diag_now: emit('lsv_alpha', alpha, step); emit('lsv_cos', float(-((f0v - yv_) * dfv).sum() / ((f0v - yv_).norm() * dfv.norm() + 1e-30)), step)
