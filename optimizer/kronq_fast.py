@@ -186,7 +186,7 @@ class KronQFast:
         self.use_fused = bool(a.fused) and a.hyper and a.cap and a.compress and a.rule == 'sign' and a.wrule == 'learned' and not a.dprev_bits and a.horizon <= 1 \
             and not a.hyper_shape and a.q == 0 and a.qa == 0 and a.q_in == 0 and a.sign_floor <= 0 and a.topk <= 0 and not a.alloc and not a.alloc2 \
             and not a.mom_adapt and a.hyper_rule == 'idbd' and not a.gnls and not a.ekfac and not a.lr_kappa and not a.sphere and not a.radius_scan and not a.check_curv
-        self.nref = [0] * self.L; self._lr_eta_t = torch.zeros((), device=dev); self.capL = float(self.L) if a.cap_L else 1.0; self.c_ema = None
+        self.nref = [0] * self.L; self._lr_eta_t = torch.zeros((), device=dev); self.capL = float(self.L) if a.cap_L else 1.0; self.c_ema = None; self.rem_dyn = None
         self.xv_fresh = None   # (x, y) fresh batch for --rem_val, set by the harness each step
         self.zbud = [float(x) for x in a.zbud.split(',')] if a.zbud else []
         self.scan_steps = set(int(x) for x in a.radius_scan.split(',')) if a.radius_scan else set()
@@ -654,14 +654,15 @@ class KronQFast:
                     zb = self.zbud[min(l, len(self.zbud) - 1)]
                     if rz > zb: self.Wt[l].data.add_((1.0 - zb / rz) * lr * self.eta[l] * Dws[l])
                     if diag_now: emit(f'zbud_rho_l{l}', rz, step)
+            rem_now = self.rem_dyn if (a.rem_val_track > 0 and self.rem_dyn is not None) else a.rem
             if a.rem > 0:
                 f_after = self.forward(xb); rho = float((f_after - f_before).norm() / ((f_before - yb).norm() + 1e-30))
-                if rho > a.rem:
-                    sc = 1.0 - a.rem / rho
+                if rho > rem_now:
+                    sc = 1.0 - rem_now / rho
                     for l in range(L): self.Wt[l].data.add_(sc * lr * self.eta[l] * Dws[l])
-                if diag_now: emit('rem_rho', rho, step)
-            if (a.rem_val > 0 or a.ls_val or a.rem_val_track > 0) and self.xv_fresh is not None:   # REPORT 61 item 30: the budget on a FRESH batch (the cross-kernel effect, Cor. 24a)
-                xv_, yv_ = self.xv_fresh; sc_b = (1.0 - a.rem / rho) if (a.rem > 0 and rho > a.rem) else 0.0   # fraction already undone by the batch budget
+                if diag_now: emit('rem_rho', rho, step); emit('rem_now', rem_now, step)
+            if (a.rem_val > 0 or a.ls_val or (a.rem_val_track > 0 and step % a.rem_val_every == 0)) and self.xv_fresh is not None:   # REPORT 61 item 30: the budget on a FRESH batch (the cross-kernel effect, Cor. 24a)
+                xv_, yv_ = self.xv_fresh; sc_b = (1.0 - rem_now / rho) if (a.rem > 0 and rho > rem_now) else 0.0   # fraction already undone by the batch budget
                 steps_taken = [(1.0 - sc_b) * lr * self.eta[l] * Dws[l] for l in range(L)]                   # the step as applied so far
                 f1v = self.forward(xv_)
                 for l in range(L): self.Wt[l].data.add_(steps_taken[l])                                       # back to the pre-step point
@@ -671,7 +672,7 @@ class KronQFast:
                 if a.rem_val_track > 0:                        # the budget tracks the held-out break-even: rem_t = m x 2 c_t, c_t = EMA of the alignment
                     dfv = f1v - f0v; c_now = float(-((f0v - yv_) * dfv).sum() / ((f0v - yv_).norm() * dfv.norm() + 1e-30))
                     self.c_ema = c_now if self.c_ema is None else 0.9 * self.c_ema + 0.1 * c_now
-                    target = max(0.02, min(0.5, a.rem_val_track * 2.0 * self.c_ema))
+                    target = max(0.02, min(0.6, a.rem_val_track * 2.0 * self.c_ema)); self.rem_dyn = target   # applied to the batch output change every step
                     if rho_v > target:
                         scv = 1.0 - target / rho_v
                         for l in range(L): self.Wt[l].data.add_(scv * steps_taken[l])

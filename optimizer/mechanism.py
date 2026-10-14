@@ -106,3 +106,41 @@ class Mechanism:
                 for dec in range(10):
                     seg = order[dec * n // 10:(dec + 1) * n // 10]
                     emit(f'mech_snr_d{dec}_l{l}', math.sqrt(float(((r1[seg] + r2[seg]) ** 2).sum()) / (float(((r1[seg] - r2[seg]) ** 2).sum()) + 1e-30)), step)
+
+
+class KappaDiag:
+    """Reversal fraction r of the chain's second stage (side-chat plan, 2026-10-13): on a fixed fresh batch x_r and the
+    top-k directions of the true kernel at the window start, r_t = -<P J d_{t+1}, P J d_t> / ||P J d_t||^2 (how much of step t's
+    fast-mode output change step t+1 cancels), plus the same without the projection, the held-out alignment of each step on
+    the fast / slow parts, and kappa_pred = 1 / (2 (1 - r)). One jvp per step in the window; one Lanczos at the start."""
+    def __init__(self, act, L, dev, k=32, m=48, seed=23):
+        self.act, self.L, self.dev, self.k, self.m = act, L, dev, k, m
+        self.gen = torch.Generator(device=dev); self.gen.manual_seed(seed); self.ritz = None; self.prev = None; self.xr = None
+    def f(self, plist, x): return fwd_lins(plist, x, self.act, self.L)
+    @torch.no_grad()
+    def start(self, plist, xr, yr):
+        self.xr, self.yr = xr, yr; pb = tuple(plist)
+        with torch.enable_grad():
+            out, vjp_fn = vjp(lambda *q: self.f(q, xr), *pb)
+        N = out.numel()
+        def matvec(v):
+            g = vjp_fn(v.reshape(out.shape))
+            with torch.enable_grad():
+                _, Kv = jvp(lambda *q: self.f(q, xr), pb, g)
+            return Kv.reshape(-1)
+        _, self.ritz = lanczos_topk(matvec, N, self.dev, self.m, self.k, self.gen); self.prev = None
+    @torch.no_grad()
+    def run(self, p_before, p_after, emit, step):
+        pb = tuple(p_before); d = tuple(a_ - b_ for a_, b_ in zip(p_after, pb))
+        with torch.enable_grad():
+            out, Jd = jvp(lambda *q: self.f(q, self.xr), pb, d)
+        E = (out - self.yr).reshape(-1); Jd = Jd.reshape(-1); coef = self.ritz.T @ Jd; PJd = self.ritz @ coef
+        cE = self.ritz.T @ E; E_fast = self.ritz @ cE; E_slow = E - E_fast; Jd_slow = Jd - PJd
+        emit('kd_cos_fast', float(-(E_fast @ PJd) / (E_fast.norm() * PJd.norm() + 1e-30)), step)
+        emit('kd_cos_slow', float(-(E_slow @ Jd_slow) / (E_slow.norm() * Jd_slow.norm() + 1e-30)), step)
+        emit('kd_cos_all', float(-(E @ Jd) / (E.norm() * Jd.norm() + 1e-30)), step)
+        emit('kd_fast_energy_frac', float((PJd @ PJd) / (Jd @ Jd + 1e-30)), step)
+        if self.prev is not None:
+            pJ, pP = self.prev
+            emit('kd_r_fast', float(-(PJd @ pP) / (pP @ pP + 1e-30)), step); emit('kd_r_all', float(-(Jd @ pJ) / (pJ @ pJ + 1e-30)), step)
+        self.prev = (Jd, PJd)
