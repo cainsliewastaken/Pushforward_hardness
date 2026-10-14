@@ -52,12 +52,14 @@ def cholqr(Y, passes=3):
         if int(info.max()) != 0: return torch.linalg.qr(Y)[0]
         V = torch.linalg.solve_triangular(L, V.double().transpose(-1, -2), upper=False).transpose(-1, -2).to(Y.dtype)
     return V
-def _fused_update(g, C, u, r_, c_, Dprev, Se, Ae, lr_eta, lam_scale, b1, beta_u, u_clamp, reltol, L, u_decay=0.0, u_floor=-2.3):   # lr_eta: 0-d tensor (varies per step)
+def _fused_update(g, C, u, r_, c_, Dprev, Se, Ae, lr_eta, lam_scale, b1, beta_u, u_clamp, reltol, L, u_decay=0.0, u_floor=-2.3, hg_add=None):   # lr_eta: 0-d tensor (varies per step)
     """the reference configuration's per-layer update in one graph: momentum, one-step hypergradient with the rank-one
     normaliser, sign push with the learned weight, live mask, cap. Returns D (float32); C, u, r_, c_ updated in place."""
     C.mul_(b1).add_(g.to(C.dtype), alpha=1 - b1); Cf = C.float()
     if Dprev is not None:
-        hg = -(lr_eta * g) * Dprev.float(); hg2 = hg * hg
+        hg = -(lr_eta * g) * Dprev.float()
+        if hg_add is not None: hg = hg + hg_add                # --hyper_budget: the derivative through the binding budget (zero-sum over modes)
+        hg2 = hg * hg
         r_.mul_(0.99).add_(hg2.mean(1), alpha=0.01); c_.mul_(0.99).add_(hg2.mean(0), alpha=0.01)
         den = (r_[:, None] * c_[None, :] / (r_.mean() + 1e-30)).sqrt()
         un = u.float() - beta_u * hg / (den + 1e-30)
@@ -591,6 +593,12 @@ class KronQFast:
             Xv_, Yv_ = self.xv_diag; iv = torch.randint(0, Xv_.shape[0], (min(a.batch, Xv_.shape[0]),), device=Xv_.device, generator=self.gxf)
             with torch.enable_grad():
                 lv = loss_fn(self.forward(Xv_[iv]), Yv_[iv]); GV = torch.autograd.grad(lv, self.Wt)
+        hb = None
+        if a.hyper_budget and getattr(self, 'kept_prev', 1.0) < 1.0 and all(self.Dprev[l] is not None and self.S[l].e is not None and self.A[l].e is not None for l in range(L)):
+            with torch.no_grad():                          # d theta / d u_k = -lr kept (D_k e_k - D s_k), s_k = d log rho / d u_k ~ lam_k D_k^2 / sum lam D^2 (all layers: one budget)
+                lD2 = [(self.S[l].e[:, None] * self.A[l].e[None, :]) * self.Dprev[l].float() ** 2 for l in range(L)]
+                Z = sum(float(x.sum()) for x in lD2) + 1e-30; G = sum(float((Gr[l] * self.Dprev[l].float()).sum()) for l in range(L))
+                hb = [(x / Z) * G for x in lD2]           # times lr_eta kept below
         with torch.no_grad():
             Dws = []
             for l in range(L):
@@ -604,8 +612,11 @@ class KronQFast:
                         if xf_now: self._xf_diag(l, g, GV[l], cs, co)
                         if a.xfold_rule and Dh is not None:   # cross-fold hypergradient: the last push rebuilt from the OTHER fold's momentum
                             Dh = torch.where(Dh != 0, torch.exp(self.u[l].float()) * torch.sign(co.float()), torch.zeros((), device=g.device)).to(Dh.dtype)
+                    hadd = None
+                    if hb is not None and Dh is not None:            # --hyper_budget: the step actually taken was kept x the proposed one, and raising u_k shrank every other mode's share
+                        kp = self.kept_prev; Dh = (Dh.float() * kp).to(Dh.dtype); hadd = hb[l] * (float(lr * self.eta[l]) * kp)
                     D, lam, live = fused_update(g, C, self.u[l], self.hv[l][0], self.hv[l][1], Dh, self.S[l].e, self.A[l].e, self._lr_eta_t,
-                                                2.0 / self.nout, a.b1, a.beta_u, a.u_clamp, a.reltol, self.capL, a.u_decay, a.u_floor)
+                                                2.0 / self.nout, a.b1, a.beta_u, a.u_clamp, a.reltol, self.capL, a.u_decay, a.u_floor, hadd)
                     if a.xfold: cs.mul_(a.b1).add_(g.to(cs.dtype), alpha=1 - a.b1)
                     Cf = C.float(); self.Dprev[l] = D.to(self.u[l].dtype); Dws.append(D)
                     if diag_now:
@@ -770,8 +781,9 @@ class KronQFast:
                 if a.lr_track:                                             # item 57: lr follows the budget: proposed change -> budget over ~30 steps, bounded [1e-3, 1] x lr
                     self.lr_scale = float(min(1.0, max(1e-3, self.lr_scale * min(1.25, max(0.8, (rem_now / (rho + 1e-30)) ** 0.3)))))
                     if diag_now: emit('lr_scale', self.lr_scale, step)
+                self.kept_prev = 1.0
                 if rho > rem_now:
-                    sc = 1.0 - rem_now / rho
+                    sc = 1.0 - rem_now / rho; self.kept_prev = rem_now / rho
                     for l in range(L): self.Wt[l].data.add_(sc * lr * self.eta[l] * Dws[l])
                     if a.rem_check or a.rem_iter > 0:                        # item 56: the rescale is a LINEAR extrapolation from one forward at the full step
                         kept = rem_now / rho; it = 0                         # (rho_raw 3.5-4 in item 55's runs, far outside the Taylor radius); measure what it did
@@ -782,7 +794,7 @@ class KronQFast:
                             if it >= a.rem_iter or rho2 <= 1.5 * rem_now: break
                             sc2 = (1.0 - rem_now / rho2) * kept              # undo that fraction of the step still applied
                             for l in range(L): self.Wt[l].data.add_(sc2 * lr * self.eta[l] * Dws[l])
-                            kept *= rem_now / rho2; it += 1
+                            kept *= rem_now / rho2; it += 1; self.kept_prev = kept
                         if diag_now and a.rem_iter > 0 and emit is not None: emit('rem_rho_iter', rho2, step); emit('rem_iters', float(it), step)
                 if diag_now: emit('rem_rho', rho, step); emit('rem_now', rem_now, step)
             if (a.rem_val > 0 or a.ls_val or (a.rem_val_track > 0 and step % a.rem_val_every == 0)) and self.xv_fresh is not None:   # REPORT 61 item 30: the budget on a FRESH batch (the cross-kernel effect, Cor. 24a)
