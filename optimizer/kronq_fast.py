@@ -52,18 +52,18 @@ def cholqr(Y, passes=3):
         if int(info.max()) != 0: return torch.linalg.qr(Y)[0]
         V = torch.linalg.solve_triangular(L, V.double().transpose(-1, -2), upper=False).transpose(-1, -2).to(Y.dtype)
     return V
-def _fused_update(g, C, u, r_, c_, Dprev, Se, Ae, lam_scale, b1, lr_eta, beta_u, u_clamp, reltol, L):
+def _fused_update(g, C, u, r_, c_, Dprev, Se, Ae, lr_eta, lam_scale, b1, beta_u, u_clamp, reltol, L):   # lr_eta: 0-d tensor (varies per step)
     """the reference configuration's per-layer update in one graph: momentum, one-step hypergradient with the rank-one
     normaliser, sign push with the learned weight, live mask, cap. Returns D (float32); C, u, r_, c_ updated in place."""
     C.mul_(b1).add_(g.to(C.dtype), alpha=1 - b1); Cf = C.float()
     if Dprev is not None:
-        hg = (-lr_eta) * g * Dprev.float(); hg2 = hg * hg
+        hg = -(lr_eta * g) * Dprev.float(); hg2 = hg * hg
         r_.mul_(0.99).add_(hg2.mean(1), alpha=0.01); c_.mul_(0.99).add_(hg2.mean(0), alpha=0.01)
         den = (r_[:, None] * c_[None, :] / (r_.mean() + 1e-30)).sqrt()
         un = u.float() - beta_u * hg / (den + 1e-30); u.copy_(un.clamp(-u_clamp, u_clamp).to(u.dtype))
     lam = Se[:, None] * Ae[None, :] * lam_scale; lmax = lam.max(); live = lam > reltol * lmax
     D = torch.where(live, torch.exp(u.float()) * torch.sign(Cf), torch.zeros_like(Cf))
-    capv = g.abs() / (lam.clamp(min=1e-30) * lr_eta * L)
+    capv = g.abs() / (lam.clamp(min=1e-30) * (lr_eta * L))
     D = torch.sign(D) * torch.minimum(D.abs(), capv)
     return D, lam, live
 try:
@@ -186,7 +186,7 @@ class KronQFast:
         self.use_fused = bool(a.fused) and a.hyper and a.cap and a.compress and a.rule == 'sign' and a.wrule == 'learned' and not a.dprev_bits and a.horizon <= 1 \
             and not a.hyper_shape and a.q == 0 and a.qa == 0 and a.q_in == 0 and a.sign_floor <= 0 and a.topk <= 0 and not a.alloc and not a.alloc2 \
             and not a.mom_adapt and a.hyper_rule == 'idbd' and not a.gnls and not a.ekfac and not a.lr_kappa and not a.sphere and not a.radius_scan and not a.check_curv
-        self.nref = [0] * self.L
+        self.nref = [0] * self.L; self._lr_eta_t = torch.zeros((), device=dev)
         self.xv_fresh = None   # (x, y) fresh batch for --rem_val, set by the harness each step
         self.zbud = [float(x) for x in a.zbud.split(',')] if a.zbud else []
         self.scan_steps = set(int(x) for x in a.radius_scan.split(',')) if a.radius_scan else set()
@@ -514,8 +514,9 @@ class KronQFast:
             for l in range(L):
                 g = Gr[l]; C = self.C[l]
                 if self.use_fused and self.S[l].e is not None and self.A[l].e is not None:
-                    D, lam, live = fused_update(g, C, self.u[l], self.hv[l][0], self.hv[l][1], self.Dprev[l], self.S[l].e, self.A[l].e, 2.0 / self.nout,
-                                                a.b1, float(lr * self.eta[l]), a.beta_u, a.u_clamp, a.reltol, float(L))
+                    self._lr_eta_t.fill_(float(lr * self.eta[l]))
+                    D, lam, live = fused_update(g, C, self.u[l], self.hv[l][0], self.hv[l][1], self.Dprev[l], self.S[l].e, self.A[l].e, self._lr_eta_t,
+                                                2.0 / self.nout, a.b1, a.beta_u, a.u_clamp, a.reltol, float(L))
                     Cf = C.float(); self.Dprev[l] = D.to(self.u[l].dtype); Dws.append(D)
                     if diag_now:
                         emit(f'livefrac_l{l}', float(live.float().mean()), step); emit(f'wnorm_l{l}', float(self.Wt[l].norm()), step)
