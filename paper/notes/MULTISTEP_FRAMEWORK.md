@@ -251,15 +251,95 @@ PREDICTIONS:
    from nonlinearity. Together with C2b and C1 there are four candidate horizons. Which binds first is a property of
    the system and the data, computable from the one-step kernel and the finite-time growth statistics.
 
-### C3. Generalisation (to be proved; statement)
-By MULTISTEP_CHAIN Thm M2, the held-out rollout error changes through the one-step kernel between held-out and
-training predicted states, weighted by the adjoints on both sides. Under C1's limit both adjoint fields lie along the
-leading adjoint patterns.
-CONJECTURE C3. The held-out alignment decays once the window exceeds the time over which the projections
-<a_k, eps_k> decorrelate between nearby starts. At first order in eps this is a statement about the cross version of
-G (held-out patterns against training patterns), and the lazy-transfer / feature-learning-transfer split of THEORY
-Cor 44 applies. Measured support: the cosine between the one-step and window gradients falls from 1 to about 0.3 by
-T = 0.5 at every dt (results_main plot 3).
+### C3. Generalisation: the sample-size horizons (proved under the stated hypotheses, 2026-10-14)
+By MULTISTEP_CHAIN Thm M2 the held-out rollout error changes through the one-step kernel between held-out and training
+states, weighted by the adjoints on both sides. At first order in eps, for one step (or one instant of gradient flow),
+this becomes a SAMPLING question. The training gradient is an average of i.i.d. per-start gradients whose sizes have
+the heavy-tailed law of C2, so whether a step on the training starts lowers the error on the start distribution
+depends on how well n starts estimate a tail-dominated mean. There are two separate failure modes, variance and
+missing tail, plus a third for the evaluation itself.
+
+Setting. Starts are i.i.d. from the data distribution. Per-start first-order window gradients are g_k, the population
+window gradient is gbar_w = E g_k, and the sample gradient is g = (1/n) sum_k g_k. The target is the population held-out
+error Vbar_v = E V_{v,k}, with population gradient gbar_v. A step d = -eta g changes Vbar_v by -eta <gbar_v, g> to first order in
+the step. Population coherence: rho_w = |gbar_w| / E|g_k| (how much the per-start gradients cancel). Population
+alignment: cos theta = <gbar_v, gbar_w> / (|gbar_v| |gbar_w|) (the question of sections B and M6, assumed > 0 here).
+
+THEOREM C3a (variance horizon). For 0 < eta' < 1,
+        P( <gbar_v, g> <= (1 - eta') <gbar_v, gbar_w> )  <=  ( E|g_k|^2 / (E|g_k|)^2 )  /  ( n eta'^2 rho_w^2 cos^2 theta ).
+Under the factorisation |g_k| = G_k^2 Y_k of C2b, E|g|^2 / (E|g|)^2 = e^{tau delta_tau} E[Y^2] / (E Y)^2. So a step on n training
+starts lowers the population target error by at least (1 - eta') of its expected amount, with probability >= 1 - beta,
+for windows up to
+        tau_var = [ ln n + ln( beta eta'^2 rho_w^2 cos^2 theta (E Y)^2 / E[Y^2] ) ] / delta_tau,
+i.e. ln(n)/delta at leading order. This is C2b's concentration horizon with the number of distinct training starts in
+place of the batch size.
+Proof. E<gbar_v, g> = <gbar_v, gbar_w>. Var<gbar_v, g> = Var_k<gbar_v, g_k>/n <= |gbar_v|^2 E|g_k|^2 / n. Apply Chebyshev and
+divide by <gbar_v, gbar_w>^2 = |gbar_v|^2 rho_w^2 (E|g_k|)^2 cos^2 theta.  []
+
+THEOREM C3b (missing-tail horizon). Let m_2 be the median of G under the growth-tilted law P_2 (dP_2 = G^2 dP / E G^2), and
+p_tail = P(G >= m_2). Under the factorisation, the starts with G >= m_2 carry at least half of the population mass E[G^2 Y]
+(C2d). A training set of n starts contains none of them with probability (1 - p_tail)^n >= 1 - n p_tail. Under a large
+deviation principle for ln G / tau (Gaertner-Ellis, with tau L_tau(q) -> the limiting cumulant function),
+        p_tail = exp( -tau kappa_tau + o(tau) ),     kappa_tau = 2 L_tau'(2) - L_tau(2) = KL(P_2 || P) / tau
+(kappa = 2D for log-normal growth, against delta = 4D). For windows beyond
+        tau_bias = ln(n) / kappa,
+the training set typically contains none of the starts that carry half of the population gradient. The sample
+gradient then estimates only the bulk part of a tail-dominated population gradient. A step can still lower the typical
+(median) held-out error, but nothing guarantees it lowers the population RMS error, which is carried by starts the
+training set has not seen.
+Proof. The share statement is C2d at threshold m_2. The probability is independence plus Bernoulli's inequality. The
+exponent is the Legendre transform at the tilted mean, since d/dq ln E G^q at q = 2 is E_{P_2} ln G.  []
+
+COROLLARY C3c (what an empirical RMS can measure). The same argument applies to an evaluation set of |H| held-out
+starts. Beyond ln(|H|)/kappa, an empirical RMS rollout error at horizon tau is typically below the population RMS, and it
+is carried by O(1) starts. Rankings by RMS at such horizons are few-start statistics.
+
+CHECK (2026-10-14, true L63 tangent flow, 200,000 starts, G = ||P(tau, 0)||; "population" = all 200,000):
+   tau                                       0.32    0.64    0.96    1.28    1.92
+   delta_tau                                 6.25    8.23    9.20    7.95    6.12
+   kappa_tau                                 4.02    6.21    7.63    7.28    5.97
+   p_tail = P(G >= tilted median)            5.3e-2  2.5e-3  7.0e-5  1.5e-5  5e-6
+   ln(n)/kappa for n = 1024 / 4096 / 131072  1.7/2.1/2.9  1.1/1.3/1.9  0.91/1.09/1.54  0.95/1.14/1.62  1.2/1.4/2.0
+   subsample mean of G^2 / population mean (median over 200 draws):
+     n = 1024                                0.99    0.97    0.35    0.035   0.003
+     n = 4096                                1.00    0.96    0.60    0.12    0.012
+     n = 32768                               1.00    1.00    0.80    0.68    0.038
+For each n the collapse of the subsample mean begins at the predicted tau_bias:
+ - n = 1024: between 0.64 and 0.96;
+ - n = 4096: near 1.0-1.1;
+ - n = 32768: between 1.28 and 1.92 (predicted about 1.4-1.7).
+p_tail falls with tau at about the rate kappa, with sub-exponential prefactors not small at these tau.
+Caveats:
+ - At tau >= 1.28 the 200,000-start "population" is itself only a few tilted-typical starts deep (p_tail * 200,000 = 3), so
+   the true ratios there are smaller still.
+ - G is the growth of a single injection at the start of the window. An actual rollout error sums injections over the
+   window and has a milder tail, so these horizons are lower bounds for the trained models' horizons.
+CONSISTENT (results_main; the multistep runs used 131,072 training starts, fresh batches of 1024, and 4096 held-out
+starts):
+ - The held-out set of 4096 has ln(4096)/kappa ~ 1.1-1.3. The RMS comparisons at T = 1.28 (e.g. "the 1.28 window is best
+   at T >= 0.64") are at or beyond C3c's horizon, so they are few-start statistics. results_main already notes that the
+   seed spread is largest at T = 1.28.
+ - The 131,072 training starts give tau_bias ~ 1.5-1.6 and tau_var ~ 1.4-1.5. Beyond that, longer windows cannot be expected
+   to improve the population RMS error by training on more steps; only more starts (logarithmically) or a less
+   tail-dominated loss can. This range coincides with the measured jump of the gradient's higher-order part
+   (1.52-1.60) and with the longest window that trained usefully (1.28). The coincidence is noted, not explained.
+What remains for C3. rho_w and cos theta are population quantities and decide whether the population window gradient
+helps at all; they belong with B and M6. Measured proxy: the cosine between the one-step and window gradients falls
+from 1 to about 0.3 by T = 0.5 (results_main plot 3). Under C1, per-start gradients point along each start's leading
+adjoint pattern with the sign of <a_k, eps_k>. rho_w is then the coherence of those signed patterns over the attractor:
+a computable quantity that has not been computed.
+
+### Summary of section C: the horizons, in the order they bind for Lorenz-63 (batch 1024, 131,072 training starts,
+4096 held-out starts; numbers from the checks above, single-injection proxy)
+ - C2b batch concentration, ln(n_b)/delta: about 0.8-1.1.
+ - C3c evaluation reliability, ln|H|/kappa: about 1.1-1.3.
+ - C3a/b training-set sampling, ln(n)/delta and ln(n)/kappa: about 1.3-1.6.
+ - C2c/d nonlinearity, gradient-weighted ln(theta)/(Lambda + 2D) then typical ln(theta)/Lambda: depends on the one-step
+   error through theta; to be measured on the trained models.
+ - C1 conditioning: a slow penalty e^{-1.8 tau} past the crossover, not binding here.
+ - MULTISTEP_CHAIN M7 crossover (roughness): where the benefit peaks; to be measured.
+Every horizon is logarithmic: in the batch size, the training-set size, the evaluation-set size, or the inverse one-step
+error. The intermittency rates delta and kappa of the finite-time growth set the scale of all the sampling horizons.
 
 ## D. Roughness with the metric as a parameter (plan)
 Write the roughness paper's floor, step bound, Krylov functional and held rough error for a general metric M (M = I:
