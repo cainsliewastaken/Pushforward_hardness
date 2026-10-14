@@ -40,7 +40,7 @@ p.add_argument('--compress', type=int, default=0); p.add_argument('--mom_bf16', 
 p.add_argument('--reltol', type=float, default=1e-10); p.add_argument('--beta_stats', type=float, default=0.95)
 p.add_argument('--nval', type=int, default=4096); p.add_argument('--eval_every', type=int, default=250)
 p.add_argument('--seed', type=int, default=1); p.add_argument('--out', required=True)
-p.add_argument('--whiten', default='0', choices=['0', 'pca', 'full'], help='input preprocessing from the data covariance of 65536 training inputs, fixed before training: pca = rotate into its eigenbasis (no scaling); full = rotate and scale every direction to unit variance (floor --whiten_floor x the top eigenvalue). Applied to training and validation inputs; the first layer then sees the input-side Kronecker basis as coordinates (REPORT 61 item 52)'); p.add_argument('--whiten_floor', type=float, default=1e-6); p.add_argument('--freeze_after', type=int, default=0, help='kronqf: compute no basis refresh on any layer after this step (0 = refresh as usual); the statistics keep running but the bases and eigenvalues stay fixed'); p.add_argument('--u_decay', type=float, default=0.0, help='kronqf: per-step shrink of the log push weight toward --u_floor, u -= u_decay (u - u_floor): the hypergradient (next-batch agreement with the last push) has zero mean on a mode whose push does not transfer, so without a shrink u random-walks; with it a weight above the floor needs sustained agreement (REPORT 61 item 51)'); p.add_argument('--u_floor', type=float, default=-2.3, help='kronqf u_decay: the floor of the log weight (w = exp(u_floor), default 0.1)'); p.add_argument('--u_clamp', type=float, default=4.6, help='clamp on the log push weight u (push w = exp(u) in [e^-c, e^c])')
+p.add_argument('--whiten', default='0', choices=['0', 'pca', 'full'], help='input preprocessing from the data covariance of 65536 training inputs, fixed before training: pca = rotate into its eigenbasis (no scaling); full = rotate and scale every direction to unit variance (floor --whiten_floor x the top eigenvalue). Applied to training and validation inputs; the first layer then sees the input-side Kronecker basis as coordinates (REPORT 61 item 52)'); p.add_argument('--whiten_floor', type=float, default=1e-6); p.add_argument('--freeze_after', type=int, default=0, help='kronqf: compute no basis refresh on any layer after this step (0 = refresh as usual); the statistics keep running but the bases and eigenvalues stay fixed'); p.add_argument('--xfold', type=int, default=0, help='kronqf: cross-fitting (item 53): split the training set into two contiguous halves (folds), alternate batches between them, keep a momentum per fold, and log per lambda decile the agreement of the batch gradient with the same fold\'s and the other fold\'s momentum sign and with a held-out gradient (every --xfold_every steps)'); p.add_argument('--xfold_rule', type=int, default=0, help='kronqf xfold: 1 = the learned-weight hypergradient correlates the batch gradient with the push rebuilt from the OTHER fold\'s momentum (no frozen-sample term); 0 = diagnostic only'); p.add_argument('--xfold_every', type=int, default=10); p.add_argument('--xfold_nmode', type=int, default=262144); p.add_argument('--u_decay', type=float, default=0.0, help='kronqf: per-step shrink of the log push weight toward --u_floor, u -= u_decay (u - u_floor): the hypergradient (next-batch agreement with the last push) has zero mean on a mode whose push does not transfer, so without a shrink u random-walks; with it a weight above the floor needs sustained agreement (REPORT 61 item 51)'); p.add_argument('--u_floor', type=float, default=-2.3, help='kronqf u_decay: the floor of the log weight (w = exp(u_floor), default 0.1)'); p.add_argument('--u_clamp', type=float, default=4.6, help='clamp on the log push weight u (push w = exp(u) in [e^-c, e^c])')
 p.add_argument('--gmask', type=float, default=0.0, help='>0: push only modes with |G_ij| > gmask * rms(G) (gradient-energy mask, basis independent)')
 p.add_argument('--bcurv', type=int, default=0, help='1: live mask and GN cap from the CURRENT batch Kronecker curvature (extra backward per step)')
 p.add_argument('--rem', type=float, default=0.0, help='>0: scale the whole step so that ||f(theta+d) - f(theta)|| <= rem * ||E|| on the batch (extra forward per step)')
@@ -138,6 +138,21 @@ else:                                   # coordinate-network image fitting (impl
     def draw(m, gen):
         idx = torch.randint(0, NPIX, (m,), device=DEV, generator=gen)
         return encode(COORDS[idx]), PIX[idx]
+FOLD = {'t': 0, 'last': 0}
+if a.xfold:                             # two folds = two contiguous halves of the training set in storage order (blocked: correlated neighbours stay in one fold)
+    if a.problem == 'turb':
+        _H = NTR // 2; FP = [{'lo': 0, 'n': _H}, {'lo': _H, 'n': NTR - _H}]
+        for fp in FP: fp['p'] = torch.randperm(fp['n'], generator=gcpu) + fp['lo']; fp['i'] = 0
+        def draw(m, gen):
+            f = FOLD['t'] % 2; FOLD['t'] += 1; FOLD['last'] = f; fp = FP[f]
+            if fp['i'] + m > fp['n']: fp['p'] = torch.randperm(fp['n'], generator=gcpu) + fp['lo']; fp['i'] = 0; PERM['passes'] += 0.5
+            idx = fp['p'][fp['i']:fp['i'] + m]; fp['i'] += m
+            if a.turb_cpu: return XTR[idx].to(DEV, non_blocking=True), YTR[idx].to(DEV, non_blocking=True)
+            idx = idx.to(DEV); return XTR[idx], YTR[idx]
+    else:                               # fresh data every draw: the fold is a label only (the rule must reduce to the reference)
+        _draw_nf = draw
+        def draw(m, gen):
+            f = FOLD['t'] % 2; FOLD['t'] += 1; FOLD['last'] = f; return _draw_nf(m, gen)
 gtrain = torch.Generator(device=DEV); gtrain.manual_seed(1000 + a.seed)
 gval = torch.Generator(device=DEV); gval.manual_seed(999); Xv, Yv = (XVA[:a.nval], YVA[:a.nval]) if a.problem == 'turb' else draw(a.nval, gval)
 if a.whiten != '0':                     # fixed input transform from the data covariance (item 52: is the rough result mostly input whitening?)
@@ -368,7 +383,7 @@ for step in range(1, a.steps + 1):
     elif a.decay == 'none': decay = 1.0
     if not a.rem_ctrl and not a.sphere: fac *= decay
     lr = a.lr * fac
-    xb, yb = draw(a.batch, gtrain)
+    xb, yb = draw(a.batch, gtrain); fold_cur = FOLD['last']
     sync(); t0 = time.time()
     need_stats = a.opt in ('soap', 'kronq') and (step - 1) % a.refresh == 0
     for q in lins.parameters(): q.grad = None
@@ -395,6 +410,7 @@ for step in range(1, a.steps + 1):
     sync(); tm['fb'] += time.time() - t0
     if a.opt == 'kronqf':
         if a.rem_val > 0 or a.ls_val or a.rem_val_track > 0: KQ.xv_fresh = draw(a.batch, gtrain)
+        if a.xfold: KQ.fold = fold_cur; KQ.xv_diag = (Xv, Yv)
         KQ.step(step, lr, out, xb, yb, mse, tm, time.time, emit if a.diag else None)
     with torch.no_grad():
         if a.opt in ('kronqf', 'krylov'): pass
@@ -574,6 +590,9 @@ for step in range(1, a.steps + 1):
     if step % a.eval_every == 0 or step == a.steps:
         v = val_mse(); emit('val', v, step); emit('wall', time.time() - t_start, step)
         if out is not None: emit('train_batch_loss', float(loss.detach()), step)                      # training batch loss at eval steps (generalisation gap)
+        if a.xfold and KQ is not None:
+            xs = KQ.xf_emit(emit, step)
+            if xs: print(f'step {step} ' + xs, flush=True)
         print(f"step {step} val {v:.5g}" + (f" train_batch {float(loss.detach()):.5g}" if out is not None else '') + f" wall {time.time() - t_start:.0f}s", flush=True)
         if a.diag:
             with torch.no_grad():

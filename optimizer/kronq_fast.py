@@ -201,6 +201,9 @@ class KronQFast:
         global EIG_DTYPE; EIG_DTYPE = torch.float64 if a.eig_dtype == 'float64' else None
         self.cache = {}; self.last_Gr = None; self.diag_out = {}
         self.f0 = None
+        if a.xfold:                                    # cross-fitting (item 53): per-fold momenta, fold of the current batch set by the harness
+            self.CF = [[torch.zeros_like(C) for C in self.C] for _ in range(2)]; self.fold = 0; self.xv_diag = None
+            self.xf_acc = {}; self.xf_n = 0; self.xf_idx = [None] * self.L; self.gxf = torch.Generator(device=dev); self.gxf.manual_seed(4242)
     def parameters(self): return self.Wt
     # ---------------- forward in the rotated parametrisation
     def forward(self, x, keep=False):
@@ -230,6 +233,36 @@ class KronQFast:
         for l in range(self.L):
             W = self.S[l].rows_from_basis(self.A[l].cols_from_basis(self.Wt[l].data)); out += [W[:, :-1].contiguous(), W[:, -1].contiguous()]
         return out
+    @torch.no_grad()
+    def _xf_diag(self, l, g, gv, cs, co):
+        """per lambda decile (0 = fastest) of a fixed random mode subset: mean g . sign(C_same fold), g . sign(C_other fold), and the held-out
+        gradient's agreement with both (the population quantity the hypergradient should estimate); |g| and |g_val| for normalising."""
+        if self.S[l].e is None or self.A[l].e is None: return
+        lam = (self.S[l].e[:, None] * self.A[l].e[None, :]).flatten(); n = lam.numel(); k = min(self.a.xfold_nmode, n)
+        if self.xf_idx[l] is None: self.xf_idx[l] = torch.randperm(n, device=lam.device, generator=self.gxf)[:k]
+        idx = self.xf_idx[l]; order = torch.argsort(lam[idx], descending=True)
+        dec = torch.empty_like(order); dec[order] = torch.arange(k, device=lam.device) * 10 // k
+        gs = g.flatten()[idx].float(); ss = torch.sign(cs.flatten()[idx].float()); so = torch.sign(co.flatten()[idx].float()); gvs = gv.flatten()[idx].float()
+        cnt = torch.zeros(10, device=lam.device).scatter_add_(0, dec, torch.ones_like(gs)).clamp(min=1)
+        for name, v in (('same', gs * ss), ('cross', gs * so), ('val', 0.5 * gvs * (ss + so)), ('absg', gs.abs()), ('absgv', gvs.abs())):
+            m = torch.zeros(10, device=lam.device).scatter_add_(0, dec, v) / cnt
+            key = (l, name); self.xf_acc[key] = m if key not in self.xf_acc else self.xf_acc[key] + m
+        if l == self.L - 1: self.xf_n += 1
+    def xf_emit(self, emit, step):
+        """emit the accumulated per-decile means since the last call and reset; returns a one-line summary for the log."""
+        if not self.a.xfold or self.xf_n == 0: return ''
+        out = {}
+        for (l, name), m in self.xf_acc.items():
+            m = (m / self.xf_n).tolist(); out[(l, name)] = m
+            for d in range(10): emit(f'xf_{name}_l{l}_d{d}', m[d], step)
+        self.xf_acc = {}; self.xf_n = 0
+        parts = []
+        for l in range(self.L):
+            if (l, 'same') not in out: continue
+            nz = lambda name, den, ds: sum(out[(l, name)][d] for d in ds) / (sum(out[(l, den)][d] for d in ds) + 1e-30)
+            for lab, ds in (('fast', (0, 1, 2)), ('slow', (7, 8, 9))):
+                parts.append(f"l{l} {lab} same {nz('same', 'absg', ds):+.3f} cross {nz('cross', 'absg', ds):+.3f} val {nz('val', 'absgv', ds):+.3f}")
+        return 'xfold ' + ' | '.join(parts)
     @torch.no_grad()
     def rotate_grads(self, G_aug):
         """original-coordinate gradients (o x i+1 per layer) -> the current Kronecker basis, with the lam arrays."""
@@ -502,6 +535,8 @@ class KronQFast:
                         if VS is not None and VS[0] is not None: emit(f'refresh_ovS_l{l}', float(torch.diagonal(VS[0], dim1=1, dim2=2).abs().mean()), step)
                     tr = lambda T, sq=False: self.A[l].transport(self.S[l].transport(T, VS, 'L', sq), VA, 'R', sq)
                     self.Wt[l].data = tr(self.Wt[l].data); self.C[l] = tr(self.C[l].float()).to(self.C[l].dtype)
+                    if a.xfold:
+                        for f_ in range(2): self.CF[f_][l] = tr(self.CF[f_][l].float()).to(self.CF[f_][l].dtype)
                     Gr[l] = tr(Gr[l])
                     if self.u is not None:
                         self.u[l] = tr(self.u[l].float(), True).to(self.u[l].dtype)
@@ -530,14 +565,26 @@ class KronQFast:
             if tm is not None: tm['eig'] += t() - t0
         # ---- per-layer step
         t0 = t() if t else None
+        xf_now = bool(a.xfold) and step % a.xfold_every == 0 and self.xv_diag is not None; GV = None
+        if xf_now:                                     # held-out gradient in the current basis (diagnostic only: the truth the fold estimates are compared with)
+            Xv_, Yv_ = self.xv_diag; iv = torch.randint(0, Xv_.shape[0], (min(a.batch, Xv_.shape[0]),), device=Xv_.device, generator=self.gxf)
+            with torch.enable_grad():
+                lv = loss_fn(self.forward(Xv_[iv]), Yv_[iv]); GV = torch.autograd.grad(lv, self.Wt)
         with torch.no_grad():
             Dws = []
             for l in range(L):
                 g = Gr[l]; C = self.C[l]
                 if self.use_fused and self.S[l].e is not None and self.A[l].e is not None:
                     self._lr_eta_t.fill_(float(lr * self.eta[l])); Dold = self.Dprev[l]        # previous step, for the lag-1 sign agreement (SIGN_PROCESS 7)
-                    D, lam, live = fused_update(g, C, self.u[l], self.hv[l][0], self.hv[l][1], self.Dprev[l], self.S[l].e, self.A[l].e, self._lr_eta_t,
+                    Dh = self.Dprev[l]
+                    if a.xfold:
+                        cs, co = self.CF[self.fold][l], self.CF[1 - self.fold][l]
+                        if xf_now: self._xf_diag(l, g, GV[l], cs, co)
+                        if a.xfold_rule and Dh is not None:   # cross-fold hypergradient: the last push rebuilt from the OTHER fold's momentum
+                            Dh = torch.where(Dh != 0, torch.exp(self.u[l].float()) * torch.sign(co.float()), torch.zeros((), device=g.device)).to(Dh.dtype)
+                    D, lam, live = fused_update(g, C, self.u[l], self.hv[l][0], self.hv[l][1], Dh, self.S[l].e, self.A[l].e, self._lr_eta_t,
                                                 2.0 / self.nout, a.b1, a.beta_u, a.u_clamp, a.reltol, self.capL, a.u_decay, a.u_floor)
+                    if a.xfold: cs.mul_(a.b1).add_(g.to(cs.dtype), alpha=1 - a.b1)
                     Cf = C.float(); self.Dprev[l] = D.to(self.u[l].dtype); Dws.append(D)
                     if diag_now:
                         emit(f'livefrac_l{l}', float(live.float().mean()), step); emit(f'wnorm_l{l}', float(self.Wt[l].norm()), step)
