@@ -5,7 +5,7 @@ import json, glob, os, sys, collections
 def arg(args, k): return args.split(f'--{k} ')[-1].split()[0] if f'--{k} ' in args else None
 def label(a):
     parts = []
-    if '--problem turb' in a: parts.append(f"turb {arg(a, 'turb_target')}")
+    if '--problem turb' in a: parts.append(f"turb {arg(a, 'turb_target')}" + (' N=100k' if '100k' in (arg(a, 'turb_cache') or '') else '') + (f" seed {arg(a, 'seed')}" if arg(a, 'seed') not in (None, '1') else ''))
     else: parts.append('field ' + ('rough' if arg(a, 'p') == '2' else 'smooth') + f" seed {arg(a, 'seed')}")
     if '--whiten' in a and arg(a, 'whiten') != '0': parts.append(f"whiten {arg(a, 'whiten')}")
     if '--opt adamw' in a: parts.append(f"adamw lr {arg(a, 'lr')}"); return ' | '.join(parts)
@@ -36,6 +36,8 @@ add = [f for f in glob.glob(f'{S}/scale_turbfull/res_j*.jsonl') if int(os.path.b
 if add: show(sorted(add), 'mechanism test (scale_turbfull, indices 100+)')
 fix = glob.glob(f'{S}/scale_capfix/res_j*.jsonl')
 if fix: show(sorted(fix), 'capped-budget fix (scale_capfix)')
+fg = glob.glob(f'{S}/scale_forget/res_j*.jsonl')
+if fg: show(sorted(fg), 'forgetting-rate test: decay vs dataset size (scale_forget)')
 sm = glob.glob(f'{S}/scale_simple/res_j*.jsonl')
 if sm: show(sorted(sm), 'simplifications: whitened AdamW, frozen bases, probe every k (scale_simple)')
 ud = glob.glob(f'{S}/scale_udecay/res_j*.jsonl')
