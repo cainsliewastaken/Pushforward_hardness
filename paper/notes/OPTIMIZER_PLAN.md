@@ -38,7 +38,8 @@ FLOP model per step, width 4096, no budget: 6BP forward/backward + ~2BP probe ba
 batch-independent) + ~250P update and state transports: batch 256 ~4,400P (AdamW ~1,550P), 1024 ~10,700P (6,150P), 4096 ~36,100P
 (24,600P); with the probe on a fixed subsample ~1.1x AdamW at batch 4096.
 
-USE IT AS: --preset current (scale_study.py; sets every option above in one place; explicit options override; the result files record
+CODE: optimizer/kronq_main.py (class KronQ, --opt kronq_main), self-contained, only the kept method; reproduces the research
+configuration exactly on CPU. USE IT AS: --preset current (scale_study.py; sets every option above in one place; explicit options override; the result files record
 the resolved configuration). Add --lr 2e-4 --wd_abs 1e-3 on finite data. The cap is removed from the method: --cap now defaults to 0
 (kept only to reproduce old runs). Every new launcher must use the preset, not a hand-written option list.
 

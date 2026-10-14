@@ -1,4 +1,6 @@
-"""KronQ with the weights in ORIGINAL coordinates (the refactor, 2026-10-14).
+"""RESEARCH CODE - the cleaned-up method is kronq_main.py (see optimizer/README.md).
+
+KronQ with the weights in ORIGINAL coordinates (the refactor, 2026-10-14).
 
 KronQFast stores the weights in the rotating Kronecker basis: every refresh re-expresses them (and the basis is the product of every
 rotation since the start), so rounding in those products compounds in the weights and the basis drifts; the forward pass also applies

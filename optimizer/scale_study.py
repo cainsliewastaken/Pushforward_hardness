@@ -26,7 +26,7 @@ import os, sys, json, math, time, argparse
 import numpy as np, torch
 
 p = argparse.ArgumentParser()
-p.add_argument('--opt', required=True, choices=['adamw', 'muon', 'soap', 'kronq', 'kronqf', 'krylov'])
+p.add_argument('--opt', required=True, choices=['adamw', 'muon', 'soap', 'kronq', 'kronqf', 'kronq_main', 'krylov'])
 p.add_argument('--kr_M', type=int, default=3, help='krylov: CG iterations (Krylov terms) on the batch'); p.add_argument('--kr_mom', type=float, default=0.0, help='krylov: heavy-ball momentum on the scaled step'); p.add_argument('--kr_gamma', type=float, default=1e-3, help='krylov: damping relative to the Rayleigh quotient E^T K E / E^T E'); p.add_argument('--kr_decay', type=int, default=1, help='krylov: 1 = linear decay of the output-space radius rem ||E|| to 0')
 p.add_argument('--width', type=int, default=512); p.add_argument('--depth', type=int, default=2)
 p.add_argument('--p', type=float, default=2.0, help='target roughness exponent (0 smooth, 2 rough)')
@@ -82,8 +82,8 @@ p.add_argument('--diag', type=int, default=0, help='1: at every eval step log pe
 # --preset current: the method as decided (OPTIMIZER_PLAN 2b, user 2026-10-14), in ONE place so no fix is left out by a launcher. Sets
 # defaults only; an option given explicitly on the command line still wins. Turbulence / finite data additionally needs --lr 2e-4
 # --wd_abs 1e-3 (decay per step); the field (fresh data) runs without decay.
-PRESETS = {'current': dict(opt='kronqf', orig=1, orig_hp='rot,stats,refresh', qr_guard=1, cap=0, rem=0.0, block=256, compress=1, mom_bf16=1,
-                           stats_every=1, eig_iters=2, refresh=20, adapt_refresh=0.1, refresh_min=5, reltol=1e-12, hyper=1, fused=1, tf32=1)}
+PRESETS = {'current': dict(opt='kronq_main', block=256, mom_bf16=1, stats_every=1, eig_iters=2, refresh=20, adapt_refresh=0.1, refresh_min=5,
+                           reltol=1e-12, tf32=1, cap=0, rem=0.0)}   # kronq_main.KronQ: the main optimizer; everything else is in its file
 p.add_argument('--preset', type=str, default='', choices=[''] + sorted(PRESETS), help='set the full configuration of a named version of the method (explicit options override it)')
 for _a in p._actions:
     if _a.dest == 'opt': _a.required = False      # required unless a preset supplies it (checked below)
@@ -192,6 +192,19 @@ KQ = None; KR = None
 if a.opt == 'krylov':
     from krylov_step import KrylovStep
     KR = KrylovStep(lins, a, DEV, torch.nn.functional.gelu)
+if a.opt == 'kronq_main':                              # THE MAIN OPTIMIZER (kronq_main.py); the research options are refused, not ignored
+    _REMOVED = ('rem', 'cap', 'slow_adapt', 'xfold', 'u_decay', 'hyper_budget', 'wd_gate', 'lr_track', 'rem_check', 'rem_iter', 'clip_grad', 'rem_val',
+                'ls_val', 'rem_val_track', 'zbud', 'spike_diag', 'mech', 'wd', 'orig', 'orig_hp', 'refresh_hp', 'reorth_transport', 'rot_hp', 'preflight',
+                'alloc', 'alloc2', 'sphere', 'ekfac', 'gnls', 'mom_adapt', 'S_identity', 'A_identity', 'freeze_after', 'track', 'acf', 'kappa_diag',
+                'radius_scan', 'check_curv', 'lr_kappa', 'rem_ctrl', 'qr_guard')
+    _bad = [k for k in _REMOVED if getattr(a, k, 0) not in (0, 0.0, '', None, False)] + (['rule'] if a.rule != 'sign' else [])
+    if _bad: p.error(f'--opt kronq_main is the main optimizer only; these research options are not part of it: {_bad} (decay: use --wd_abs)')
+    from kronq_main import KronQ
+    make_KQ = lambda lins_, a_: KronQ(lins_, torch.nn.functional.gelu, NOUT, lambda shape: torch.randint(0, 2, shape, device=DEV, generator=gtrain).float() * 2 - 1,
+                                      a_.lr, DEV, block=a_.block, b1=a_.b1, beta_u=a_.beta_u, u_clamp=a_.u_clamp, reltol=a_.reltol, beta_stats=a_.beta_stats,
+                                      eig_iters=a_.eig_iters, refresh=a_.refresh, adapt_refresh=a_.adapt_refresh, refresh_min=a_.refresh_min,
+                                      stats_every=a_.stats_every, weight_decay=a_.wd_abs, mom_bf16=bool(a_.mom_bf16))
+    KQ = make_KQ(lins, a)
 if a.opt == 'kronqf':
     import kronq_fast; kronq_fast.CHOLQR = bool(a.cholqr)
     from kronq_fast import KronQFast
@@ -314,7 +327,7 @@ else:
             s_['hv'] = (torch.zeros(o, device=DEV), torch.zeros(i + 1, device=DEV)) if a.compress else torch.zeros(o, i + 1, device=DEV)
         st.append(s_)
 def opt_state_bytes():
-    if a.opt == 'kronqf': return KQ.state_bytes()
+    if a.opt in ('kronqf', 'kronq_main'): return KQ.state_bytes()
     if a.opt == 'krylov': return KR.state_bytes()
     if a.opt == 'adamw':
         return sum(nbytes(t) for s in opt.state.values() for t in s.values() if torch.is_tensor(t) and t.numel() > 1)
@@ -404,7 +417,7 @@ for step in range(1, a.steps + 1):
     for q in lins.parameters(): q.grad = None
     if KQ is not None:
         for W in KQ.Wt: W.grad = None
-    keep_now = (a.opt == 'kronq' and (need_stats or a.bcurv or a.gnls)) or a.opt == 'kronqf'
+    keep_now = (a.opt == 'kronq' and (need_stats or a.bcurv or a.gnls)) or a.opt in ('kronqf', 'kronq_main')
     if a.opt == 'krylov':
         t0 = time.time(); KR.step(step, (decay if a.kr_decay else 1.0), xb, yb, emit if a.diag else None, step % a.eval_every == 0 or step == a.steps); sync(); tm['upd'] += time.time() - t0
         out = None
@@ -423,6 +436,8 @@ for step in range(1, a.steps + 1):
             dA = (s_['R'].rot(at_b, 'R', False) ** 2).mean(0); dS = (s_['L'].rot(gz_b[l].T, 'L', False) ** 2).mean(1)
             bc.append((dS[:, None] * dA[None, :]) * (2.0 / NOUT))
     sync(); tm['fb'] += time.time() - t0
+    if a.opt == 'kronq_main':
+        t0 = time.time(); KQ.step(lr, out); sync(); tm['upd'] += time.time() - t0
     if a.opt == 'kronqf':
         if a.rem_val > 0 or a.ls_val or a.rem_val_track > 0: KQ.xv_fresh = draw(a.batch, gtrain)
         if a.spike_diag: KQ.sd_x = (Xv[:512], Yv[:512])
@@ -445,7 +460,7 @@ for step in range(1, a.steps + 1):
                     for st_, r_ in SDH: print(f"SPIKE? step {st_}: " + ' '.join(f"{k_} {v_:.3g}" for k_, v_ in r_.items()), flush=True)
                 SDMIN[0] = min(SDMIN[0], pl)
     with torch.no_grad():
-        if a.opt in ('kronqf', 'krylov'): pass
+        if a.opt in ('kronqf', 'kronq_main', 'krylov'): pass
         elif a.opt == 'adamw':
             for g_ in opt.param_groups: g_['lr'] = lr
             t0 = time.time(); opt.step(); sync(); tm['upd'] += time.time() - t0

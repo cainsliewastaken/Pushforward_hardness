@@ -1,4 +1,6 @@
-"""KronQ, fast form (2026-10-12): the per-layer Kronecker-eigenbasis optimizer with every component developed in the
+"""RESEARCH CODE - for the method use kronq_main.py (see optimizer/README.md).
+
+KronQ, fast form (2026-10-12): the per-layer Kronecker-eigenbasis optimizer with every component developed in the
 optimizer line (kronq2 / kronq3h / kronsign / kadam_front) and the rotations paid where they are cheap.
 
 Layer l has weights Wt (o x i+1, bias folded) stored IN THE CURRENT EIGENBASIS (train_ks --reparam): the forward rotates
