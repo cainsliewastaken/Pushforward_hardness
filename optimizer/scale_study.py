@@ -63,7 +63,7 @@ p.add_argument('--rule', default='sign', choices=['sign', 'adam'], help='kronqf:
 p.add_argument('--S_mode', default='mc', choices=['mc', 'emp'], help='kronqf: backprop factor from the MC probe or the empirical signal (rescaled to the GN trace once)')
 p.add_argument('--last_S', default='stats', choices=['stats', 'identity'], help='kronqf: output layer S factor from statistics or identity')
 p.add_argument('--qa', type=float, default=0.0, help='kronqf: input-side weight exponent on every hidden layer, w *= (alpha_j / alpha_max)^(qa/2) (TRUST_REGION: -1 = equal pre-activation change per mode)'); p.add_argument('--q_floor', type=float, default=1e-4, help='kronqf: floor on alpha_j / alpha_max (and lam / lam_max) in the weight exponents'); p.add_argument('--q_in', type=float, default=0.0, help='kronqf: per-mode weight exponent on the INPUT layer only (decile scan: its box radius goes as 1/leverage, so -1 = equal output change per mode)'); p.add_argument('--q', type=float, default=0.0, help='kronqf: fixed per-mode weight (lam/lam_max)^(q/2) when --hyper 0')
-p.add_argument('--b1', type=float, default=0.9); p.add_argument('--eps', type=float, default=1e-8); p.add_argument('--cap', type=int, default=1)
+p.add_argument('--b1', type=float, default=0.9); p.add_argument('--eps', type=float, default=1e-8); p.add_argument('--cap', type=int, default=0, help='kronqf: per-mode completion cap; REMOVED from the method (user, 2026-10-14): default off, kept only to reproduce old runs')
 p.add_argument('--centred', type=int, default=0, help='1: train f(x) - f_0(x) with f_0 the frozen initial network (one extra forward per step)')
 p.add_argument('--horizon', type=float, default=1.0, help='kronqf hypergradient: eligibility-trace horizon (1 = one-step)')
 p.add_argument('--hyper_shape', type=int, default=0, help='kronqf: 1 = learn the per-mode shape only (mean of u removed)')
@@ -79,7 +79,18 @@ p.add_argument('--gnls', type=int, default=0, help='1: per-layer line search of 
                'q = (2/(m NOUT)) sum_x (gz(x)^T dW a(x))^2 (needs --bcurv-style per-sample gz; one matmul per layer); scale = min(1, g.D / (lr q))')
 p.add_argument('--diag', type=int, default=0, help='1: at every eval step log per layer the u distribution, clamp fraction, cap-active fraction, '
                'step energy on the lowest decile of modes by Kronecker eigenvalue, weight norm, and hidden-activation saturation')
+# --preset current: the method as decided (OPTIMIZER_PLAN 2b, user 2026-10-14), in ONE place so no fix is left out by a launcher. Sets
+# defaults only; an option given explicitly on the command line still wins. Turbulence / finite data additionally needs --lr 2e-4
+# --wd_abs 1e-3 (decay per step); the field (fresh data) runs without decay.
+PRESETS = {'current': dict(opt='kronqf', orig=1, orig_hp='rot,stats,refresh', qr_guard=1, cap=0, rem=0.0, block=256, compress=1, mom_bf16=1,
+                           stats_every=1, eig_iters=2, refresh=20, adapt_refresh=0.1, refresh_min=5, reltol=1e-12, hyper=1, fused=1, tf32=1)}
+p.add_argument('--preset', type=str, default='', choices=[''] + sorted(PRESETS), help='set the full configuration of a named version of the method (explicit options override it)')
+for _a in p._actions:
+    if _a.dest == 'opt': _a.required = False      # required unless a preset supplies it (checked below)
+_pre, _ = p.parse_known_args()
+if _pre.preset: p.set_defaults(**PRESETS[_pre.preset])
 a = p.parse_args()
+if a.opt is None: p.error('--opt is required (or use --preset)')
 import subprocess
 try: GIT = subprocess.run(['git', '-C', os.path.dirname(os.path.abspath(__file__)), 'rev-parse', '--short', 'HEAD'], capture_output=True, text=True).stdout.strip()
 except Exception: GIT = 'unknown'
@@ -318,7 +329,9 @@ def opt_state_bytes():
     return tot
 
 rows = []
-def emit(metric, value, step=None): rows.append(dict(git=GIT, args=' '.join(sys.argv[1:]), opt=a.opt, width=a.width, depth=a.depth, p=a.p, P=P, step=step, metric=metric, value=value))
+# the recorded argument string: the command line plus every value a preset supplied (so summaries and audits see the full configuration)
+ARGS_STR = ' '.join(sys.argv[1:]) + (''.join(f' --{k} {getattr(a, k)}' for k in PRESETS[a.preset] if f'--{k}' not in sys.argv[1:]) if a.preset else '')
+def emit(metric, value, step=None): rows.append(dict(git=GIT, args=ARGS_STR, opt=a.opt, width=a.width, depth=a.depth, p=a.p, P=P, step=step, metric=metric, value=value))
 tm = dict(fb=0.0, stats=0.0, eig=0.0, upd=0.0)
 def sync(): torch.cuda.synchronize() if DEV == 'cuda' else None
 t_start = time.time(); emit('val', val_mse(), 0); emit('wall', 0.0, 0)
