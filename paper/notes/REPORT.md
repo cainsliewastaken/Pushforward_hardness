@@ -1836,6 +1836,22 @@ Caveats: one seed; baselines untuned (3 fixed lrs, no schedule, beta2 = 0.99); 5
    Standing figures for the method from here on: the Cholesky-QR configuration at floor 5 (reference accuracy, 2.4x AdamW
    wall with diagnostics); the equal-wall comparison with AdamW on rough is now 0.060 vs AdamW at 2.4x the steps (~0.33
    from its curve): 5x.
+35. FUSED UPDATE AND T3 FIX (job 59758648, 1 node, 10 min; --fused, --A0_fixed 5; scale_fused.sh; runs/scale_fused/).
+   | variant (Cholesky-QR, floor 5) | rough | smooth | wall / 5000 (fb / stats / refresh / update) |
+   | unfused (item 34) | 0.0601 | 1.37e-4 | 79 s (12 / 10 / 27 / 28) |
+   | fused update (torch.compile) | 0.0922 | 1.38e-4 | 91 s (12 / 11 / 29 / 38) |
+   | fused + A0 frozen after 5 refreshes | 0.0703 | 1.36e-4 | 89 s (12 / 11 / 26 / 38) |
+   (a) The compiled update is SLOWER (38 s vs 28 s for the update phase, compile included) and is dropped; the update
+       phase stays at ~5.6 ms per step. (b) The fused path reproduces the unfused numbers to five digits at width 64 and
+       over 40 steps, yet gives 0.092 vs 0.060 on rough at width 4096 over 5000 steps, with the T3 variant of the same code
+       at 0.070: the ROUGH result is numerically sensitive at the 1.5x level to operation ordering / precision (as item 13
+       found for the eigendecomposition variant: 0.064-0.076). Single-seed rough comparisons below ~1.5x are therefore not
+       resolved; the paper's rough table needs several seeds, and every 1.2-1.5x claim on rough in items 13-35 carries
+       this caveat (the smooth target is reproducible to 2 %). (c) T3: the input layer's A side is 257 x 257, so freezing
+       it saves nothing measurable (26 vs 29 s of refresh) and its accuracy effect is inside the noise. Dropped.
+   Standing configuration: Cholesky-QR, refresh floor 5, unfused (item 34): 15.8 ms per step. The engineering line is
+   closed at 2.4x AdamW (with diagnostics; ~4.8x clean); the remaining per-step cost is the per-mode update (28 s) and
+   the refresh transports (27 s), both proportional to the number of modes, i.e. to the parameter count.
 
 25 (this fork). APPROXIMATION CONTROLS AND BASIS TRACKING (job 59749741, 1 node, 12 min; optimizer/tracking.py, --track;
    scale_exact.sh; runs/scale_exact/). Width 4096, both targets: reference fast configuration (blocks 256, bf16 state, two

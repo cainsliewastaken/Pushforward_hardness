@@ -110,6 +110,10 @@ per-layer budget both lose (items 20, 30).
 
 ## 5. Open (stated as such in the paper)
 
+0. REPRODUCIBILITY (item 35): the rough-target result at width 4096 varies by up to 1.5x between numerically equivalent
+   implementations (0.060-0.092) while the smooth target is reproducible to 2 %; all rough comparisons below 1.5x in this
+   note are single-seed and unresolved; the paper's rough table needs 3+ seeds per entry.
+
 1. The learned weight's form (why the flat-ish profile with 2-6x on the slow input modes beats every closed form).
 2. The position of the length inside the bracket c <= rho <= 2c (a multi-step statement the per-step theory lacks).
 3. The output-space Taylor radius on rough (why isotropic in output space, why 0.19 ||E||).
