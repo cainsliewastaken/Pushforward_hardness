@@ -23,6 +23,7 @@ from torch.func import jvp
 
 EIG_DTYPE = None
 CHOLQR = True
+QR_GUARD = False; QR_TOL = 1e-5; QR_FALLBACKS = [0]   # --qr_guard: Cholesky-QR result checked for orthonormality; failing blocks redone by Householder QR in float64
 def solve_gamma(Cabs, lam, target2, iters=40):
     """gamma with sum (Cabs / (lam + gamma))^2 = target2 (decreasing in gamma); bisection in log gamma."""
     lo, hi = -30.0, 30.0
@@ -51,6 +52,13 @@ def cholqr(Y, passes=3):
         L, info = torch.linalg.cholesky_ex(G)
         if int(info.max()) != 0: return torch.linalg.qr(Y)[0]
         V = torch.linalg.solve_triangular(L, V.double().transpose(-1, -2), upper=False).transpose(-1, -2).to(Y.dtype)
+    if QR_GUARD:                                   # the jitter lets the Cholesky succeed on an ill-conditioned Gram and return a non-orthonormal V
+        Vd = V.double(); err = (Vd.transpose(-1, -2) @ Vd - torch.eye(V.shape[-1], device=V.device, dtype=torch.float64)).abs().amax(dim=(-2, -1))
+        bad = err > QR_TOL
+        if bool(bad.any()):
+            QR_FALLBACKS[0] += int(bad.sum())
+            if V.dim() == 2: return torch.linalg.qr(Y.double())[0].to(Y.dtype)
+            V = V.clone(); V[bad] = torch.linalg.qr(Y[bad].double())[0].to(Y.dtype)
     return V
 def _fused_update(g, C, u, r_, c_, Dprev, Se, Ae, lr_eta, lam_scale, b1, beta_u, u_clamp, reltol, L, u_decay=0.0, u_floor=-2.3, hg_add=None):   # lr_eta: 0-d tensor (varies per step)
     """the reference configuration's per-layer update in one graph: momentum, one-step hypergradient with the rank-one
@@ -206,6 +214,7 @@ class KronQFast:
         self.period = [a.refresh] * self.L; self.next_ref = [1] * self.L; self.rf = [None] * self.L
         self.last_gamma = [None] * self.L; self.kappa = a.lr_kappa if a.lr_kappa > 0 else a.sphere
         global EIG_DTYPE; EIG_DTYPE = torch.float64 if a.eig_dtype == 'float64' else None
+        global QR_GUARD, QR_TOL; QR_GUARD = bool(a.qr_guard); QR_TOL = a.qr_tol
         self.cache = {}; self.last_Gr = None; self.diag_out = {}
         self.f0 = None
         if a.xfold:                                    # cross-fitting (item 53): per-fold momenta, fold of the current batch set by the harness
