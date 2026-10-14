@@ -551,6 +551,7 @@ for step in range(1, a.steps + 1):
         t0 = time.time(); MECH.run(p_before, params_orig_any(), xb, yb, mse, emit, step, rotate=(KQ.rotate_grads if KQ is not None else None), xv=Xv[:1024], yv=Yv[:1024]); sync(); tm['stats'] += time.time() - t0
     if step % a.eval_every == 0 or step == a.steps:
         v = val_mse(); emit('val', v, step); emit('wall', time.time() - t_start, step)
+        if out is not None: emit('train_batch_loss', float(loss), step)                      # training batch loss at eval steps (generalisation gap)
         if a.diag:
             with torch.no_grad():
                 if KQ is not None:                                   # fast path: the trained weights are KQ.Wt (rotated), lins is untouched
