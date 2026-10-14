@@ -107,7 +107,7 @@ class KronQOrig:
 
     def state_bytes(self):
         n = lambda x: 0 if x is None else x.numel() * x.element_size()
-        s = sum(n(x) for x in self.C) + sum(n(x) for x in self.u) + sum(n(r) + n(c) for r, c in self.hv)
+        s = sum(n(x) for x in self.C) + sum(n(x) for x in self.u) + sum(n(x) for x in self.Dprev) + sum(n(r) + n(c) for r, c in self.hv)   # Dprev counted as in KronQFast
         return s + sum(B.state_bytes() for B in self.A + self.S)
 
     # ---------------- basis helpers

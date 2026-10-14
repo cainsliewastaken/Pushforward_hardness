@@ -20,6 +20,24 @@ finite data decoupled weight decay. The step size per mode is learned from the m
 The refactor with weights in ordinary coordinates (kronq_orig.py, --orig 1) equals KronQFast in fp32 but loses 60 % on the rough
 field in TF32: in ordinary coordinates a slow mode is a tiny pattern over many weights, below TF32's resolution. Not adopted.
 
+## 2b. THE CURRENT VERSION (user decision, 2026-10-14)
+
+The refactor (kronq_orig.py): fp32 master weights in ordinary coordinates, statistics in ordinary coordinates, bases recomputed
+from the statistics at each refresh, only the optimizer state transported, gradient rotated in and update rotated out each step; the
+basis work in fp32 (gradient / update rotations, statistics, refresh), the network's own matmuls in reduced precision; QR guard; no
+output budget; decoupled decay on finite data. Flags: --opt kronqf --orig 1 --orig_hp rot,stats,refresh --qr_guard 1 --rem 0 (block
+256, compress, bf16 momentum, stats every step, 2 subspace iterations, adaptive refresh 0.1 / floor 5, hyper, fused, cap 0); turbulence
+--lr 2e-4 --wd_abs 1e-3. STATUS: the refactor equals the rotated-weights optimizer in fp32 (scale_precpair: 0.054 vs 0.049 rough preset)
+and lost 60 % only in TF32; that its basis work in fp32 removes the TF32 loss is ASSUMED (user: floats are well understood), not
+measured: the --orig_hp runs (scale_orighp.sh) were never run, and no turbulence or long field run exists for this exact version.
+Results below for the hybrid are taken as this version's expected values on that assumption.
+Measured for the refactor (TF32 rotations, with the budget): peak memory 0.78 GiB at batch 256, 0.86 at 1024, 1.22 at 4096 (rotated-
+weights optimizer 1.12 / 1.29 / 2.13, AdamW 0.38 / 0.40 / 0.67); optimizer state 1.96 floats per parameter with the stored previous step
+(the printed 1.46 omitted it; fixed), AdamW 2.00; 5000-step runtime 100 s at batch 4096 (rotated weights 127 s, AdamW 30 s).
+FLOP model per step, width 4096, no budget: 6BP forward/backward + ~2BP probe backward + ~0.25BP statistics + 8bP rotations (fp32,
+batch-independent) + ~250P update and state transports: batch 256 ~4,400P (AdamW ~1,550P), 1024 ~10,700P (6,150P), 4096 ~36,100P
+(24,600P); with the probe on a fixed subsample ~1.1x AdamW at batch 4096.
+
 ## 3. Results with the hybrid (TF32)
 
 | problem | KronQ hybrid | previous KronQ | AdamW best |
