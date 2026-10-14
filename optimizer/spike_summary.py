@@ -2,7 +2,7 @@
 instrument's start), and at each jump and in the 5 steps before it: refresh_df (function change across the basis refresh), Vorth / Uorth,
 re-orthonormalisation, rho_raw / rho_real (proposed / realised output change over the budget), umax. Plus the run-wide maxima."""
 import json, glob, os, collections, math
-F = os.path.expandvars('$SCRATCH/l63_held_rough/runs/scale_spikefield')
+import sys; F = os.path.expandvars(sys.argv[1] if len(sys.argv) > 1 else '$SCRATCH/l63_held_rough/runs/scale_spikefield')
 def arg(a, k): return a.split(f'--{k} ')[-1].split()[0] if f'--{k} ' in a else None
 for fn in sorted(glob.glob(f'{F}/res_j*.jsonl'), key=lambda f: int(f.split('_j')[1].split('.')[0])):
     rows = [json.loads(l) for l in open(fn)]; a = rows[0]['args']
