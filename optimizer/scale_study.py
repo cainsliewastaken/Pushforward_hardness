@@ -40,7 +40,7 @@ p.add_argument('--compress', type=int, default=0); p.add_argument('--mom_bf16', 
 p.add_argument('--reltol', type=float, default=1e-10); p.add_argument('--beta_stats', type=float, default=0.95)
 p.add_argument('--nval', type=int, default=4096); p.add_argument('--eval_every', type=int, default=250)
 p.add_argument('--seed', type=int, default=1); p.add_argument('--out', required=True)
-p.add_argument('--u_decay', type=float, default=0.0, help='kronqf: per-step shrink of the log push weight toward --u_floor, u -= u_decay (u - u_floor): the hypergradient (next-batch agreement with the last push) has zero mean on a mode whose push does not transfer, so without a shrink u random-walks; with it a weight above the floor needs sustained agreement (REPORT 61 item 51)'); p.add_argument('--u_floor', type=float, default=-2.3, help='kronqf u_decay: the floor of the log weight (w = exp(u_floor), default 0.1)'); p.add_argument('--u_clamp', type=float, default=4.6, help='clamp on the log push weight u (push w = exp(u) in [e^-c, e^c])')
+p.add_argument('--whiten', default='0', choices=['0', 'pca', 'full'], help='input preprocessing from the data covariance of 65536 training inputs, fixed before training: pca = rotate into its eigenbasis (no scaling); full = rotate and scale every direction to unit variance (floor --whiten_floor x the top eigenvalue). Applied to training and validation inputs; the first layer then sees the input-side Kronecker basis as coordinates (REPORT 61 item 52)'); p.add_argument('--whiten_floor', type=float, default=1e-6); p.add_argument('--freeze_after', type=int, default=0, help='kronqf: compute no basis refresh on any layer after this step (0 = refresh as usual); the statistics keep running but the bases and eigenvalues stay fixed'); p.add_argument('--u_decay', type=float, default=0.0, help='kronqf: per-step shrink of the log push weight toward --u_floor, u -= u_decay (u - u_floor): the hypergradient (next-batch agreement with the last push) has zero mean on a mode whose push does not transfer, so without a shrink u random-walks; with it a weight above the floor needs sustained agreement (REPORT 61 item 51)'); p.add_argument('--u_floor', type=float, default=-2.3, help='kronqf u_decay: the floor of the log weight (w = exp(u_floor), default 0.1)'); p.add_argument('--u_clamp', type=float, default=4.6, help='clamp on the log push weight u (push w = exp(u) in [e^-c, e^c])')
 p.add_argument('--gmask', type=float, default=0.0, help='>0: push only modes with |G_ij| > gmask * rms(G) (gradient-energy mask, basis independent)')
 p.add_argument('--bcurv', type=int, default=0, help='1: live mask and GN cap from the CURRENT batch Kronecker curvature (extra backward per step)')
 p.add_argument('--rem', type=float, default=0.0, help='>0: scale the whole step so that ||f(theta+d) - f(theta)|| <= rem * ||E|| on the batch (extra forward per step)')
@@ -140,6 +140,17 @@ else:                                   # coordinate-network image fitting (impl
         return encode(COORDS[idx]), PIX[idx]
 gtrain = torch.Generator(device=DEV); gtrain.manual_seed(1000 + a.seed)
 gval = torch.Generator(device=DEV); gval.manual_seed(999); Xv, Yv = (XVA[:a.nval], YVA[:a.nval]) if a.problem == 'turb' else draw(a.nval, gval)
+if a.whiten != '0':                     # fixed input transform from the data covariance (item 52: is the rough result mostly input whitening?)
+    gw = torch.Generator(device=DEV); gw.manual_seed(777)
+    Xw = XTR[:65536].to(DEV) if a.problem == 'turb' else draw(65536, gw)[0]
+    MU_W = Xw.mean(0, keepdim=True); Xc = Xw - MU_W; COV = (Xc.T @ Xc) / Xc.shape[0]; ew, Uw = torch.linalg.eigh(COV.double()); ew, Uw = ew.float().flip(0), Uw.float().flip(1)
+    scale = (1.0 / ew.clamp(min=a.whiten_floor * float(ew.max())).sqrt()) if a.whiten == 'full' else torch.ones_like(ew)
+    WH = Uw * scale[None, :]; del Xw, Xc, COV
+    print(f"whiten {a.whiten}: input covariance eigenvalues top {float(ew[0]):.3g} median {float(ew.median()):.3g} min {float(ew[-1]):.3g}; floor {a.whiten_floor * float(ew.max()):.3g}; scaling range {float(scale.min()):.3g}-{float(scale.max()):.3g}", flush=True)
+    _draw_raw = draw
+    def draw(m, gen):
+        x, y = _draw_raw(m, gen); return (x - MU_W) @ WH, y
+    Xv = (Xv - MU_W) @ WH
 
 dims = [NIN] + [a.width] * a.depth + [NOUT]
 torch.manual_seed(a.seed)
@@ -563,6 +574,7 @@ for step in range(1, a.steps + 1):
     if step % a.eval_every == 0 or step == a.steps:
         v = val_mse(); emit('val', v, step); emit('wall', time.time() - t_start, step)
         if out is not None: emit('train_batch_loss', float(loss.detach()), step)                      # training batch loss at eval steps (generalisation gap)
+        print(f"step {step} val {v:.5g}" + (f" train_batch {float(loss.detach()):.5g}" if out is not None else '') + f" wall {time.time() - t_start:.0f}s", flush=True)
         if a.diag:
             with torch.no_grad():
                 if KQ is not None:                                   # fast path: the trained weights are KQ.Wt (rotated), lins is untouched

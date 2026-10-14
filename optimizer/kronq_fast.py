@@ -405,6 +405,7 @@ class KronQFast:
         if a.rem_ctrl or a.sphere: self.T_eff = float(T_rem)
         else: self.T_eff = max(1.0, 0.5 * (T_rem + 1.0))   # sum of the remaining linear-decay factors over the current one: (T_rem + 1) / 2
         due = [l for l in range(L) if step >= self.next_ref[l]]
+        if a.freeze_after > 0 and step > a.freeze_after and all(self.S[l].e is not None and self.A[l].e is not None for l in range(L)): due = []   # item 52: bases fixed after this step
         Gr = [W.grad for W in self.Wt]
         if self.acf_steps:
             Wn = a.acf_len

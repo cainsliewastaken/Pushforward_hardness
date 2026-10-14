@@ -7,7 +7,10 @@ def label(a):
     parts = []
     if '--problem turb' in a: parts.append(f"turb {arg(a, 'turb_target')}")
     else: parts.append('field ' + ('rough' if arg(a, 'p') == '2' else 'smooth') + f" seed {arg(a, 'seed')}")
+    if '--whiten' in a and arg(a, 'whiten') != '0': parts.append(f"whiten {arg(a, 'whiten')}")
     if '--opt adamw' in a: parts.append(f"adamw lr {arg(a, 'lr')}"); return ' | '.join(parts)
+    if '--freeze_after' in a and arg(a, 'freeze_after') != '0': parts.append(f"freeze after {arg(a, 'freeze_after')}")
+    if '--stats_every' in a and arg(a, 'stats_every') != '1': parts.append(f"stats every {arg(a, 'stats_every')}")
     parts.append(f"lr {arg(a, 'lr')} budget {arg(a, 'rem')}")
     parts.append('cap on' if arg(a, 'cap') == '1' else 'cap off')
     if '--rem_anchor' in a: parts.append(f"anchor {arg(a, 'rem_anchor')}")
@@ -33,5 +36,7 @@ add = [f for f in glob.glob(f'{S}/scale_turbfull/res_j*.jsonl') if int(os.path.b
 if add: show(sorted(add), 'mechanism test (scale_turbfull, indices 100+)')
 fix = glob.glob(f'{S}/scale_capfix/res_j*.jsonl')
 if fix: show(sorted(fix), 'capped-budget fix (scale_capfix)')
+sm = glob.glob(f'{S}/scale_simple/res_j*.jsonl')
+if sm: show(sorted(sm), 'simplifications: whitened AdamW, frozen bases, probe every k (scale_simple)')
 ud = glob.glob(f'{S}/scale_udecay/res_j*.jsonl')
 if ud: show(sorted(ud), 'weight shrink toward the floor and weight-decay sweep (scale_udecay)')
