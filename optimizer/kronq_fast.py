@@ -186,7 +186,7 @@ class KronQFast:
         self.use_fused = bool(a.fused) and a.hyper and a.cap and a.compress and a.rule == 'sign' and a.wrule == 'learned' and not a.dprev_bits and a.horizon <= 1 \
             and not a.hyper_shape and a.q == 0 and a.qa == 0 and a.q_in == 0 and a.sign_floor <= 0 and a.topk <= 0 and not a.alloc and not a.alloc2 \
             and not a.mom_adapt and a.hyper_rule == 'idbd' and not a.gnls and not a.ekfac and not a.lr_kappa and not a.sphere and not a.radius_scan and not a.check_curv
-        self.nref = [0] * self.L; self._lr_eta_t = torch.zeros((), device=dev)
+        self.nref = [0] * self.L; self._lr_eta_t = torch.zeros((), device=dev); self.capL = float(self.L) if a.cap_L else 1.0
         self.xv_fresh = None   # (x, y) fresh batch for --rem_val, set by the harness each step
         self.zbud = [float(x) for x in a.zbud.split(',')] if a.zbud else []
         self.scan_steps = set(int(x) for x in a.radius_scan.split(',')) if a.radius_scan else set()
@@ -373,7 +373,7 @@ class KronQFast:
         D = torch.where(live, w * sgn, torch.zeros_like(g))
         if a.sphere > 0: D = D * (math.sqrt(D.numel()) / (float(D.norm()) + 1e-30))   # unit-rms direction (length lr eta sqrt(N)), then the cap
         if a.cap:
-            capv = g.abs() / (lam.clamp(min=1e-30) * max(lr * self.eta[l], 1e-30) * L)
+            capv = g.abs() / (lam.clamp(min=1e-30) * max(lr * self.eta[l], 1e-30) * self.capL)
             D = torch.sign(D) * torch.minimum(D.abs(), capv)
         return D, lam, live
     # ---------------- one optimizer step; call after loss.backward() on forward(xb, keep=need_keep)
@@ -516,7 +516,7 @@ class KronQFast:
                 if self.use_fused and self.S[l].e is not None and self.A[l].e is not None:
                     self._lr_eta_t.fill_(float(lr * self.eta[l]))
                     D, lam, live = fused_update(g, C, self.u[l], self.hv[l][0], self.hv[l][1], self.Dprev[l], self.S[l].e, self.A[l].e, self._lr_eta_t,
-                                                2.0 / self.nout, a.b1, a.beta_u, a.u_clamp, a.reltol, float(L))
+                                                2.0 / self.nout, a.b1, a.beta_u, a.u_clamp, a.reltol, self.capL)
                     Cf = C.float(); self.Dprev[l] = D.to(self.u[l].dtype); Dws.append(D)
                     if diag_now:
                         emit(f'livefrac_l{l}', float(live.float().mean()), step); emit(f'wnorm_l{l}', float(self.Wt[l].norm()), step)
