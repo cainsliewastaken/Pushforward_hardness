@@ -146,19 +146,110 @@ What C1 says about WHEN unrolling stops helping.
  - For systems with a small gap gamma (many near-neutral directions, e.g. turbulence), C1 predicts the opposite: the
    collapse is slow, and conditioning lets windows stay useful longer.
 
-### C2. Nonlinearity (to be proved next; statement and evidence)
+### C2. Concentration and nonlinearity (proved under the stated hypotheses, 2026-10-14)
 Safe side (proved in the draft, Cor "Forward Euler, uniform constants"): the higher orders stay below the first-order
 envelope up to tau_nl = (1/Lambda) ln( Lambda min(r/4, 1/kappa_r) / (C etabar e^{Lambda h}) ), logarithmic in the inverse
 one-step error.
-CONJECTURE C2 (breaking side). Beyond the time at which a start's first-order error envelope reaches the analyticity
-radius r, that start's adjoint grows without the first-order bound, and the window gradient is dominated by the starts
-past the radius. The fraction of such starts grows like the tail probability of the finite-time growth rate. Measured
-support: the higher-order part of the gradient jumps between windows 1.52 and 1.60 in every model, and removing 1-5 %
-of the starts removes it (draft, section "Lorenz-63 measurements"). The plan is to prove it from the draft's Thm "The
-higher-order part of the error" by splitting the starts by admissibility, and to tie the tail to finite-time Lyapunov
-statistics (large deviations).
-PREDICTION: tau_nl grows like ln(1/(one-step error)) / Lambda_1. Together with MULTISTEP_CHAIN M7 this gives two
-logarithmic laws, one from roughness and one from nonlinearity. The usable window is the smaller of the two.
+Breaking side (written 2026-10-14). The draft's horizon uses constants uniform over starts, i.e. the WORST start.
+What breaks first is set by how the growth is distributed over starts, and two effects have to be separated:
+ - concentration: the loss and gradient end up carried by a few fast-growing starts. This happens already at first
+   order.
+ - nonlinearity: those starts leave the analytic radius.
+
+Per-start growth. For start k and window tau = t_p, let G_k(tau) >= 0 be a per-start growth factor such that
+G_k(tau) <= theta implies start k is admissible on [0, tau]. One choice is the draft's recursion of Thm "The higher-order
+part of the error" run with per-start propagator norms. Its first-order envelope is
+etabar h sum_{i<q} ||P_k(t_q, t_i)||, with threshold theta = r/4 / etabar up to the draft's constant kappa_r.
+Starts are drawn i.i.d. from the data distribution. The FINITE-TIME GENERALISED LYAPUNOV EXPONENTS are
+        L_tau(q) = (1/tau) ln E[ G(tau)^q ],
+and the INTERMITTENCY RATE is delta_tau = L_tau(4) - 2 L_tau(2).
+
+THEOREM C2a (the higher-order part of the gradient splits by admissibility; exact). Let A(tau) be the admissible starts
+and b_A the draft's bound (its Thm "Bound on g_w - grad^(1)_w") summed over A(tau) only. Then
+        |g_w - grad^(1)_w|  <=  b_A  +  (1/n) | sum_{k not in A(tau)} ( g_{w,k} - grad^(1)_{w,k} ) |.
+The first term is controlled to all orders. The second has no first-order control: for those starts the series in the
+one-step errors need not converge. Removing the non-admissible starts restores the draft's bound exactly.
+Proof. The gradient is an average over starts; apply the draft's per-start bound on A(tau).  []
+
+PROPOSITION C2b (concentration of the window loss and gradient; first order in eps). Assume the per-start loss
+factorises as l_k = G_k^2 X_k and the first-order per-start gradient norm as |grad^(1)_{w,k}| = G_k^2 Y_k, with X_k, Y_k > 0
+independent of G_k and with finite second moments. This holds under C1's hypothesis H up to its remainder: X_k is the
+squared projection <a_k, eps_k>^2, and Y_k carries the feature factor. Then, almost surely as n -> infinity,
+        n_eff^loss / n  =  (sum_k l_k)^2 / (n sum_k l_k^2)  ->  e^{-tau delta_tau} (E X)^2 / E[X^2],
+and the same with Y for the gradient. Moreover delta_tau >= 0, with equality iff G(tau) is almost surely constant over
+starts. The loss-carrying share of the starts therefore decays exponentially in the window at the intermittency rate.
+Define the CONCENTRATION HORIZON of a batch of n_b starts by n_b e^{-tau delta_tau} = 1:
+        tau_conc = ln(n_b) / delta_tau.
+Beyond it, the batch loss and the batch gradient are each carried by O(1) starts. The minibatch gradient is then a
+few-sample estimate whose relative variance is of order 1/n_eff, and the population loss is a tail statistic.
+Proof. The ratio of sample means converges by the strong law (finite E l^2). Independence factorises the moments,
+giving (E G^2)^2 / E G^4 = e^{-tau delta_tau}. q -> ln E G^q is convex (Hoelder) and 0 at q = 0, so
+2 ln E G^2 <= ln E G^0 + ln E G^4 = ln E G^4. Strict convexity holds unless G is degenerate.  []
+For log-normal growth, ln G ~ N(tau Lambda, D tau), one has L_tau(q) = q Lambda + q^2 D / 2 and delta = 4D.
+
+THEOREM C2c (when the first start leaves the radius; rigorous bound). For every q > 0,
+        P( G(tau) > theta )  <=  exp( tau L_tau(q) - q ln theta )                                 (Markov),
+and over a batch of n_b starts, P(some start is not admissible on [0, tau]) <= n_b inf_{q>0} exp( tau L_tau(q) - q ln theta ).
+So all starts of the batch are admissible, and the draft's all-orders bounds hold for the whole batch, with probability
+at least 1 - beta, up to the window tau_nl(n_b, beta) solving
+        inf_q [ tau L_tau(q) - q ln theta ] = ln(beta / n_b),
+with ln theta = ln(r / etabar) + const.
+For log-normal growth this gives tau_nl ~ ln(theta)/Lambda - sqrt(2 D ln(theta) ln(n_b/beta)) / Lambda^{3/2} at leading order.
+The typical start leaves at ln(theta)/Lambda. The first start of a batch leaves earlier by a term growing like
+sqrt(ln n_b): bigger batches and more intermittent dynamics break earlier.
+Proof. Markov's inequality applied to G^q, then the union bound.  []
+
+PROPOSITION C2d (the starts that leave carry more than their share of the gradient). Under the factorisation of C2b,
+the share of the first-order gradient norm carried by non-admissible starts satisfies
+        E[ G^2 Y 1{G > theta} ] / E[ G^2 Y ]  =  P_2( G > theta )  >=  P( G > theta ).
+Here P_2 is the growth-tilted law, dP_2 = G^2 dP / E G^2. For log-normal growth the tilt shifts the mean of ln G by
+2 D tau. The gradient-weighted share therefore reaches 1/2 at
+        tau_nl^grad = ln(theta) / (Lambda + 2D),
+much earlier than the typical exit ln(theta)/Lambda when D is comparable to Lambda.
+Proof. Y is independent of G and cancels. G^2 and 1{G > theta} are both nondecreasing in G, so by Chebyshev's
+association inequality E[G^2 1{G > theta}] >= E[G^2] P(G > theta).  []
+
+What C2 says about WHEN unrolling stops helping. Three horizons follow from the growth statistics, in order:
+ 1. Concentration, tau_conc = ln(n_b)/delta: the batch is carried by a few starts. This happens at first order.
+ 2. Gradient-weighted exit, ln(theta)/(Lambda + 2D): most of the gradient comes from starts outside the radius, and the
+    draft's step series and quadratic model lose control.
+ 3. Typical exit, ln(theta)/Lambda: the median start goes nonlinear.
+The first two are where the window loss stops being a good proxy for the typical rollout error, which is what
+"better" was about. Both grow only logarithmically: (1) in the batch size, (2) in the inverse one-step error.
+CHECK (2026-10-14, true Lorenz-63 tangent flow, RK4 step 0.004, 20,000 starts after 20 time units on the attractor;
+G = ||P(tau, 0)||, growth of a single injection at the start of the window, as a proxy for the per-start envelope):
+   tau          0.16   0.32   0.64   1.28    1.92    2.56
+   mean FTLE    3.70   3.17   2.35   1.67    1.41    1.27
+   D = Var(ln G)/tau  1.39   1.87   1.85   1.03   0.69   0.54
+   delta_tau    4.3    6.1    7.6    7.2     (4.2)   (3.2)
+   RMS/median of G  1.24  2.31  9.52  62.3  (43)    (36)
+   n_eff/n      0.50   0.14   7.7e-3 1.0e-4 (3e-4)  (3e-4)
+Values in parentheses are limited by the sample. Beyond tau ~ 1.3, E G^4 is set by the largest of the 20,000 starts,
+so n_eff/n saturates near a few / 20,000.
+With a batch of n_b = 1024 starts, tau_conc ~ ln(1024)/7 ~ 1.0. About 8 starts carry the batch at tau = 0.64, and about one
+at 1.28. Growth at short windows is far from its asymptotic rate (mean FTLE 3.2 at 0.32 against Lambda_1 = 0.9), so the
+asymptotic exponents would badly underestimate these effects. Finite-time quantities are the relevant ones.
+CONSISTENT (draft, section "Lorenz-63 measurements"; results_main):
+ - (i) The RMS rollout error over starts is 3-5 times the median at horizon 0.64 and about 20 times at 1.28, at every
+   width. The growth-factor ratio above is 9.5 and 62. It is larger than the error ratio, as expected: the error sums
+   injections at many times, which averages the growth. The rise with horizon is the same.
+ - (ii) Removing the 1 % of starts with the largest first-order error (10 of 1024) brings the higher-order part of the
+   gradient below 0.2, and removing 5 % brings it below 0.05, up to window 2.48. This is C2a combined with C2d: those
+   starts carry a share of the gradient far above their number.
+ - (iii) Ranked by RMS error, windows 1.28-2.56 are best at their own horizons; ranked by median or 90th percentile,
+   short windows (0.32-0.64) are best at every horizon up to 2.56. This is C2b: past tau_conc the window loss is a tail
+   statistic, so training on it improves the few fastest-growing starts and not the typical one. "Better" depends on
+   the statistic exactly as predicted.
+PREDICTIONS:
+ - (a) The median-ranked best window depends on the batch only through ln(n_b)/delta, and shifts later for larger batches
+   only logarithmically.
+ - (b) Reweighting starts by 1/G_k^2 (normalising each start's rollout loss by its own growth) removes the concentration.
+   It should move the median-ranked best window towards the RMS-ranked one, at the price of a loss that no longer
+   matches the RMS target.
+ - (c) For systems with weaker intermittency (smaller delta) unrolling stays useful longer under the median criterion.
+ - (d) Two logarithmic laws bound the useful window: MULTISTEP_CHAIN M7, from roughness and one-step training, and C2c,
+   from nonlinearity. Together with C2b and C1 there are four candidate horizons. Which binds first is a property of
+   the system and the data, computable from the one-step kernel and the finite-time growth statistics.
 
 ### C3. Generalisation (to be proved; statement)
 By MULTISTEP_CHAIN Thm M2, the held-out rollout error changes through the one-step kernel between held-out and
