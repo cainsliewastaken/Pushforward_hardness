@@ -141,12 +141,14 @@ class Basis:
                 e = torch.cat([e, torch.diagonal(Vr.T @ self.Fr @ Vr).clamp(min=0)])
             else: Vr = None
         # new basis U V; factor becomes (nearly) diagonal in it
+        self.sd_V = float((torch.bmm(V.transpose(1, 2), V) - torch.eye(V.shape[-1], device=V.device)).abs().max()); self.sd_reorth = False; self.sd_U = 0.0
         if self.U is None:
             self.U = V; self.Ur = Vr; self.nacc = 0
         else:
             self.U = torch.bmm(self.U, V); self.nacc = getattr(self, 'nacc', 0) + 1
             if self.rem: self.Ur = self.Ur @ Vr
             if CHOLQR and self.nacc % 10 == 0:                      # re-orthonormalise the accumulated basis (Cholesky-QR drift ~1e-4 per refresh)
+                self.sd_U = float((torch.bmm(self.U.transpose(1, 2), self.U) - torch.eye(self.U.shape[-1], device=self.U.device)).abs().max()); self.sd_reorth = True
                 self.U = cholqr(self.U)
                 if self.rem: self.Ur = cholqr(self.Ur)
         self.F = torch.bmm(torch.bmm(V.transpose(1, 2), self.F), V)
@@ -442,6 +444,9 @@ class KronQFast:
             if tn > a.clip_grad:
                 for W in self.Wt: W.grad.mul_(a.clip_grad / tn)
         due = [l for l in range(L) if step >= self.next_ref[l]]
+        sd_now = a.spike_diag > 0 and step >= a.spike_diag and getattr(self, 'sd_x', None) is not None; sd_pre = None
+        if sd_now and due:
+            with torch.no_grad(): sd_pre = self.forward(self.sd_x[0])
         if a.freeze_after > 0 and step > a.freeze_after and all(self.S[l].e is not None and self.A[l].e is not None for l in range(L)): due = []   # item 52: bases fixed after this step
         Gr = [W.grad for W in self.Wt]
         if self.acf_steps:
@@ -567,6 +572,13 @@ class KronQFast:
                         if emit is not None: emit(f'refresh_period_l{l}', self.period[l], step); emit(f'refresh_overlap_l{l}', ov, step)
                     self.next_ref[l] = step + self.period[l]
             if tm is not None: tm['eig'] += t() - t0
+            if sd_pre is not None:                         # spike diagnostic: the refresh and its transports must leave the function unchanged
+                with torch.no_grad():
+                    sd_post = self.forward(self.sd_x[0]); den = float((sd_pre - self.sd_x[1]).norm()) + 1e-30
+                    self.sd_last = dict(refresh_df=float((sd_post - sd_pre).norm()) / den, Vorth=max(max(getattr(self.S[l], 'sd_V', 0.0), getattr(self.A[l], 'sd_V', 0.0)) for l in due),
+                                        Uorth=max(max(getattr(self.S[l], 'sd_U', 0.0), getattr(self.A[l], 'sd_U', 0.0)) for l in due),
+                                        reorth=float(any(getattr(self.S[l], 'sd_reorth', False) or getattr(self.A[l], 'sd_reorth', False) for l in due)), nref=float(len(due)))
+            elif sd_now: self.sd_last = dict(refresh_df=0.0, Vorth=0.0, Uorth=0.0, reorth=0.0, nref=0.0)
         # ---- per-layer step
         t0 = t() if t else None
         xf_now = bool(a.xfold) and step % a.xfold_every == 0 and self.xv_diag is not None; GV = None
