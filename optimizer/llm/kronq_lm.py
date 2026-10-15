@@ -4,6 +4,8 @@ language model needs:
 
   - any nn.Linear in any model, found by module traversal and read through forward hooks (inputs a, outputs z) instead of
     kronq_main's own MLP forward; bias handled as kronq_main does ([W | b], input augmented by 1); weight sharing is refused;
+  - nn.Conv2d (groups = 1) as the matrix out x (in kh kw) (KFC): input factor from unfolded patches of the first `conv_images`
+    images of the captured micro-batch, output factor from the output gradients at every position;
   - the parameter split used by SOAP / Muon: the KronQ step on the hidden matrices (attention q/k/v/o, MLP), AdamW on everything
     else (embeddings, a tied or untied output head, LayerNorm / RMSNorm gains, any Linear listed in `exclude` or wider than
     `max_dim`);
@@ -53,26 +55,43 @@ def _batch_factor(B, Z):
 
 
 class _Layer:
-    """KronQ state of one nn.Linear: the two bases and the per-mode state, all on [W | b] (bias column when the layer has one)."""
+    """KronQ state of one nn.Linear or nn.Conv2d: the two bases and the per-mode state, all on [W | b] (bias column when the layer
+    has one). A Conv2d kernel is the matrix out x (in kh kw) (KFC, Grosse & Martens 2016): its input factor is built from the
+    unfolded input patches and its output factor from the output gradients at every position."""
     def __init__(self, name, mod, block, refresh, mom_bf16):
         self.name, self.mod, self.has_bias = name, mod, mod.bias is not None
-        o, i = mod.weight.shape; dev = mod.weight.device; n = i + int(self.has_bias)
+        self.conv = isinstance(mod, nn.Conv2d)
+        o = mod.weight.shape[0]; i = mod.weight[0].numel(); dev = mod.weight.device; n = i + int(self.has_bias)
+        self.n_in = i
         self.A, self.S = _Basis(n, block, dev), _Basis(o, block, dev)
         self.C = torch.zeros(o, n, device=dev, dtype=torch.bfloat16 if mom_bf16 else torch.float32)
         self.u = torch.zeros(o, n, device=dev, dtype=torch.bfloat16)
         self.hv = (torch.zeros(o, device=dev), torch.zeros(n, device=dev))
         self.has_prev, self.period, self.next_ref = False, refresh, 1
-        self.z = None; self.order = -1; self.nA = self.nS = None     # captured output; pending batch factors
+        self.z = None; self.order = -1; self.root = False; self.nA = self.nS = None   # captured output; pending batch factors
 
     def grad(self):
-        g = self.mod.weight.grad.float()
+        g = self.mod.weight.grad.float().reshape(self.mod.weight.shape[0], -1)
         return torch.cat([g, self.mod.bias.grad.float()[:, None]], 1) if self.has_bias else g
 
     def apply(self, M):
         """weights -= M (M on [W | b])."""
-        i = self.mod.weight.shape[1]
-        self.mod.weight.data.sub_(M[:, :i].to(self.mod.weight.dtype))
+        i = self.n_in
+        self.mod.weight.data.sub_(M[:, :i].reshape(self.mod.weight.shape).to(self.mod.weight.dtype))
         if self.has_bias: self.mod.bias.data.sub_(M[:, i].to(self.mod.bias.dtype))
+
+    def in_rows(self, x, max_images):
+        """input rows for the input factor: features of a Linear, unfolded patches of a Conv2d (first `max_images` images)."""
+        if not self.conv: return x.reshape(-1, x.shape[-1])
+        m = self.mod; x = x[:max_images] if max_images else x
+        pad = m.padding
+        if m.padding_mode != 'zeros': x = F.pad(x, m._reversed_padding_repeated_twice, mode=m.padding_mode); pad = 0
+        cols = F.unfold(x, m.kernel_size, dilation=m.dilation, padding=pad, stride=m.stride)   # (B, in kh kw, positions)
+        return cols.transpose(1, 2).reshape(-1, cols.shape[1])
+
+    def out_rows(self, g):
+        """output rows (one per token / position) of an output-shaped tensor."""
+        return g.permute(0, 2, 3, 1).reshape(-1, g.shape[1]) if self.conv else g.reshape(-1, g.shape[-1])
 
     def to_basis(self, M): return self.A.cols_to(self.S.rows_to(M))       # U_S^T M U_A
     def from_basis(self, M): return self.S.rows_from(self.A.cols_from(M))   # U_S M U_A^T
@@ -83,26 +102,27 @@ class KronQLM:
                  lr_adam=None, adam_betas=(0.9, 0.95), adam_eps=1e-8, adam_wd=0.0,
                  exclude=('lm_head',), max_dim=16384, block=256, b1=0.9, beta_u=0.01, u_clamp=4.6, reltol=1e-12, beta_stats=0.95,
                  eig_iters=2, refresh=20, adapt_refresh=0.1, refresh_min=5, stats_every=1, weight_decay=0.0, mom_bf16=True,
-                 stats_tokens=0, probe_tokens=0, lam_scale=1.0, stream=True, seed=0):
+                 stats_tokens=0, probe_tokens=0, conv_images=32, lam_scale=1.0, stream=True, seed=0):
         assert loss in ('ce', 'mse') and probe in ('fisher', 'emp')
         net = model.module if hasattr(model, 'module') else model            # DDP-wrapped or plain
         self.model, self.lr, self.lr_max = net, lr, (lr if lr_max is None else lr_max)
         self.loss, self.probe, self.draw_probe, self.stream = loss, probe, draw_probe, stream
         self.h = dict(b1=b1, beta_u=beta_u, u_clamp=u_clamp, reltol=reltol, beta_stats=beta_stats, eig_iters=eig_iters,
                       adapt_refresh=adapt_refresh, refresh_min=refresh_min, stats_every=stats_every, weight_decay=weight_decay)
-        self.stats_tokens, self.probe_tokens, self.lam_scale = stats_tokens, probe_tokens, lam_scale
+        self.stats_tokens, self.probe_tokens, self.conv_images, self.lam_scale = stats_tokens, probe_tokens, conv_images, lam_scale
         self.ddp = dist.is_available() and dist.is_initialized()
         self.rank, self.world = (dist.get_rank(), dist.get_world_size()) if self.ddp else (0, 1)
 
-        # the split: KronQ on hidden Linear layers, AdamW on the rest
+        # the split: KronQ on Linear and (ungrouped) Conv2d layers, AdamW on the rest
         tied = {id(m.weight) for m in net.modules() if isinstance(m, nn.Embedding)}
-        excl = lambda name: any(name == e or name.endswith('.' + e) for e in exclude)
+        excl = lambda name: any(name == e or name.endswith('.' + e) or name.startswith(e + '.') or ('.' + e + '.') in name for e in exclude)
+        kron_ok = lambda m: isinstance(m, nn.Linear) or (isinstance(m, nn.Conv2d) and m.groups == 1 and not isinstance(m.padding, str))
         self.layers = []
         for name, m in net.named_modules():
-            if isinstance(m, nn.Linear) and not excl(name) and id(m.weight) not in tied and max(m.weight.shape) <= max_dim:
+            if kron_ok(m) and not excl(name) and id(m.weight) not in tied and max(m.weight.shape[0], m.weight[0].numel()) <= max_dim:
                 if m.weight.dtype in (torch.bfloat16, torch.float16): raise ValueError(f'{name}: KronQ needs fp32 parameters (use autocast for bf16)')
                 self.layers.append(_Layer(name, m, block, refresh, mom_bf16))
-        if not self.layers: raise ValueError('no nn.Linear layer selected for KronQ')
+        if not self.layers: raise ValueError('no Linear / Conv2d layer selected for KronQ')
         kron = {id(p) for L in self.layers for p in L.mod.parameters()}
         rest = [p for p in net.parameters() if p.requires_grad and id(p) not in kron]
         self.adam = None
@@ -148,10 +168,10 @@ class KronQLM:
                 raise RuntimeError(f'{L.name}: recorded twice in one statistics step (weight sharing, or capture on more than one '
                                    'micro-batch) - not supported')
             with torch.no_grad(), _fp32(), _no_autocast(inp[0]):   # input factor now (in fp32 even under autocast)
-                a = inp[0].detach().reshape(-1, inp[0].shape[-1]).float()
+                a = L.in_rows(inp[0].detach(), self.conv_images).float()
                 if L.has_bias: a = torch.cat([a, torch.ones(a.shape[0], 1, device=a.device)], 1)
                 L.nA = _batch_factor(L.A, self._rows(a))
-            L.z, L.order = out, self._ncap; self._ncap += 1
+            L.z, L.order, L.root = out, self._ncap, not inp[0].requires_grad; self._ncap += 1
             if self.probe == 'emp': self._hooks.append(out.register_hook(self._s_hook(L)))
         return h
 
@@ -161,7 +181,7 @@ class KronQLM:
     def _s_hook(self, L):
         def f(g):
             with torch.no_grad(), _fp32(), _no_autocast(g):
-                L.nS = _batch_factor(L.S, self._rows(g.detach().reshape(-1, g.shape[-1]).float()))
+                L.nS = _batch_factor(L.S, self._rows(L.out_rows(g.detach()).float()))
         return f
 
     # ---------------- backward (+ the probe on the captured micro-batch)
@@ -199,10 +219,13 @@ class KronQLM:
             if not self.stream:                                  # reference path: every layer-output gradient at once
                 gz = torch.autograd.grad(pl, [L.z for L in cap])
                 with torch.no_grad(), _fp32():
-                    for L, g in zip(cap, gz): L.nS = _batch_factor(L.S, self._rows(g.reshape(-1, g.shape[-1]).float()))
+                    for L, g in zip(cap, gz): L.nS = _batch_factor(L.S, self._rows(L.out_rows(g).float()))
                 return
             hks = [L.z.register_hook(self._s_hook(L)) for L in cap]
-            anchors = self._anchors or [min(cap, key=lambda L: L.order).z]   # embeddings, else the first layer's output
+            # the backward runs to the graph's entry points: embedding outputs, and the outputs of layers fed by data or constants
+            # (first layer, a patch embedding, a position-bias MLP); every captured layer lies on a path from the output to one
+            anchors = self._anchors + [L.z for L in cap if L.root]
+            if not anchors: anchors = [min(cap, key=lambda L: L.order).z]
             try:
                 torch.autograd.grad(pl, anchors, allow_unused=True)            # gradients flow through every layer; hooks consume them
             finally:

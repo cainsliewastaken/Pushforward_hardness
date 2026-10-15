@@ -3,8 +3,9 @@
   2. a tiny GPT with cross entropy (Fisher probe, empirical-Fisher option, bf16 autocast) trains, against AdamW for reference;
   3. two-process DDP (gloo), two micro-batches per step with statistics from one: parameters, bases and refresh periods stay
      identical on both ranks;
-  4. the streamed statistics equal the all-at-once ones, and micro-batch capture takes them from exactly the captured micro-batch.
-Run: python test_kronq_lm.py [1|2|3|4 ...]  (all by default)."""
+  4. the streamed statistics equal the all-at-once ones, and micro-batch capture takes them from exactly the captured micro-batch;
+  5. Conv2d: a 1x1-conv network takes the same KronQ steps as the equivalent Linear network; a small 3x3 CNN trains (CE probe).
+Run: python test_kronq_lm.py [1|2|3|4|5 ...]  (all by default)."""
 import os, sys
 os.environ.setdefault('TORCHDYNAMO_DISABLE', '1')
 import contextlib, copy, math, time, tempfile, torch, torch.nn as nn, torch.nn.functional as F
@@ -179,11 +180,60 @@ def test_ddp(steps=12):
     return ok
 
 
+def test_conv(steps=12):
+    """(a) a 1x1-conv network on (B, C, 1, 1) inputs is the same function as a Linear network, and KronQ must take the same
+    steps on both (squared loss, same probe draws); (b) a small 3x3 CNN (zero and circular padding, strided conv, BatchNorm on
+    AdamW) trains with the cross-entropy probe."""
+    torch.manual_seed(0); din, w, dout, B, lr = 12, 40, 6, 16, 3e-3
+    lin = nn.Sequential(nn.Linear(din, w), nn.GELU(), nn.Linear(w, w), nn.GELU(), nn.Linear(w, dout))
+    conv = nn.Sequential(*[nn.Conv2d(m.in_features, m.out_features, 1) if isinstance(m, nn.Linear) else nn.GELU() for m in lin])
+    with torch.no_grad():
+        for a, b in zip(lin, conv):
+            if isinstance(a, nn.Linear): b.weight.copy_(a.weight[:, :, None, None]); b.bias.copy_(a.bias)
+    X = torch.randn(256, din); Y = torch.sin(X @ torch.randn(din, dout))
+    o1 = KronQLM(lin, lr=lr, loss='mse', draw_probe=rademacher(3), exclude=(), block=16, refresh=4, refresh_min=2)
+    o2 = KronQLM(conv, lr=lr, loss='mse', draw_probe=rademacher(3), exclude=(), block=16, refresh=4, refresh_min=2)
+    # the two forwards round differently; through the first `exact` steps everything agrees to rounding (traced 2026-10-14:
+    # factors ~1e-7, gradients ~1e-8, weights <= 1e-5 through step 9); later a near-zero bf16 momentum entry can take the other
+    # sign (step 10 there: one entry, one sign step lr e^u ~ 2e-3), as in test 1. So: strict first steps, loss after.
+    exact, worst, wdx = 8, 0.0, 0.0
+    for s in range(steps):
+        i = (s * B) % 256; xb, yb = X[i:i + B], Y[i:i + B]
+        l1 = F.mse_loss(out1 := lin(xb), yb); o1.backward(l1, out1); o1.step(); o1.zero_grad()
+        out2 = conv(xb[:, :, None, None]); l2 = F.mse_loss(out2[:, :, 0, 0], yb); o2.backward(l2, out2); o2.step(); o2.zero_grad()
+        worst = max(worst, abs(l1.item() - l2.item()) / l1.item())
+        if s < exact:
+            with torch.no_grad():
+                wdx = max([wdx] + [float((a.weight - b.weight[:, :, 0, 0]).abs().max()) for a, b in zip(lin, conv) if isinstance(a, nn.Linear)])
+    ok_a = wdx < 1e-4 and worst < 1e-4
+    print(f'[5a] 1x1 conv vs Linear: max weight diff over the first {exact} steps {wdx:.1e}; max rel loss diff over {steps} steps '
+          f'{worst:.1e} -> {"PASS" if ok_a else "FAIL"}')
+
+    torch.manual_seed(1); nc = 5
+    cnn = nn.Sequential(nn.Conv2d(3, 16, 3, padding=1, bias=False), nn.BatchNorm2d(16), nn.ReLU(),
+                        nn.Conv2d(16, 32, 3, stride=2, padding=1, padding_mode='circular'), nn.ReLU(),
+                        nn.Conv2d(32, 32, 3, padding=1, bias=False), nn.BatchNorm2d(32), nn.ReLU(),
+                        nn.AdaptiveAvgPool2d(1), nn.Flatten(), nn.Linear(32, nc))
+    g = torch.Generator().manual_seed(4); protos = torch.randn(nc, 3, 16, 16, generator=g)
+    opt = KronQLM(cnn, lr=2e-3, lr_adam=2e-3, loss='ce', block=64, refresh=5, conv_images=8, weight_decay=1e-4)
+    kinds = sorted({('conv' if L.conv else 'linear') for L in opt.layers})
+    losses = []
+    for s in range(60):
+        yb = torch.randint(0, nc, (32,), generator=g); xb = protos[yb] + 0.8 * torch.randn(32, 3, 16, 16, generator=g)
+        out = cnn(xb); loss = F.cross_entropy(out, yb); opt.backward(loss, out); opt.step(2e-3 * (1 - s / 60)); opt.zero_grad()
+        losses.append(loss.item())
+    ok_b = len(opt.layers) == 4 and sum(losses[-5:]) / 5 < 0.5 * losses[0]
+    print(f'[5b] 3x3 CNN, cross entropy: KronQ layers {len(opt.layers)} ({kinds}), AdamW tensors '
+          f'{sum(len(gr["params"]) for gr in opt.adam.param_groups)}; loss {losses[0]:.3f} -> {sum(losses[-5:]) / 5:.3f} -> {"PASS" if ok_b else "FAIL"}')
+    return ok_a and ok_b
+
+
 if __name__ == '__main__':
-    which = sys.argv[1:] or ['1', '2', '3', '4']
+    which = sys.argv[1:] or ['1', '2', '3', '4', '5']
     res = []
     if '1' in which: res += [test_equivalence(wd=0.0), test_equivalence(wd=1e-3)]
     if '2' in which: res.append(test_gpt())
     if '3' in which: res.append(test_ddp())
     if '4' in which: res.append(test_streaming_and_microbatch())
+    if '5' in which: res.append(test_conv())
     print('ALL PASS' if all(res) else 'SOME FAILED')
