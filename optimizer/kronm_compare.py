@@ -16,7 +16,11 @@ TURB = ('--problem turb --turb_cache $SCRATCH/l63_held_rough/data/turb64_lead10_
 CIFAR = '--epochs 100'
 METHODS = {'kronq': '--preset current', 'kronm': '--preset current --opt kronm_main --km_rule crit',
            'kronm_const': '--preset current --opt kronm_main --km_rule const'}
-CMETHODS = {'kronq': '--opt kronq', 'kronm': '--opt kronm --km_rule crit', 'kronm_const': '--opt kronm --km_rule const'}
+CMETHODS = {'kronq': '--opt kronq', 'kronm': '--opt kronm --km_rule crit', 'kronm_const': '--opt kronm --km_rule const',
+            'kronm_b90': '--opt kronm --km_rule crit --km_beta_max 0.9', 'kronm_b99': '--opt kronm --km_rule crit --km_beta_max 0.99'}
+# added 2026-10-15 after the grid's CIFAR KronM (beta_max 0.999) runs stalled at chance by epoch 2 at every lr (stopped at epoch 2-3):
+# the per-mode rule with its momentum capped, run in stage seeds (seed 1, two lrs each) and the best one again in stage seeds2 (seeds 2, 3)
+CIFAR_BM = {'kronm_b90': [0.003, 0.01], 'kronm_b99': [0.003, 0.01]}
 GRID = {   # task -> method -> (lrs, decays)
     'field': {'kronq': ([3e-4, 1e-3, 3e-3], [0.0, 1e-3]), 'kronm': ([0.01, 0.03, 0.1, 0.3, 1.0], [0.0, 1e-3]),
               'kronm_const': ([0.003, 0.01, 0.03, 0.1], [1e-3])},
@@ -63,7 +67,15 @@ def jobs(root, stage):
             for method, (lrs, wds) in GRID[task].items():
                 for lr in lrs:
                     for wd in wds: out.append(job(task, method, lr, wd, 1, stage))
+    elif stage == 'seeds2':
+        sc = [(result(root, 'seeds', job('cifar', m, lr, 5e-5, 1, 'seeds')[0]), m, lr) for m, lrs in CIFAR_BM.items() for lr in lrs]
+        sc = [x for x in sc if x[0] is not None and math.isfinite(x[0])]
+        if sc:
+            _, m, lr = min(sc)
+            for seed in (2, 3): out.append(job('cifar', m, lr, 5e-5, seed, stage))
     else:
+        for m, lrs in CIFAR_BM.items():
+            for lr in lrs: out.append(job('cifar', m, lr, 5e-5, 1, stage))
         for task in ('cifar', 'turb_delta', 'turb_direct', 'field'):
             for method, (lrs, wds) in GRID[task].items():
                 sc = [(result(root, 'grid', job(task, method, lr, wd, 1, 'grid')[0]), lr, wd) for lr in lrs for wd in wds]
@@ -95,7 +107,7 @@ def work(root, stage):
 
 
 def summary(root):
-    for stage in ('grid', 'seeds'):
+    for stage in ('grid', 'seeds', 'seeds2'):
         if not os.path.exists(f'{root}/{stage}/jobs.txt'): continue
         print(f'== {stage}  (score: field val MSE; turb mean rollout nMSE h1-100; cifar test error)')
         for line in open(f'{root}/{stage}/jobs.txt'):
