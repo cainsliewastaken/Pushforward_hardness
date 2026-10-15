@@ -36,7 +36,8 @@ p.add_argument('--data', default=os.path.expandvars('$SCRATCH/training_data/cifa
 p.add_argument('--device', default='cuda'); p.add_argument('--amp', type=int, default=1)
 p.add_argument('--subset', type=int, default=0, help='use only this many training images (smoke tests)')
 p.add_argument('--test_subset', type=int, default=0, help='evaluate on only this many test images (smoke tests)')
-p.add_argument('--max_steps', type=int, default=0, help='stop after this many steps (smoke tests)')
+p.add_argument('--max_steps', type=int, default=0, help='stop after this many steps (smoke tests; the schedule is compressed to them)')
+p.add_argument('--stop_after', type=int, default=0, help='stop after this many epochs, keeping the --epochs schedule (equal-epoch comparisons)')
 # KronQ options (defaults = the main optimizer's)
 p.add_argument('--block', type=int, default=256); p.add_argument('--stats_every', type=int, default=1)
 p.add_argument('--stats_rows', type=int, default=0, help='rows (image x position pairs) per layer for the factor statistics; 0 = all'); p.add_argument('--conv_images', type=int, default=32); p.add_argument('--probe', default='fisher', choices=['fisher', 'emp'])
@@ -44,6 +45,8 @@ p.add_argument('--beta_u', type=float, default=0.01, help='KronQ: learning rate 
 p.add_argument('--u_clamp', default='4.6', help="KronQ: bound on |u| (multiplier in [e^-c, e^c]); 'none' = no clamp")
 p.add_argument('--km_rule', default='crit', choices=['crit', 'const'], help='kronm (TEST variant, ../llm/kronm_lm.py): per-mode momentum (crit) or one momentum 0.9 (const)')
 p.add_argument('--km_beta_max', type=float, default=0.999)
+p.add_argument('--stats_tf32', type=int, default=1, help='KronQ: factor products in TF32 when their rows come from bf16 activations / '
+               'gradients (operands exact; tensor-core accumulation, factors ~10x further from float64 than fp32); 0 = full fp32 as in the runs before 2026-10-15')
 p.add_argument('--u_sample_every', type=int, default=50, help='KronQ: steps between samples of the per-layer multiplier statistics')
 a = p.parse_args()
 # default weight decay and its source: sgd 5e-4 (standard CIFAR recipe, L2); kronq 1e-3 per step at peak lr (the method's documented
@@ -123,12 +126,12 @@ elif a.opt == 'muon':
 elif a.opt == 'kronm':
     from kronm_lm import KronMLM
     kq = KronMLM(model, lr=a.lr, lr_adam=a.lr_aux, loss='ce', probe=a.probe, exclude=(), block=a.block, stats_every=a.stats_every,
-                 conv_images=a.conv_images, stats_rows=a.stats_rows, weight_decay=a.wd, seed=a.seed, rule=a.km_rule, beta_max=a.km_beta_max)
+                 conv_images=a.conv_images, stats_rows=a.stats_rows, stats_tf32=bool(a.stats_tf32), weight_decay=a.wd, seed=a.seed, rule=a.km_rule, beta_max=a.km_beta_max)
     a.beta_u = 0.0                                               # no multipliers to track
 else:
     from kronq_lm import KronQLM
     kq = KronQLM(model, lr=a.lr, lr_adam=a.lr_aux, loss='ce', probe=a.probe, exclude=(), block=a.block, stats_every=a.stats_every,
-                 conv_images=a.conv_images, stats_rows=a.stats_rows, weight_decay=a.wd, seed=a.seed, beta_u=a.beta_u, u_clamp=U_CLAMP)
+                 conv_images=a.conv_images, stats_rows=a.stats_rows, stats_tf32=bool(a.stats_tf32), weight_decay=a.wd, seed=a.seed, beta_u=a.beta_u, u_clamp=U_CLAMP)
     # per-layer multiplier statistics, sampled every u_sample_every steps (on the device; read once per epoch). "At the clamp" =
     # |u| >= 4.59 (the default bound 4.6 as stored in bf16); without a clamp the same level counts how often it WOULD have acted.
     U_REF = 4.59
@@ -191,6 +194,8 @@ for ep in range(a.epochs):
     rec = dict(epoch=ep + 1, step=step, lr=a.lr * sched(max(step - 1, 0)), train_loss=train_loss, train_acc=(tc / max(nb * a.batch, 1)).item(),
                test_loss=test_loss, test_acc=test_acc, train_time_s=round(t_train, 1), ms_per_step=round(1e3 * t_train / max(step, 1), 2),
                peak_mem_gb=round(torch.cuda.max_memory_allocated() / 2 ** 30, 2) if dev.type == 'cuda' else 0.0, opt_state_mb=round(state_bytes() / 2 ** 20, 1))
+    if kq:                                                       # KronQ refresh periods now (min / median / max over layers)
+        per = sorted(L.period for L in kq.layers); rec.update(period_min=per[0], period_med=per[len(per) // 2], period_max=per[-1])
     if kq and a.opt == 'kronq':                                  # per-layer: clamp fraction (epoch mean of samples), max |u|, median |u|, |W|
         layers = {}; num = den_ = num_ok = 0.0
         with torch.no_grad():
@@ -206,11 +211,11 @@ for ep in range(a.epochs):
                    layers=layers)
     logf.write(json.dumps(rec) + '\n'); logf.flush()
     print(' '.join(f'{k} {v:.4g}' if isinstance(v, float) else f'{k} {v}' for k, v in rec.items() if k != 'layers'), flush=True)
-    if diverged or step >= total: break
+    if diverged or step >= total or (a.stop_after and ep + 1 >= a.stop_after): break
 
 summ = dict(name=a.name, opt=a.opt, lr=a.lr, wd=a.wd, seed=a.seed, epochs_done=ep + 1, steps=step, final_test_acc=test_acc, best_test_acc=best,
             final_test_loss=test_loss, ms_per_step=rec['ms_per_step'], peak_mem_gb=rec['peak_mem_gb'], opt_state_mb=rec['opt_state_mb'],
-            params_m=round(nparam / 1e6, 3), diverged=diverged, finished=time.strftime('%Y-%m-%d %H:%M:%S'))
+            params_m=round(nparam / 1e6, 3), diverged=diverged, stop_after=a.stop_after, finished=time.strftime('%Y-%m-%d %H:%M:%S'))
 if kq and a.opt == 'kronm': summ.update(km_rule=a.km_rule, km_beta_max=a.km_beta_max, stats_rows=a.stats_rows)
 elif kq: summ.update(beta_u=a.beta_u, u_clamp=a.u_clamp, stats_rows=a.stats_rows)
 json.dump(summ, open(os.path.join(a.out, 'summary.json'), 'w'), indent=1)

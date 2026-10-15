@@ -60,6 +60,7 @@ p.add_argument('--stats_every', type=int, default=0, help='accumulate the factor
 p.add_argument('--ekfac', type=int, default=0, help='1: per-mode curvature = EMA of the exact GN diagonal in the Kronecker basis (same-sample pairing), used in the cap and live mask')
 p.add_argument('--rot_once', type=int, default=0, help='1: keep the momentum in the rotated basis (exact block transport at refresh): one rotation in, one out per step')
 p.add_argument('--tf32', type=int, default=0, help='1: allow TF32 matmuls (tensor cores) for every method')
+p.add_argument('--stats_tf32', type=int, default=0, help='kronq_main (TEST): the factor statistics in TF32 (rest of the basis work stays fp32)')
 p.add_argument('--eig_iters', type=int, default=0, help='>0: warm-started subspace iteration (k QR steps per block) instead of eigh after the first refresh')
 p.add_argument('--adapt_refresh', type=float, default=0.0, help='>0: error-controlled refresh interval: e = |sum|Gr_new| - sum|Gr_old|| / sum|Gr_new| at a refresh, R <- R clip(kappa/e, 1/2, 2) in [2, 200]')
 p.add_argument('--rule', default='sign', choices=['sign', 'adam'], help='kronqf: sign push (KronQ) or the Adam rule in the Kronecker basis (ks_adam)')
@@ -210,7 +211,7 @@ if a.opt in ('kronq_main', 'kronm_main', 'kronqx'):   # THE MAIN OPTIMIZER (kron
     make_KQ = lambda lins_, a_: KronQ(lins_, torch.nn.functional.gelu, NOUT, lambda shape: torch.randint(0, 2, shape, device=DEV, generator=gtrain).float() * 2 - 1,
                                       a_.lr, DEV, block=a_.block, b1=a_.b1, beta_u=a_.beta_u, u_clamp=a_.u_clamp, reltol=a_.reltol, beta_stats=a_.beta_stats,
                                       eig_iters=a_.eig_iters, refresh=a_.refresh, adapt_refresh=a_.adapt_refresh, refresh_min=a_.refresh_min,
-                                      stats_every=a_.stats_every, weight_decay=a_.wd_abs, mom_bf16=bool(a_.mom_bf16))
+                                      stats_every=a_.stats_every, weight_decay=a_.wd_abs, mom_bf16=bool(a_.mom_bf16), stats_tf32=bool(a_.stats_tf32))
     KQ = make_KQ(lins, a)
     if a.opt == 'kronqx' and a.kx_log: KQ.log_refresh = True
     if a.opt == 'kronqx' and a.kx_kdrift:

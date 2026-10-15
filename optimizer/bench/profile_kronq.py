@@ -3,6 +3,8 @@ random inputs of the benchmark's shapes (timing does not depend on the values). 
   1. clean ms/step (no added syncs): SGD; KronQ as in the benchmark; KronQ stats_every=4; KronQ empirical-Fisher probe
   2. KronQ phase breakdown: each phase wrapped with cuda.synchronize (so phases add up; the total is a little above the clean time)
   3. torch.profiler over 10 KronQ steps: top ops by self CPU and by self CUDA time, kernel launches per step, GPU busy fraction
+  4. TF32 statistics (stats_tf32, default on): the batch factors of one captured step against float64, with TF32 on and off
+     (on: products exact for bf16 rows, so both errors should be fp32 accumulation error)
 """
 import os, sys, time, collections, functools
 import torch, torch.nn as nn, torch.nn.functional as F, torchvision
@@ -49,7 +51,8 @@ def clean_ms(kind, **kw):
 print(f'GPU {torch.cuda.get_device_name(0)}, torch {torch.__version__}, batch {B}, {N} timed steps after {WARM} warm-up', flush=True)
 res = {}
 for name, kind, kw in [('SGD', 'sgd', {}), ('KronQ (benchmark settings)', 'kronq', {}), ('KronQ stats_every=4', 'kronq', dict(stats_every=4)),
-                       ('KronQ empirical-Fisher probe', 'kronq', dict(probe='emp')), ('KronQ stats_rows=8192', 'kronq', dict(stats_rows=8192)), ('KronQ stats_rows=8192, stats_every=4', 'kronq', dict(stats_rows=8192, stats_every=4))]:
+                       ('KronQ empirical-Fisher probe', 'kronq', dict(probe='emp')), ('KronQ stats_rows=8192', 'kronq', dict(stats_rows=8192)), ('KronQ stats_rows=8192, stats_every=4', 'kronq', dict(stats_rows=8192, stats_every=4)),
+                       ('KronQ fp32 statistics (stats_tf32=0)', 'kronq', dict(stats_tf32=False)), ('KronQ stats_rows=8192, stats_tf32=0', 'kronq', dict(stats_rows=8192, stats_tf32=False))]:
     ms, opt, _ = clean_ms(kind, **kw); res[name] = ms
     print(f'[1] {name:32s} {ms:7.1f} ms/step', flush=True)
 nl = len(opt.layers)
@@ -118,3 +121,25 @@ print('    top 20 by self CPU time:', flush=True)
 print(ka.table(sort_by='self_cpu_time_total', row_limit=20, max_name_column_width=60), flush=True)
 print('    top 15 by self CUDA time:', flush=True)
 print(ka.table(sort_by='self_device_time_total', row_limit=15, max_name_column_width=60), flush=True)
+
+# ---------------- 4. TF32 statistics: factors of one captured step against float64
+bf = kronq_lm._batch_factor
+
+
+def factor_errors(on):
+    errs = []
+    def spy(B, Z):
+        F_ = bf(B, Z); R = bf(B, Z.double())
+        errs.append(max(float((a.double() - r).abs().max() / r.abs().max()) for a, r in zip(F_, R) if r is not None)); return F_
+    model = make_model(); opt = KronQLM(model, lr=1e-3, lr_adam=1e-3, loss='ce', exclude=(), weight_decay=5e-5, stats_tf32=on)
+    kronq_lm._batch_factor = spy
+    try:
+        out, loss = fwd(model); opt.backward(loss, out); torch.cuda.synchronize()
+    finally:
+        kronq_lm._batch_factor = bf
+    return errs
+
+
+e_on, e_off = factor_errors(True), factor_errors(False)
+print(f'[4] batch factors vs float64, {len(e_on)} factors of one step: TF32 statistics max rel err {max(e_on):.1e} (median '
+      f'{sorted(e_on)[len(e_on) // 2]:.1e}); fp32 statistics {max(e_off):.1e} (median {sorted(e_off)[len(e_off) // 2]:.1e})', flush=True)

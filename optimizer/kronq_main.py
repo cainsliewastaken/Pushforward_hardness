@@ -21,6 +21,18 @@ import contextlib, math, torch
 
 
 @contextlib.contextmanager
+def _tf32():
+    """matrix products inside may use TF32 (stats_tf32 TEST option: the factor statistics only; fp32 activations are rounded to
+    TF32's 10 mantissa bits, unlike KronQLM's bf16 case where the operands are exact). Measured 2026-10-15 at the best settings,
+    3 seeds per arm, fp32 vs TF32 statistics: turbulence increment val 0.1132 / 0.1135, rollout 0.826 / 0.814; direct val 0.0450 /
+    0.0445, rollout 0.830 / 0.812; field val 0.0455 / 0.0461 - all within seed spread; no speed-up (the statistics are a few % of
+    the step at batch 256, width 4096: statistics / rotations ~ batch / (2 width)). Off by default: it buys nothing here."""
+    prev = torch.backends.cuda.matmul.allow_tf32; torch.backends.cuda.matmul.allow_tf32 = True
+    try: yield
+    finally: torch.backends.cuda.matmul.allow_tf32 = prev
+
+
+@contextlib.contextmanager
 def _fp32():
     """matrix products inside run in full fp32 (no TF32)."""
     prev = torch.backends.cuda.matmul.allow_tf32; torch.backends.cuda.matmul.allow_tf32 = False
@@ -128,8 +140,9 @@ class KronQ:
     `draw_probe(shape)` returns random +-1 output signs for the curvature probe; `lr_max` is the schedule's peak (for the decay)."""
 
     def __init__(self, lins, act, nout, draw_probe, lr_max, dev, block=256, b1=0.9, beta_u=0.01, u_clamp=4.6, reltol=1e-12, beta_stats=0.95,
-                 eig_iters=2, refresh=20, adapt_refresh=0.1, refresh_min=5, stats_every=1, weight_decay=0.0, mom_bf16=True):
+                 eig_iters=2, refresh=20, adapt_refresh=0.1, refresh_min=5, stats_every=1, weight_decay=0.0, mom_bf16=True, stats_tf32=False):
         self.L, self.act, self.nout, self.draw_probe, self.lr_max, self.dev = len(lins), act, nout, draw_probe, lr_max, dev
+        self.stats_tf32 = stats_tf32
         self.h = dict(b1=b1, beta_u=beta_u, u_clamp=u_clamp, reltol=reltol, beta_stats=beta_stats, eig_iters=eig_iters,
                       adapt_refresh=adapt_refresh, refresh_min=refresh_min, stats_every=stats_every, weight_decay=weight_decay)
         self.Wt = [torch.nn.Parameter(torch.cat([lin.weight.detach(), lin.bias.detach()[:, None]], 1).clone()) for lin in lins]  # [W | b]
@@ -189,7 +202,7 @@ class KronQ:
         if (t - 1) % max(1, h['stats_every']) == 0:                       # statistics: activations and the MC curvature probe
             with torch.enable_grad():
                 gz = torch.autograd.grad((out * self.draw_probe(out.shape)).sum(), self.cache['z'])
-            with torch.no_grad(), _fp32():
+            with torch.no_grad(), (_tf32() if self.stats_tf32 else _fp32()):   # stats_tf32: TEST option, off by default (see _tf32)
                 for l in range(L):
                     self.A[l].update(self.cache['a'][l], h['beta_stats']); self.S[l].update(gz[l].detach(), h['beta_stats'])
         with torch.no_grad():

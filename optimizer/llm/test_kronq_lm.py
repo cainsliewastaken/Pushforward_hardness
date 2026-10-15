@@ -4,13 +4,18 @@
   3. two-process DDP (gloo), two micro-batches per step with statistics from one: parameters, bases and refresh periods stay
      identical on both ranks;
   4. the streamed statistics equal the all-at-once ones, and micro-batch capture takes them from exactly the captured micro-batch;
-  5. Conv2d: a 1x1-conv network takes the same KronQ steps as the equivalent Linear network; a small 3x3 CNN trains (CE probe).
-Run: python test_kronq_lm.py [1|2|3|4|5 ...]  (all by default)."""
+  5. Conv2d: a 1x1-conv network takes the same KronQ steps as the equivalent Linear network; a small 3x3 CNN trains (CE probe);
+  6. TF32 statistics (stats_tf32): bf16 / fp16 rows pass TF32 operand rounding unchanged, so no operand is rounded (fp32 rows
+     would be); under bf16 autocast the hooks turn TF32 on exactly for bf16 / fp16 sources. CPU has no TF32: this checks the
+     operands and the dispatch only. The GPU accumulation is less accurate than fp32 (bench/profile_kronq.py part 4).
+Run: python test_kronq_lm.py [1|2|3|4|5|6 ...]  (all by default)."""
 import os, sys
 os.environ.setdefault('TORCHDYNAMO_DISABLE', '1')
 import contextlib, copy, math, time, tempfile, torch, torch.nn as nn, torch.nn.functional as F
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from kronq_lm import KronQLM
+import kronq_lm
+from kronq_lm import KronQLM, _batch_factor
+from kronq_main import _Basis
 from gpt import GPT, GPTConfig
 from kronq_main import KronQ
 
@@ -229,12 +234,82 @@ def test_conv(steps=12):
     return ok_a and ok_b
 
 
+def _tf32_round(x, mode):
+    """fp32 -> TF32 operand rounding as the tensor cores do it (10 mantissa bits kept): 'rn' round to nearest, 'rz' truncate."""
+    i = x.contiguous().view(torch.int32)
+    if mode == 'rn': i = i + 0x1000
+    return (i & ~0x1FFF).view(torch.float32)
+
+
+def test_stats_tf32():
+    """(a) rows from bf16 / fp16 tensors (wide dynamic range, fp16 subnormals included) are unchanged by TF32 operand rounding, so
+    the factor from rounded rows is bit-identical to the fp32 factor (on the GPU only the accumulation order then differs), and its
+    error against float64 is fp32 accumulation error; rows from fp32 tensors change under the rounding (why they stay fp32).
+    (b) dispatch: a small CNN under bf16 autocast; every factor product records the source dtype and the TF32 flag; the flag must
+    be on exactly for bf16 / fp16 sources with stats_tf32=True, never with stats_tf32=False, and restored afterwards."""
+    g = torch.Generator().manual_seed(0); ok = True
+    B = _Basis(300, 64, torch.device('cpu'))                       # 4 full blocks + a remainder of 44
+    rel = lambda a, b: float((a - b).abs().max() / b.abs().max())
+    for name, dt in (('bf16', torch.bfloat16), ('fp16', torch.float16), ('fp32', torch.float32)):
+        Z = (torch.randn(4096, 300, generator=g) * torch.exp(2 * torch.randn(1, 300, generator=g))).to(dt)
+        if dt == torch.float16: Z[:8] = (Z[:8].float() * 1e-6).half()           # fp16 subnormals
+        Z = Z.float()
+        F32 = _batch_factor(B, Z); F64 = _batch_factor(B, Z.double())
+        line = []
+        for mode in ('rn', 'rz'):
+            Zr = _tf32_round(Z, mode); same = torch.equal(Zr, Z); Fr = _batch_factor(B, Zr)
+            bit = torch.equal(Fr[0], F32[0]) and torch.equal(Fr[1], F32[1])
+            d = max(rel(Fr[0], F32[0]), rel(Fr[1], F32[1]))
+            line.append(f'{mode}: rows unchanged {same}, factor diff {d:.1e}')
+            ok &= (same and bit) if dt != torch.float32 else (not same and d > 1e-6)
+        e32 = max(rel(F32[0], F64[0].float()), rel(F32[1], F64[1].float()))
+        if dt != torch.float32: ok &= e32 < 1e-5
+        print(f'[6a] {name} rows: ' + '; '.join(line) + f'; fp32 factor vs float64 {e32:.1e}')
+    print(f'[6a] -> {"PASS" if ok else "FAIL"}')
+
+    rec = []; orig = kronq_lm._stats_prec
+    @contextlib.contextmanager
+    def spy(dtype, on):
+        with orig(dtype, on):
+            rec.append((dtype, on, torch.backends.cuda.matmul.allow_tf32)); yield
+    kronq_lm._stats_prec = spy
+    try:
+        res = {}
+        for on in (True, False):
+            torch.manual_seed(1); rec.clear(); gd = torch.Generator().manual_seed(2)     # same model and data for on / off
+            cnn = nn.Sequential(nn.Conv2d(3, 16, 3, padding=1, bias=False), nn.BatchNorm2d(16), nn.ReLU(),
+                                nn.Conv2d(16, 32, 3, stride=2, padding=1), nn.ReLU(), nn.AdaptiveAvgPool2d(1), nn.Flatten(), nn.Linear(32, 5))
+            opt = KronQLM(cnn, lr=2e-3, loss='ce', block=64, refresh=2, conv_images=8, stats_tf32=on)
+            for s in range(3):
+                xb = torch.randn(16, 3, 16, 16, generator=gd); yb = torch.randint(0, 5, (16,), generator=gd)
+                with torch.autocast('cpu', dtype=torch.bfloat16):
+                    out = cnn(xb)
+                opt.backward(F.cross_entropy(out.float(), yb), out); opt.step(); opt.zero_grad()
+            res[on] = ([L.A.F.clone() for L in opt.layers], list(rec))
+        fl_on, fl_off = res[True][1], res[False][1]
+        right = all(f == (d in (torch.bfloat16, torch.float16)) for d, _, f in fl_on) and not any(f for _, _, f in fl_off)
+        dts = sorted({str(d).split('.')[-1] for d, _, _ in fl_on})
+        n_tf = sum(f for _, _, f in fl_on)
+        same = all(torch.equal(a, b) for a, b in zip(res[True][0], res[False][0]))   # CPU ignores the flag: the code path is unchanged
+        restored = torch.backends.cuda.matmul.allow_tf32 == orig_flag
+        ok_b = right and 'bfloat16' in dts and 'float32' in dts and same and restored
+        print(f'[6b] bf16-autocast CNN: {len(fl_on)} factor products, source dtypes {dts}, TF32 on for {n_tf} (bf16 sources only: {right}); '
+              f'stats_tf32=False: TF32 never on; CPU factors identical on/off {same}; flag restored {restored} -> {"PASS" if ok_b else "FAIL"}')
+    finally:
+        kronq_lm._stats_prec = orig
+    return ok and ok_b
+
+
+orig_flag = torch.backends.cuda.matmul.allow_tf32
+
+
 if __name__ == '__main__':
-    which = sys.argv[1:] or ['1', '2', '3', '4', '5']
+    which = sys.argv[1:] or ['1', '2', '3', '4', '5', '6']
     res = []
     if '1' in which: res += [test_equivalence(wd=0.0), test_equivalence(wd=1e-3)]
     if '2' in which: res.append(test_gpt())
     if '3' in which: res.append(test_ddp())
     if '4' in which: res.append(test_streaming_and_microbatch())
     if '5' in which: res.append(test_conv())
+    if '6' in which: res.append(test_stats_tf32())
     print('ALL PASS' if all(res) else 'SOME FAILED')

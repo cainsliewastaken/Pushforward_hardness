@@ -18,7 +18,13 @@ language model needs:
     the probe's gradients pass each layer (no layer-output gradient is kept), and the step runs one layer at a time (no full
     fp32 copy of all gradients). Optional `stats_rows` row subsampling;
   - bf16 autocast: activations and probe gradients are cast to fp32 for the statistics; parameters must stay fp32 (master
-    weights); the basis work runs in full fp32 as in kronq_main;
+    weights); the basis work runs in full fp32 as in kronq_main. The factor products alone use TF32 when their rows come from
+    bf16 / fp16 tensors (stats_tf32, default on): those values are exact in TF32, so no operand is rounded, but the tensor-core
+    accumulation is less accurate than fp32 (A100, CIFAR ResNet-18, 2026-10-15: batch factors vs float64 max rel err 2.1e-4,
+    median 7.6e-6, against 1.9e-5 / 9.8e-7 in fp32; 75.6 -> 46.5 ms/step). Validated on CIFAR-100 ResNet-18 only (lr 3e-3, wd 5e-5,
+    stats_rows 8192, 2026-10-15): 63.5 -> 52 ms/step in training; 15 epochs x 3 seeds per arm, no difference beyond seed noise;
+    100 epochs, final test accuracy TF32 seeds 1-3 75.07 / 75.47 / 74.89 % against fp32 seed 1 75.28 % (old fp32 run 75.65 %),
+    i.e. within seed noise, a difference below ~0.3 points not resolved. Rows from fp32 tensors stay in full fp32;
   - data parallel (torch DDP): the gradients are averaged by DDP; the factor statistics are all-reduced here so every rank holds
     the same factors; each layer's basis refresh is computed by one rank (layer index mod world size) and broadcast, so the bases
     are identical on every rank and the refresh work is spread across ranks (as in distributed Shampoo).
@@ -46,6 +52,23 @@ from kronq_main import _Basis, _update_c, _fp32, _cholqr   # the main optimizer'
 def _no_autocast(x):
     """statistics run in fp32 even when the forward runs under autocast (the hooks fire inside the autocast region)."""
     return torch.autocast(device_type=x.device.type, enabled=False)
+
+
+_LOW = (torch.bfloat16, torch.float16)
+
+
+@contextlib.contextmanager
+def _stats_prec(dtype, on):
+    """precision of the factor products of rows taken from a tensor of `dtype`: TF32 when that tensor is bf16 / fp16 (and `on`),
+    full fp32 otherwise. TF32 keeps 10 mantissa bits and fp32's exponent range, so bf16 (7 bits) and fp16 (10 bits) values pass
+    through its operand rounding unchanged and each product (at most 22 significant bits) is exact. The accumulation is NOT fp32's:
+    measured on A100 (profile_kronq.py part 4, job 59821939) the batch factors are ~10x further from float64 than with fp32
+    products (max rel 2.1e-4 vs 1.9e-5, median 7.6e-6 vs 9.8e-7); tensor-core accumulation is known to truncate rather than round.
+    Rows of fp32 tensors would also be rounded, so they stay in fp32.
+    Rotations, refresh and the basis do not go through here and stay in full fp32 (kronq_main._fp32)."""
+    prev = torch.backends.cuda.matmul.allow_tf32; torch.backends.cuda.matmul.allow_tf32 = bool(on and dtype in _LOW)
+    try: yield
+    finally: torch.backends.cuda.matmul.allow_tf32 = prev
 
 
 def _batch_factor(B, Z):
@@ -137,7 +160,7 @@ class KronQLM:
                  lr_adam=None, adam_betas=(0.9, 0.95), adam_eps=1e-8, adam_wd=0.0,
                  exclude=('lm_head',), max_dim=16384, block=256, b1=0.9, beta_u=0.01, u_clamp=4.6, reltol=1e-12, beta_stats=0.95,
                  eig_iters=2, refresh=20, adapt_refresh=0.1, refresh_min=5, stats_every=1, weight_decay=0.0, mom_bf16=True,
-                 stats_rows=0, probe_tokens=0, conv_images=32, lam_scale=1.0, stream=True, seed=0):
+                 stats_rows=0, probe_tokens=0, conv_images=32, lam_scale=1.0, stream=True, seed=0, stats_tf32=True):
         assert loss in ('ce', 'mse') and probe in ('fisher', 'emp')
         net = model.module if hasattr(model, 'module') else model            # DDP-wrapped or plain
         self.model, self.lr, self.lr_max = net, lr, (lr if lr_max is None else lr_max)
@@ -145,6 +168,7 @@ class KronQLM:
         self.h = dict(b1=b1, beta_u=beta_u, u_clamp=u_clamp, reltol=reltol, beta_stats=beta_stats, eig_iters=eig_iters,
                       adapt_refresh=adapt_refresh, refresh_min=refresh_min, stats_every=stats_every, weight_decay=weight_decay)
         self.stats_rows, self.probe_tokens, self.conv_images, self.lam_scale = stats_rows, probe_tokens, conv_images, lam_scale
+        self.stats_tf32 = stats_tf32
         self.ddp = dist.is_available() and dist.is_initialized()
         self.rank, self.world = (dist.get_rank(), dist.get_world_size()) if self.ddp else (0, 1)
 
@@ -208,7 +232,7 @@ class KronQLM:
                     nimg = min(nimg or out.shape[0], max(1, -(-self.stats_rows // (out.shape[-1] * out.shape[-2]))))
                 a = L.in_rows(inp[0].detach(), nimg).float()
                 if L.has_bias: a = torch.cat([a, torch.ones(a.shape[0], 1, device=a.device)], 1)
-                L.nA = _batch_factor(L.A, self._rows(a))
+                with _stats_prec(inp[0].dtype, self.stats_tf32): L.nA = _batch_factor(L.A, self._rows(a))
             L.z, L.order, L.root = out, self._ncap, not inp[0].requires_grad; self._ncap += 1
             if self.probe == 'emp': self._hooks.append(out.register_hook(self._s_hook(L)))
         return h
@@ -218,7 +242,7 @@ class KronQLM:
 
     def _s_hook(self, L):
         def f(g):
-            with torch.no_grad(), _fp32(), _no_autocast(g):
+            with torch.no_grad(), _fp32(), _no_autocast(g), _stats_prec(g.dtype, self.stats_tf32):
                 L.nS = _batch_factor(L.S, self._rows(L.out_rows(g.detach()).float()))
         return f
 
@@ -257,7 +281,8 @@ class KronQLM:
             if not self.stream:                                  # reference path: every layer-output gradient at once
                 gz = torch.autograd.grad(pl, [L.z for L in cap])
                 with torch.no_grad(), _fp32():
-                    for L, g in zip(cap, gz): L.nS = _batch_factor(L.S, self._rows(L.out_rows(g).float()))
+                    for L, g in zip(cap, gz):
+                        with _stats_prec(g.dtype, self.stats_tf32): L.nS = _batch_factor(L.S, self._rows(L.out_rows(g).float()))
                 return
             hks = [L.z.register_hook(self._s_hook(L)) for L in cap]
             # the backward runs to the graph's entry points: embedding outputs, and the outputs of layers fed by data or constants
