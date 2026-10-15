@@ -14,11 +14,17 @@ mode
             G = [dW | db]; no activation statistics, no probe
   aonly     input side only: A from the activations, no output-side basis (rows stay in ordinary coordinates, unit output
             factor in the live mask); no probe
+  severy    A every statistics step, the probe (and S) only every s_every steps
+  kfra      no probe: S from the top down (KFRA, Botev, Ritter & Barber 2017): S_top = I (the probe's expectation for squared
+            loss), S_l = (W_{l+1}^T S_{l+1} W_{l+1}) o E[b b^T], b = gelu'(z_l), with E[b b^T] ~ bbar bbar^T + diag(var b) from
+            EMAs of the per-neuron mean and mean square of b (forward only); full matrices, recomputed every kfra_every steps,
+            their diagonal blocks set as the S factors (KronQ's refresh then works on them as usual)
+probe_rows (fused only): the probe runs on the first probe_rows rows of the batch (0 = all)
 """
 import math, torch
 from kronq_main import KronQ, _update_c, _fp32
 
-MODES = ('probe', 'fused', 'emp', 'gradfac', 'aonly')
+MODES = ('probe', 'fused', 'emp', 'gradfac', 'aonly', 'severy', 'kfra')
 
 
 def _gelu_d(z):
@@ -27,11 +33,12 @@ def _gelu_d(z):
 
 
 class KronQX(KronQ):
-    def __init__(self, *args, mode='probe', **kw):
+    def __init__(self, *args, mode='probe', s_every=4, probe_rows=0, kfra_every=10, **kw):
         assert mode in MODES, mode
         super().__init__(*args, **kw)
-        self.mode = mode; self._gz = None
-        if mode == 'fused': assert self.act is torch.nn.functional.gelu, 'fused backward is written for gelu'
+        self.mode = mode; self._gz = None; self.s_every, self.probe_rows, self.kfra_every = s_every, probe_rows, kfra_every
+        if mode in ('fused', 'kfra'): assert self.act is torch.nn.functional.gelu, 'written for gelu'
+        self.bm = [None] * self.L; self.bq = [None] * self.L          # kfra: EMA of the per-neuron mean and mean square of gelu'(z)
 
     def forward(self, x, keep=False):
         if self.mode == 'fused' and keep:
@@ -49,9 +56,9 @@ class KronQX(KronQ):
     def fused_backward(self, out, y):
         """mean-squared-error gradients of every [W | b] and, on statistics steps, the probe's output-side gradients, in one backward
         over stacked rows [loss; probe]. Sets Wt[l].grad and self._gz."""
-        B = out.shape[0]; st = self.stats_now()
+        B = out.shape[0]; st = self.stats_now(); k = self.probe_rows if 0 < self.probe_rows < B else B
         d = 2.0 * (out - y) / out.numel()
-        if st: d = torch.cat([d, self.draw_probe(out.shape)], 0)
+        if st: d = torch.cat([d, self.draw_probe((k, out.shape[1]))], 0)
         a, z = self.cache['a'], self.cache['z']; gz = [None] * self.L
         for l in range(self.L - 1, -1, -1):
             W = self.Wt[l]
@@ -60,8 +67,22 @@ class KronQX(KronQ):
             else: W.grad.copy_(g)
             if st: gz[l] = d[B:]
             if l > 0:
-                gd = _gelu_d(z[l - 1]); d = (d @ W[:, :-1]) * (torch.cat([gd, gd], 0) if st else gd)
+                gd = _gelu_d(z[l - 1]); d = (d @ W[:, :-1]) * (torch.cat([gd, gd[:k]], 0) if st else gd)
         self._gz = gz if st else None
+
+    @torch.no_grad()
+    def _kfra(self):
+        """S factors of every layer from the top down (module docstring)."""
+        with _fp32():
+            n = self.Wt[-1].shape[0]; S = torch.eye(n, device=self.dev)
+            for l in range(self.L - 1, -1, -1):
+                B_ = self.S[l]; nb = B_.nf * B_.b
+                B_.F = torch.stack([S[i * B_.b:(i + 1) * B_.b, i * B_.b:(i + 1) * B_.b] for i in range(B_.nf)]).clone()
+                B_.Fr = S[nb:, nb:].clone() if B_.rem else None
+                if l == 0: break
+                W = self.Wt[l][:, :-1].float(); M = W.T @ S @ W
+                bm, bq = self.bm[l - 1], self.bq[l - 1]
+                S = M * (bm[:, None] * bm[None, :]); S.diagonal().add_(M.diagonal() * (bq - bm * bm).clamp(min=0))
 
     def _lam(self, l):
         Se = self.S[l].e if self.mode != 'aonly' else torch.ones(self.Wt[l].shape[0], device=self.dev)
@@ -83,6 +104,16 @@ class KronQX(KronQ):
                     gz = torch.autograd.grad((out * self.draw_probe(out.shape)).sum(), self.cache['z'])
             elif self.mode == 'fused': gz = self._gz
             elif self.mode == 'emp': gz = [z.grad * z.shape[0] for z in self.cache['z']]
+            elif self.mode == 'severy' and (t - 1) % max(1, self.s_every) == 0:
+                with torch.enable_grad():
+                    gz = torch.autograd.grad((out * self.draw_probe(out.shape)).sum(), self.cache['z'])
+            elif self.mode == 'kfra':
+                with torch.no_grad():
+                    for l in range(L - 1):
+                        b = _gelu_d(self.cache['z'][l].detach().float()); m_, q_ = b.mean(0), (b * b).mean(0)
+                        if self.bm[l] is None: self.bm[l], self.bq[l] = m_, q_
+                        else: self.bm[l].mul_(h['beta_stats']).add_(m_, alpha=1 - h['beta_stats']); self.bq[l].mul_(h['beta_stats']).add_(q_, alpha=1 - h['beta_stats'])
+                if (t - 1) % max(1, self.kfra_every) == 0: self._kfra()
             with torch.no_grad(), _fp32():
                 for l in range(L):
                     if self.mode == 'gradfac':

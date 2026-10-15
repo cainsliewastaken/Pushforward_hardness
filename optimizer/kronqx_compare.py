@@ -12,6 +12,13 @@ import kronm_compare as K
 VARIANTS = {'kx_fused': '--preset current --opt kronqx --kx_mode fused', 'kx_se4': '--preset current --stats_every 4',
             'kx_se16': '--preset current --stats_every 16', 'kx_gradfac': '--preset current --opt kronqx --kx_mode gradfac',
             'kx_aonly': '--preset current --opt kronqx --kx_mode aonly'}
+# set b (2026-10-15): cheaper OUTPUT-side statistics, rough targets first (field p=2, turbulence increment; direct as control)
+VARIANTS_B = {'kx_kfra': '--preset current --opt kronqx --kx_mode kfra', 'kx_severy4': '--preset current --opt kronqx --kx_mode severy --kx_s_every 4',
+              'kx_severy16': '--preset current --opt kronqx --kx_mode severy --kx_s_every 16',
+              'kx_sub64': '--preset current --opt kronqx --kx_mode fused --kx_probe_rows 64',
+              'kx_fused': VARIANTS['kx_fused'], 'kx_ref': '--preset current'}
+SET = os.environ.get('KX_SET', 'a')
+if SET == 'b': VARIANTS = VARIANTS_B
 K.METHODS.update(VARIANTS)
 K.CMETHODS['kx_se4'] = '--opt kronq --stats_every 4'
 BEST = {'field': (1e-3, 1e-3), 'turb_delta': (1e-4, 3e-3), 'turb_direct': (1e-4, 3e-3), 'cifar': (3e-3, 1e-3)}
@@ -19,10 +26,10 @@ REF_STAGE = {1: ('grid', 'seeds'), 2: ('seeds', 'seeds2'), 3: ('seeds', 'seeds2'
 
 
 def jobs(root):
-    out = [K.job('cifar', 'kx_se4', *BEST['cifar'], s, 'run') for s in (1, 2)]
-    for task in ('turb_delta', 'turb_direct', 'field'):
+    out = [K.job('cifar', 'kx_se4', *BEST['cifar'], s, 'run') for s in (1, 2)] if SET == 'a' else []
+    for task in (('turb_delta', 'turb_direct', 'field') if SET == 'a' else ('turb_delta', 'field', 'turb_direct')):
         for m in VARIANTS:
-            for s in ((1,) if m == 'kx_fused' else (1, 2, 3)): out.append(K.job(task, m, *BEST[task], s, 'run'))
+            for s in ((1,) if m in ('kx_fused', 'kx_ref') else (1, 2, 3)): out.append(K.job(task, m, *BEST[task], s, 'run'))
     os.makedirs(f'{root}/run/res', exist_ok=True)
     with open(f'{root}/run/jobs.txt', 'w') as fh:
         for tag, cmd in out: fh.write(f'{tag}\t{cmd}\n')
@@ -50,6 +57,7 @@ def summary(root, ref):
     for task in ('field', 'turb_delta', 'turb_direct', 'cifar'):
         print(f'== {task} at lr {BEST[task][0]:g}, decay {BEST[task][1]:g}   (columns: score | val / test acc | ms per step | rollout h10)')
         rows = [('KronQ (probe every step)', [stats(ref, REF_STAGE[s][task == 'cifar'], K.job(task, 'kronq', *BEST[task], s, '')[0]) for s in (1, 2, 3)])]
+        if task == 'cifar' and SET == 'b': continue
         for m in (['kx_se4'] if task == 'cifar' else VARIANTS):
             rows.append((m, [stats(root, 'run', K.job(task, m, *BEST[task], s, 'run')[0]) for s in (1, 2, 3)]))
         for name, rs in rows:

@@ -27,7 +27,7 @@ import numpy as np, torch
 
 p = argparse.ArgumentParser()
 p.add_argument('--opt', required=True, choices=['adamw', 'muon', 'soap', 'kronq', 'kronqf', 'kronq_main', 'kronm_main', 'kronqx', 'krylov'])
-p.add_argument('--kx_mode', default='probe', choices=['probe', 'fused', 'emp', 'gradfac', 'aonly'], help='kronqx (TEST variants, kronqx.py): how the Kronecker factors are obtained')
+p.add_argument('--kx_mode', default='probe', choices=['probe', 'fused', 'emp', 'gradfac', 'aonly', 'severy', 'kfra'], help='kronqx (TEST variants, kronqx.py): how the Kronecker factors are obtained'); p.add_argument('--kx_s_every', type=int, default=4, help='kronqx severy: probe / S factor every k steps (A every step)'); p.add_argument('--kx_probe_rows', type=int, default=0, help='kronqx fused: probe on this many rows of the batch (0 = all)'); p.add_argument('--kx_kfra_every', type=int, default=10, help='kronqx kfra: recompute the top-down S factors every k steps')
 p.add_argument('--km_rule', default='crit', choices=['crit', 'const'], help='kronm_main (TEST variant, kronm_main.py): per-mode momentum beta_k = (1 - sqrt(lr lam_k / lam_max))^2 (crit) or one beta = --b1 for every mode (const)'); p.add_argument('--km_beta_max', type=float, default=0.999, help='kronm_main crit: upper bound on beta_k')
 p.add_argument('--rollout', type=int, default=0, help='turb: after training, roll the emulator forward this many steps (of lead) from --rollout_starts start frames spread over the validation slab; emits roll_nmse / roll_acc per horizon (step = horizon)'); p.add_argument('--rollout_starts', type=int, default=64)
 p.add_argument('--kr_M', type=int, default=3, help='krylov: CG iterations (Krylov terms) on the batch'); p.add_argument('--kr_mom', type=float, default=0.0, help='krylov: heavy-ball momentum on the scaled step'); p.add_argument('--kr_gamma', type=float, default=1e-3, help='krylov: damping relative to the Rayleigh quotient E^T K E / E^T E'); p.add_argument('--kr_decay', type=int, default=1, help='krylov: 1 = linear decay of the output-space radius rem ||E|| to 0')
@@ -206,7 +206,7 @@ if a.opt in ('kronq_main', 'kronm_main', 'kronqx'):   # THE MAIN OPTIMIZER (kron
     if a.opt == 'kronm_main':                         # TEST variant: per-mode heavy-ball momentum in KronQ's basis (kronm_main.py)
         import functools; from kronm_main import KronM; KronQ = functools.partial(KronM, rule=a.km_rule, beta_max=a.km_beta_max)
     if a.opt == 'kronqx':                             # TEST variants of the curvature statistics (kronqx.py)
-        import functools; from kronqx import KronQX; KronQ = functools.partial(KronQX, mode=a.kx_mode)
+        import functools; from kronqx import KronQX; KronQ = functools.partial(KronQX, mode=a.kx_mode, s_every=a.kx_s_every, probe_rows=a.kx_probe_rows, kfra_every=a.kx_kfra_every)
     make_KQ = lambda lins_, a_: KronQ(lins_, torch.nn.functional.gelu, NOUT, lambda shape: torch.randint(0, 2, shape, device=DEV, generator=gtrain).float() * 2 - 1,
                                       a_.lr, DEV, block=a_.block, b1=a_.b1, beta_u=a_.beta_u, u_clamp=a_.u_clamp, reltol=a_.reltol, beta_stats=a_.beta_stats,
                                       eig_iters=a_.eig_iters, refresh=a_.refresh, adapt_refresh=a_.adapt_refresh, refresh_min=a_.refresh_min,
