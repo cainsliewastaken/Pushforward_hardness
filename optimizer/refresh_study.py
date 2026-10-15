@@ -18,6 +18,9 @@ TURB = ('--problem turb --turb_cache $SCRATCH/l63_held_rough/data/turb64_lead10_
 OPT = '--preset current --opt kronqx --kx_mode probe --kx_log 1'
 REFRESH = {'f5': '--refresh 5 --adapt_refresh 0', 'f20': '--refresh 20 --adapt_refresh 0', 'f80': '--refresh 80 --adapt_refresh 0',
            'f320': '--refresh 320 --adapt_refresh 0', 'adapt': ''}
+# added 2026-10-15 (user: late-stage training is what matters): switched schedules at half the run, every 20 then every 320 steps,
+# and the reverse as a control; at the stage-lr best lr only
+SWITCH = {'s20_320': '--refresh 20 --adapt_refresh 0 --kx_switch 0.5,320', 's320_20': '--refresh 320 --adapt_refresh 0 --kx_switch 0.5,20'}
 CREFRESH = {'f5': '--refresh_fixed 5', 'f20': '--refresh_fixed 20', 'f80': '--refresh_fixed 80', 'f320': '--refresh_fixed 320', 'adapt': ''}
 PROBLEMS = [(f'field_p{p}_w{w}', f'{FIELD} --p {p} --width {w}', [3e-4, 1e-3, 3e-3]) for p in (3, 2, 1, 0) for w in (4096, 2048, 1024, 512)] + \
            [(f'turb_{tg}_w{w}', f'{TURB} --turb_target {tg} --width {w}', [5e-5, 1e-4, 2e-4]) for tg in ('delta', 'direct') for w in (4096, 1024)]
@@ -69,17 +72,28 @@ def chosen_lr(root, task, lrs):
 
 def jobs(root, stage):
     out = []
-    if stage == 'lr':
+    if stage == 'drift':                                                  # added 2026-10-15: the EXACT kernel drift (kronqx kdrift), 100 points per run
+        order = [p for p in PROBLEMS if p[0].startswith('turb_delta')] + [p for p in PROBLEMS if p[0].startswith('field')] + [p for p in PROBLEMS if p[0].startswith('turb_direct')]
+        for task, base, lrs in order:
+            gl = grid_lrs(root, task, lrs)
+            if not gl: continue
+            every = 50 if task.startswith('field') else 312
+            for seed in (1, 2):
+                t = tag(task, 'kdrift', gl[0], seed); out.append((t, f'scale_study.py {OPT} {base} --kx_kdrift {every} --lr {gl[0]} --seed {seed} --out $ROOT/drift/res/{t}.jsonl'))
+    elif stage == 'lr':
         for task, base, lrs in PROBLEMS:
             for lr in lrs: out.append((tag(task, 'adapt', lr, 1), f'scale_study.py {OPT} {base} --lr {lr} --seed 1 --out $ROOT/lr/res/{tag(task, "adapt", lr, 1)}.jsonl'))
     else:
-        for st in CREFRESH:                                               # CIFAR first: the longest runs
-            for seed in (1, 2):
+        for st in CREFRESH:                                               # CIFAR first: the longest runs (seed 1 only, 2026-10-15, to fit)
+            for seed in (1,):
                 t = tag('cifar', st, 3e-3, seed)
                 out.append((t, f'bench/cifar_kx.py {CREFRESH[st]} --opt kronq --epochs 100 --lr 3e-3 --wd 1e-3 --seed {seed} --name {t} --out $ROOT/grid/res/{t}'))
         for task, base, lrs in sorted(PROBLEMS, key=lambda x: not x[0].startswith('turb')):
             gl = grid_lrs(root, task, lrs)
             if not gl: print(f'{task}: no finished lr run, skipped'); continue
+            for st, flags in SWITCH.items():
+                for seed in (1, 2):
+                    t = tag(task, st, gl[0], seed); out.append((t, f'scale_study.py {OPT} {base} {flags} --lr {gl[0]} --seed {seed} --out $ROOT/grid/res/{t}.jsonl'))
             for lr in gl:
                 for st, flags in REFRESH.items():
                     for seed in (1, 2):

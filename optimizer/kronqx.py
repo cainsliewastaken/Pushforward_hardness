@@ -20,6 +20,13 @@ mode
             EMAs of the per-neuron mean and mean square of b (forward only); full matrices, recomputed every kfra_every steps,
             their diagonal blocks set as the S factors (KronQ's refresh then works on them as usual)
 probe_rows (fused only): the probe runs on the first probe_rows rows of the batch (0 = all)
+kdrift_every: every k steps, the EXACT empirical kernel on a fixed probe set (kd_x, kd_y; m samples) for nr fixed random
+            output directions r: K = sum_r sum_l (a_l a_l^T) o (d_l^r d_l^r^T), d_l^r the per-sample backprop of r^T f to z_l (exact
+            for an MLP: the per-sample gradient of layer l is d (x) [a, 1]). Logged per measurement (kdlog): step, steps since the last
+            one, sum of lr over them, ||dK||_F / ||K_prev||_F, the off-diagonal share of V_prev^T dK V_prev (rotation in the previous
+            eigenframe), the subspace distance of the top-8 / 32 / 128 eigenvectors (1 - ||V1^T V2||_F^2 / k), lambda_1, and the
+            share of the residual energy (sum_r (V^T e_r)^2) beyond rank 8 / 32 / 128 (where the residual sits in the spectrum)
+switch: (t_switch, period): from step t_switch on, every layer's refresh period is `period` (fixed; the switched-schedule test)
 log_refresh: at every basis refresh record, per layer and side, the off-diagonal share of the current factor in the OLD basis,
             sqrt(1 - ||diag(U_old^T F U_old)||^2 / ||U_old^T F U_old||^2) over all blocks (the factor-level form of the frame
             rotation, THEORY.md sec. 18), the steps since the last refresh and the period chosen; rlog = [t, layer, side, off, dt, period]
@@ -42,7 +49,8 @@ class KronQX(KronQ):
         self.mode = mode; self._gz = None; self.s_every, self.probe_rows, self.kfra_every = s_every, probe_rows, kfra_every
         if mode in ('fused', 'kfra'): assert self.act is torch.nn.functional.gelu, 'written for gelu'
         self.bm = [None] * self.L; self.bq = [None] * self.L          # kfra: EMA of the per-neuron mean and mean square of gelu'(z)
-        self.log_refresh = False; self.rlog = []; self._last = [0] * self.L
+        self.log_refresh = False; self.rlog = []; self._last = [0] * self.L; self.switch = None
+        self.kdrift_every = 0; self.kd_x = self.kd_y = self.kd_r = None; self.kdlog = []; self._kd_prev = None; self._lrsum = 0.0
 
     @staticmethod
     def _offshare(B):
@@ -96,6 +104,37 @@ class KronQX(KronQ):
                 W = self.Wt[l][:, :-1].float(); M = W.T @ S @ W
                 bm, bq = self.bm[l - 1], self.bq[l - 1]
                 S = M * (bm[:, None] * bm[None, :]); S.diagonal().add_(M.diagonal() * (bq - bm * bm).clamp(min=0))
+
+    @torch.no_grad()
+    def kernel(self, x, y, R):
+        """exact empirical kernel (m x m) of the projected outputs R (nr x nout) on x, eigenpairs (descending), residual energy per mode."""
+        with _fp32():
+            a, z, h = [], [], x
+            for l in range(self.L):
+                at = torch.cat([h, torch.ones(h.shape[0], 1, device=h.device)], 1); a.append(at); zz = at @ self.Wt[l].T; z.append(zz)
+                h = self.act(zz) if l < self.L - 1 else zz
+            AG = [ai @ ai.T for ai in a]; K = torch.zeros(x.shape[0], x.shape[0], device=x.device, dtype=torch.float64)
+            E = (h - y) @ R.T                                               # residual along each direction (m x nr)
+            for r in R:
+                d = r[None, :].expand(x.shape[0], -1)
+                for l in range(self.L - 1, -1, -1):
+                    K += (AG[l] * (d @ d.T)).double()
+                    if l > 0: d = (d @ self.Wt[l][:, :-1]) * _gelu_d(z[l - 1])
+            ev, V = torch.linalg.eigh(K); ev, V = ev.flip(0), V.flip(1)
+            c2 = ((V.T @ E.double()) ** 2).sum(1)
+        return K, ev, V, c2
+
+    def _kdrift(self, t):
+        K, ev, V, c2 = self.kernel(self.kd_x, self.kd_y, self.kd_r)
+        tot = float(c2.sum()) + 1e-300; front = [round(float(c2[k:].sum()) / tot, 5) for k in (8, 32, 128)]
+        if self._kd_prev is not None:
+            Kp, Vp, tp, lp = self._kd_prev; dK = K - Kp; M = Vp.T @ dK @ Vp; m2 = float((M * M).sum()) + 1e-300
+            off = math.sqrt(max(1.0 - float((M.diagonal() ** 2).sum()) / m2, 0.0))
+            sub = [round(1.0 - float(((Vp[:, :k].T @ V[:, :k]) ** 2).sum()) / k, 6) for k in (8, 32, 128)]
+            self.kdlog.append([t, t - tp, round(self._lrsum - lp, 8), round(float(dK.norm() / Kp.norm()), 6), round(off, 5)] + sub + [float(ev[0])] + front)
+        else:
+            self.kdlog.append([t, 0, 0.0, None, None, None, None, None, float(ev[0])] + front)
+        self._kd_prev = (K, V, t, self._lrsum)
 
     def _lam(self, l):
         Se = self.S[l].e if self.mode != 'aonly' else torch.ones(self.Wt[l].shape[0], device=self.dev)
@@ -165,7 +204,10 @@ class KronQX(KronQ):
                     for side, o in offs:
                         if o is not None: self.rlog.append([t, l, side, round(o, 6), t - self._last[l], self.period[l]])
                     self._last[l] = t
+                if self.switch is not None and t >= self.switch[0]: self.period[l] = self.switch[1]
                 self.next_ref[l] = t + self.period[l]
+            if self.switch is not None and t == self.switch[0]:
+                for l in range(L): self.period[l] = self.switch[1]; self.next_ref[l] = min(self.next_ref[l], t + self.switch[1])
             self._lr_t.fill_(float(lr))
             for l in range(L):
                 Se, Ae = self._lam(l)
@@ -176,3 +218,5 @@ class KronQX(KronQ):
             if h['weight_decay'] > 0:
                 gam = h['weight_decay'] * lr / self.lr_max
                 for l in range(L): self.Wt[l].data[:, :-1].mul_(1.0 - gam)
+            self._lrsum += float(lr)
+            if self.kdrift_every and (t == 1 or t % self.kdrift_every == 0): self._kdrift(t)
