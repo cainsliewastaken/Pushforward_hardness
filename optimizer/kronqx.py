@@ -20,6 +20,9 @@ mode
             EMAs of the per-neuron mean and mean square of b (forward only); full matrices, recomputed every kfra_every steps,
             their diagonal blocks set as the S factors (KronQ's refresh then works on them as usual)
 probe_rows (fused only): the probe runs on the first probe_rows rows of the batch (0 = all)
+log_refresh: at every basis refresh record, per layer and side, the off-diagonal share of the current factor in the OLD basis,
+            sqrt(1 - ||diag(U_old^T F U_old)||^2 / ||U_old^T F U_old||^2) over all blocks (the factor-level form of the frame
+            rotation, THEORY.md sec. 18), the steps since the last refresh and the period chosen; rlog = [t, layer, side, off, dt, period]
 """
 import math, torch
 from kronq_main import KronQ, _update_c, _fp32
@@ -39,6 +42,16 @@ class KronQX(KronQ):
         self.mode = mode; self._gz = None; self.s_every, self.probe_rows, self.kfra_every = s_every, probe_rows, kfra_every
         if mode in ('fused', 'kfra'): assert self.act is torch.nn.functional.gelu, 'written for gelu'
         self.bm = [None] * self.L; self.bq = [None] * self.L          # kfra: EMA of the per-neuron mean and mean square of gelu'(z)
+        self.log_refresh = False; self.rlog = []; self._last = [0] * self.L
+
+    @staticmethod
+    def _offshare(B):
+        """off-diagonal share of B's current factor in B's current (old) basis; None before the first basis."""
+        if B.U is None or B.F is None: return None
+        M = torch.bmm(torch.bmm(B.U.transpose(1, 2), B.F), B.U); tot = float((M * M).sum()); dg = float((M.diagonal(dim1=1, dim2=2) ** 2).sum())
+        if B.rem and B.Ur is not None:
+            Mr = B.Ur.T @ B.Fr @ B.Ur; tot += float((Mr * Mr).sum()); dg += float((Mr.diagonal() ** 2).sum())
+        return math.sqrt(max(1.0 - dg / max(tot, 1e-300), 0.0))
 
     def forward(self, x, keep=False):
         if self.mode == 'fused' and keep:
@@ -127,6 +140,9 @@ class KronQX(KronQ):
             for l in due:
                 if self.A[l].F is None or (self.mode != 'aonly' and self.S[l].F is None): continue
                 Se0, Ae0 = self._lam(l); old_ok = Se0 is not None and Ae0 is not None
+                if self.log_refresh:
+                    with _fp32():
+                        offs = [('A', self._offshare(self.A[l]))] + ([('S', self._offshare(self.S[l]))] if self.mode != 'aonly' else [])
                 if old_ok: gd_old = float((Gr[l] * self._push(l, Gr[l])).sum())
                 with _fp32():
                     VA = self.A[l].refresh(h['eig_iters'])
@@ -145,6 +161,10 @@ class KronQX(KronQ):
                     gd_new = float((Gr[l] * self._push(l, Gr[l])).sum()); e_ = abs(gd_new - gd_old) / max(abs(gd_new), 1e-300)
                     if math.isfinite(e_):
                         self.period[l] = int(min(max(self.period[l] * min(max(h['adapt_refresh'] / max(e_, 1e-12), 0.5), 2.0), h['refresh_min']), 1000))
+                if self.log_refresh:
+                    for side, o in offs:
+                        if o is not None: self.rlog.append([t, l, side, round(o, 6), t - self._last[l], self.period[l]])
+                    self._last[l] = t
                 self.next_ref[l] = t + self.period[l]
             self._lr_t.fill_(float(lr))
             for l in range(L):

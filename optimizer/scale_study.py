@@ -27,7 +27,7 @@ import numpy as np, torch
 
 p = argparse.ArgumentParser()
 p.add_argument('--opt', required=True, choices=['adamw', 'muon', 'soap', 'kronq', 'kronqf', 'kronq_main', 'kronm_main', 'kronqx', 'krylov'])
-p.add_argument('--kx_mode', default='probe', choices=['probe', 'fused', 'emp', 'gradfac', 'aonly', 'severy', 'kfra'], help='kronqx (TEST variants, kronqx.py): how the Kronecker factors are obtained'); p.add_argument('--kx_s_every', type=int, default=4, help='kronqx severy: probe / S factor every k steps (A every step)'); p.add_argument('--kx_probe_rows', type=int, default=0, help='kronqx fused: probe on this many rows of the batch (0 = all)'); p.add_argument('--kx_kfra_every', type=int, default=10, help='kronqx kfra: recompute the top-down S factors every k steps')
+p.add_argument('--kx_mode', default='probe', choices=['probe', 'fused', 'emp', 'gradfac', 'aonly', 'severy', 'kfra'], help='kronqx (TEST variants, kronqx.py): how the Kronecker factors are obtained'); p.add_argument('--kx_s_every', type=int, default=4, help='kronqx severy: probe / S factor every k steps (A every step)'); p.add_argument('--kx_probe_rows', type=int, default=0, help='kronqx fused: probe on this many rows of the batch (0 = all)'); p.add_argument('--kx_kfra_every', type=int, default=10, help='kronqx kfra: recompute the top-down S factors every k steps'); p.add_argument('--kx_log', type=int, default=0, help='kronqx: log the basis drift at every refresh (kronqx.py log_refresh); emitted once as refresh_log')
 p.add_argument('--km_rule', default='crit', choices=['crit', 'const'], help='kronm_main (TEST variant, kronm_main.py): per-mode momentum beta_k = (1 - sqrt(lr lam_k / lam_max))^2 (crit) or one beta = --b1 for every mode (const)'); p.add_argument('--km_beta_max', type=float, default=0.999, help='kronm_main crit: upper bound on beta_k')
 p.add_argument('--rollout', type=int, default=0, help='turb: after training, roll the emulator forward this many steps (of lead) from --rollout_starts start frames spread over the validation slab; emits roll_nmse / roll_acc per horizon (step = horizon)'); p.add_argument('--rollout_starts', type=int, default=64)
 p.add_argument('--kr_M', type=int, default=3, help='krylov: CG iterations (Krylov terms) on the batch'); p.add_argument('--kr_mom', type=float, default=0.0, help='krylov: heavy-ball momentum on the scaled step'); p.add_argument('--kr_gamma', type=float, default=1e-3, help='krylov: damping relative to the Rayleigh quotient E^T K E / E^T E'); p.add_argument('--kr_decay', type=int, default=1, help='krylov: 1 = linear decay of the output-space radius rem ||E|| to 0')
@@ -212,6 +212,7 @@ if a.opt in ('kronq_main', 'kronm_main', 'kronqx'):   # THE MAIN OPTIMIZER (kron
                                       eig_iters=a_.eig_iters, refresh=a_.refresh, adapt_refresh=a_.adapt_refresh, refresh_min=a_.refresh_min,
                                       stats_every=a_.stats_every, weight_decay=a_.wd_abs, mom_bf16=bool(a_.mom_bf16))
     KQ = make_KQ(lins, a)
+    if a.opt == 'kronqx' and a.kx_log: KQ.log_refresh = True
 if a.opt == 'kronqf':
     import kronq_fast; kronq_fast.CHOLQR = bool(a.cholqr)
     from kronq_fast import KronQFast
@@ -674,6 +675,7 @@ if a.problem == 'turb' and a.rollout > 0:          # forward prediction: the tra
             emit('roll_nmse', float(((xr - xt) ** 2).mean()) / var0, k_)
             emit('roll_acc', float(((xr * xt).sum(1) / (xr.norm(dim=1) * xt.norm(dim=1) + 1e-30)).mean()), k_)
         print('rollout nmse ' + ' '.join(f"h{r_['step']}:{r_['value']:.3g}" for r_ in rows if r_['metric'] == 'roll_nmse' and r_['step'] in (1, 2, 5, 10, 20, 50, 100, 200)) + f' ({time.time() - tr0:.1f}s)', flush=True)
+if a.opt == 'kronqx' and a.kx_log: emit('refresh_log', KQ.rlog, a.steps)
 if a.problem == 'turb' and a.turb_onepass: emit('turb_passes', PERM['passes'] + PERM['i'] / NTR, a.steps)
 for k_, v_ in (('val_final', VAL_FINAL), ('val_best', VAL_BEST), ('state_bytes', sb), ('state_per_param', sb / (4 * P)),
                ('peak_mem_bytes', peak), ('t_fb', tm['fb']), ('t_stats', tm['stats']), ('t_eig', tm['eig']), ('t_upd', tm['upd']), ('wall_total', time.time() - t_start)):
