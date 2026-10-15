@@ -48,6 +48,25 @@ def best_lr(root, task, lrs):
     return min(sc)[1] if sc else None
 
 
+def grid_lrs(root, task, lrs):
+    """lrs run in stage grid: the stage-lr best, plus one step past the grid edge when the best sits on an edge (added 2026-10-15:
+    7 of 16 field settings had their best at an edge, the higher lrs failing to learn at all)."""
+    b = best_lr(root, task, lrs)
+    if b is None: return []
+    if b == lrs[0]: return [b, b / 3 if task.startswith('field') else b / 2]
+    if b == lrs[-1]: return [b, b * 3 if task.startswith('field') else b * 2]
+    return [b]
+
+
+def chosen_lr(root, task, lrs):
+    """the grid-stage lr with the lower mean val at the adaptive rule (seeds 1-2)."""
+    sc = []
+    for lr in grid_lrs(root, task, lrs):
+        v = [(read(root, 'grid', tag(task, 'adapt', lr, s)) or {}).get('val', math.nan) for s in (1, 2)]; v = [x for x in v if math.isfinite(x)]
+        if v: sc.append((S.mean(v), lr))
+    return min(sc)[1] if sc else best_lr(root, task, lrs)
+
+
 def jobs(root, stage):
     out = []
     if stage == 'lr':
@@ -59,11 +78,12 @@ def jobs(root, stage):
                 t = tag('cifar', st, 3e-3, seed)
                 out.append((t, f'bench/cifar_kx.py {CREFRESH[st]} --opt kronq --epochs 100 --lr 3e-3 --wd 1e-3 --seed {seed} --name {t} --out $ROOT/grid/res/{t}'))
         for task, base, lrs in sorted(PROBLEMS, key=lambda x: not x[0].startswith('turb')):
-            lr = best_lr(root, task, lrs)
-            if lr is None: print(f'{task}: no finished lr run, skipped'); continue
-            for st, flags in REFRESH.items():
-                for seed in (1, 2):
-                    t = tag(task, st, lr, seed); out.append((t, f'scale_study.py {OPT} {base} {flags} --lr {lr} --seed {seed} --out $ROOT/grid/res/{t}.jsonl'))
+            gl = grid_lrs(root, task, lrs)
+            if not gl: print(f'{task}: no finished lr run, skipped'); continue
+            for lr in gl:
+                for st, flags in REFRESH.items():
+                    for seed in (1, 2):
+                        t = tag(task, st, lr, seed); out.append((t, f'scale_study.py {OPT} {base} {flags} --lr {lr} --seed {seed} --out $ROOT/grid/res/{t}.jsonl'))
     os.makedirs(f'{root}/{stage}/res', exist_ok=True)
     with open(f'{root}/{stage}/jobs.txt', 'w') as fh:
         for t, c in out: fh.write(f'{t}\t{c}\n')
@@ -85,7 +105,7 @@ def summary(root):
     print('error by refresh setting (mean of seeds; field / turb: val MSE, turb also rollout nMSE mean over h1-20; cifar: test acc)')
     print('drift: off-diagonal share of the factor in the old basis per step since the last refresh, at f20, early (first 20 %) / late (last 50 %)')
     for task, _, lrs in PROBLEMS + [('cifar', '', [3e-3])]:
-        lr = 3e-3 if task == 'cifar' else best_lr(root, task, lrs)
+        lr = 3e-3 if task == 'cifar' else chosen_lr(root, task, lrs)
         if lr is None: continue
         line = f'{task:18s} lr {lr:<7g}'
         for st in REFRESH:
