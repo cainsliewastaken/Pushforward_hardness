@@ -26,6 +26,30 @@ CMETHODS = {'kronq': '--opt kronq', 'kronm': '--opt kronm --km_rule crit', 'kron
 GRID2 = {'turb_delta': ([3e-4, 1e-3, 3e-3], [3e-4, 1e-3, 3e-3]), 'turb_direct': ([3e-4, 1e-3, 3e-3], [3e-4, 1e-3, 3e-3]),
          'field': ([3e-4, 1e-3, 3e-3, 1e-2], [0.0, 1e-3])}
 CIFAR_BM = {'kronm_b90': [0.003, 0.01], 'kronm_b99': [0.003, 0.01]}
+# added 2026-10-15 (user): CIFAR at the decay strengths of the older KronQ runs, wd 1 and 3 at lr 1e-3 = 1e-3 and 3e-3 per step, in stage
+# seeds for KronQ and KronM-const (at their grid-best lr) and the capped variants (both lrs); every CIFAR seed repeat is in stage seeds2,
+# chosen over grid + seeds. Groups compared: KronQ, KronM-const, KronM capped (b90 or b99, whichever is better).
+CIFAR_HIWD = [1e-3, 3e-3]
+CIFAR_GROUPS = {'kronq': ('kronq',), 'kronm_const': ('kronm_const',), 'kronm_capped': ('kronm_b90', 'kronm_b99')}
+
+
+def seed1_runs(root, stages=('grid', 'seeds')):
+    """(stage, task, method, lr, wd) of every seed-1 job listed in the given stages."""
+    out = []
+    for st in stages:
+        f = f'{root}/{st}/jobs.txt'
+        if not os.path.exists(f): continue
+        for line in open(f):
+            task, method, lr, wd, seed = line.split('\t')[0].split('__')
+            if seed == 's1': out.append((st, task, method, float(lr[2:]), float(wd[2:])))
+    return out
+
+
+def best(root, task, methods, stages=('grid', 'seeds')):
+    """(score, method, lr, wd) of the best finished seed-1 run of task among methods, or None."""
+    sc = [(result(root, st, job(t, m, lr, wd, 1, st)[0]), m, lr, wd) for st, t, m, lr, wd in seed1_runs(root, stages) if t == task and m in methods]
+    sc = [x for x in sc if x[0] is not None and math.isfinite(x[0])]
+    return min(sc) if sc else None
 GRID = {   # task -> method -> (lrs, decays)
     'field': {'kronq': ([3e-4, 1e-3, 3e-3], [0.0, 1e-3]), 'kronm': ([0.01, 0.03, 0.1, 0.3, 1.0], [0.0, 1e-3]),
               'kronm_const': ([0.003, 0.01, 0.03, 0.1], [1e-3])},
@@ -73,28 +97,28 @@ def jobs(root, stage):
                 for lr in lrs:
                     for wd in wds: out.append(job(task, method, lr, wd, 1, stage))
     elif stage == 'seeds2':
-        sc = [(result(root, 'seeds', job('cifar', m, lr, 5e-5, 1, 'seeds')[0]), m, lr) for m, lrs in CIFAR_BM.items() for lr in lrs]
-        sc = [x for x in sc if x[0] is not None and math.isfinite(x[0])]
-        if sc:
-            _, m, lr = min(sc)
-            for seed in (2, 3): out.append(job('cifar', m, lr, 5e-5, seed, stage))
-        for task, (lrs2, wds2) in GRID2.items():
-            lrs, wds = GRID[task]['kronm']
-            sc = [(result(root, 'grid', job(task, 'kronm', lr, wd, 1, 'grid')[0]), lr, wd) for lr in lrs for wd in wds]
-            sc += [(result(root, 'seeds', job(task, 'kronm', lr, wd, 1, 'seeds')[0]), lr, wd) for lr in lrs2 for wd in wds2]
-            sc = [x for x in sc if x[0] is not None and math.isfinite(x[0])]
-            if sc:
-                _, lr, wd = min(sc)
-                for seed in (2, 3): out.append(job(task, 'kronm', lr, wd, seed, stage))
+        for methods in CIFAR_GROUPS.values():
+            b = best(root, 'cifar', methods)
+            if b:
+                for seed in (2, 3): out.append(job('cifar', b[1], b[2], b[3], seed, stage))
+        for task in GRID2:
+            b = best(root, task, ('kronm',))
+            if b:
+                for seed in (2, 3): out.append(job(task, 'kronm', b[2], b[3], seed, stage))
     else:
         for m, lrs in CIFAR_BM.items():
-            for lr in lrs: out.append(job('cifar', m, lr, 5e-5, 1, stage))
+            for lr in lrs:
+                for wd in [5e-5] + CIFAR_HIWD: out.append(job('cifar', m, lr, wd, 1, stage))
+        for m in ('kronq', 'kronm_const'):
+            b = best(root, 'cifar', (m,), ('grid',))
+            lr = b[2] if b else GRID['cifar'][m][0][-1]
+            for wd in CIFAR_HIWD: out.append(job('cifar', m, lr, wd, 1, stage))
         for task in ('turb_delta', 'turb_direct', 'field'):
             for lr in GRID2[task][0]:
                 for wd in GRID2[task][1]: out.append(job(task, 'kronm', lr, wd, 1, stage))
-        for task in ('cifar', 'turb_delta', 'turb_direct', 'field'):
+        for task in ('turb_delta', 'turb_direct', 'field'):           # CIFAR seed repeats: stage seeds2
             for method, (lrs, wds) in GRID[task].items():
-                if method == 'kronm' and task in GRID2: continue           # its seeds come in stage seeds2, over grid and GRID2
+                if method == 'kronm': continue                              # its seeds come in stage seeds2, over grid and GRID2           # its seeds come in stage seeds2, over grid and GRID2
                 sc = [(result(root, 'grid', job(task, method, lr, wd, 1, 'grid')[0]), lr, wd) for lr in lrs for wd in wds]
                 sc = [x for x in sc if x[0] is not None and math.isfinite(x[0])]
                 if not sc: continue
