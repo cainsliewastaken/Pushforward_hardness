@@ -23,7 +23,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path[:0] = [os.path.join(HERE, '..', 'llm'), os.path.join(HERE, 'third_party', 'soap'), os.path.join(HERE, 'third_party', 'muon')]
 
 p = argparse.ArgumentParser()
-p.add_argument('--opt', required=True, choices=['sgd', 'adamw', 'soap', 'muon', 'kronq'])
+p.add_argument('--opt', required=True, choices=['sgd', 'adamw', 'soap', 'muon', 'kronq', 'kronm'])
 p.add_argument('--lr', type=float, required=True, help='peak learning rate of the main optimizer (Muon: of the Muon group)')
 p.add_argument('--lr_aux', type=float, default=1e-3, help='AdamW learning rate for the parameters Muon / KronQ do not handle')
 p.add_argument('--wd', type=float, default=None, help='weight decay (sgd: L2 5e-4; adamw/soap: decoupled 5e-2 / 1e-2; muon 0; '
@@ -42,12 +42,14 @@ p.add_argument('--block', type=int, default=256); p.add_argument('--stats_every'
 p.add_argument('--stats_rows', type=int, default=0, help='rows (image x position pairs) per layer for the factor statistics; 0 = all'); p.add_argument('--conv_images', type=int, default=32); p.add_argument('--probe', default='fisher', choices=['fisher', 'emp'])
 p.add_argument('--beta_u', type=float, default=0.01, help='KronQ: learning rate of the per-mode log-multipliers u (0 = multipliers frozen at 1)')
 p.add_argument('--u_clamp', default='4.6', help="KronQ: bound on |u| (multiplier in [e^-c, e^c]); 'none' = no clamp")
+p.add_argument('--km_rule', default='crit', choices=['crit', 'const'], help='kronm (TEST variant, ../llm/kronm_lm.py): per-mode momentum (crit) or one momentum 0.9 (const)')
+p.add_argument('--km_beta_max', type=float, default=0.999)
 p.add_argument('--u_sample_every', type=int, default=50, help='KronQ: steps between samples of the per-layer multiplier statistics')
 a = p.parse_args()
 # default weight decay and its source: sgd 5e-4 (standard CIFAR recipe, L2); kronq 1e-3 per step at peak lr (the method's documented
 # finite-data setting, optimizer/README.md, OPTIMIZER_PLAN 2b); soap 1e-2 and muon 0 (their implementations' defaults); adamw 5e-2 (a
 # common CIFAR choice, untuned)
-if a.wd is None: a.wd = dict(sgd=5e-4, adamw=5e-2, soap=1e-2, muon=0.0, kronq=1e-3)[a.opt]
+if a.wd is None: a.wd = dict(sgd=5e-4, adamw=5e-2, soap=1e-2, muon=0.0, kronq=1e-3, kronm=1e-3)[a.opt]
 U_CLAMP = float('inf') if str(a.u_clamp).lower() == 'none' else float(a.u_clamp)
 a.name = a.name or f'{a.opt}_lr{a.lr:g}_wd{a.wd:g}_s{a.seed}'
 a.out = a.out or os.path.expandvars(f'$SCRATCH/kronq_bench/cifar100/{a.name}')
@@ -118,6 +120,11 @@ elif a.opt == 'muon':
     hid = {id(p_) for p_ in hidden}; aux = [p_ for p_ in model.parameters() if id(p_) not in hid]
     opt = SingleDeviceMuonWithAuxAdam([dict(params=hidden, lr=a.lr, momentum=0.95, weight_decay=a.wd, use_muon=True),
                                        dict(params=aux, lr=a.lr_aux, betas=(0.9, 0.95), eps=1e-10, weight_decay=0.0, use_muon=False)])
+elif a.opt == 'kronm':
+    from kronm_lm import KronMLM
+    kq = KronMLM(model, lr=a.lr, lr_adam=a.lr_aux, loss='ce', probe=a.probe, exclude=(), block=a.block, stats_every=a.stats_every,
+                 conv_images=a.conv_images, stats_rows=a.stats_rows, weight_decay=a.wd, seed=a.seed, rule=a.km_rule, beta_max=a.km_beta_max)
+    a.beta_u = 0.0                                               # no multipliers to track
 else:
     from kronq_lm import KronQLM
     kq = KronQLM(model, lr=a.lr, lr_adam=a.lr_aux, loss='ce', probe=a.probe, exclude=(), block=a.block, stats_every=a.stats_every,
@@ -184,7 +191,7 @@ for ep in range(a.epochs):
     rec = dict(epoch=ep + 1, step=step, lr=a.lr * sched(max(step - 1, 0)), train_loss=train_loss, train_acc=(tc / max(nb * a.batch, 1)).item(),
                test_loss=test_loss, test_acc=test_acc, train_time_s=round(t_train, 1), ms_per_step=round(1e3 * t_train / max(step, 1), 2),
                peak_mem_gb=round(torch.cuda.max_memory_allocated() / 2 ** 30, 2) if dev.type == 'cuda' else 0.0, opt_state_mb=round(state_bytes() / 2 ** 20, 1))
-    if kq:                                                       # per-layer: clamp fraction (epoch mean of samples), max |u|, median |u|, |W|
+    if kq and a.opt == 'kronq':                                  # per-layer: clamp fraction (epoch mean of samples), max |u|, median |u|, |W|
         layers = {}; num = den_ = num_ok = 0.0
         with torch.no_grad():
             for L in kq.layers:
@@ -204,7 +211,8 @@ for ep in range(a.epochs):
 summ = dict(name=a.name, opt=a.opt, lr=a.lr, wd=a.wd, seed=a.seed, epochs_done=ep + 1, steps=step, final_test_acc=test_acc, best_test_acc=best,
             final_test_loss=test_loss, ms_per_step=rec['ms_per_step'], peak_mem_gb=rec['peak_mem_gb'], opt_state_mb=rec['opt_state_mb'],
             params_m=round(nparam / 1e6, 3), diverged=diverged, finished=time.strftime('%Y-%m-%d %H:%M:%S'))
-if kq: summ.update(beta_u=a.beta_u, u_clamp=a.u_clamp, stats_rows=a.stats_rows)
+if kq and a.opt == 'kronm': summ.update(km_rule=a.km_rule, km_beta_max=a.km_beta_max, stats_rows=a.stats_rows)
+elif kq: summ.update(beta_u=a.beta_u, u_clamp=a.u_clamp, stats_rows=a.stats_rows)
 json.dump(summ, open(os.path.join(a.out, 'summary.json'), 'w'), indent=1)
 torch.save(model.state_dict(), os.path.join(a.out, 'model.pt'))
 print('SUMMARY ' + json.dumps(summ), flush=True)

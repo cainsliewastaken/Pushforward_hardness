@@ -26,7 +26,9 @@ import os, sys, json, math, time, argparse
 import numpy as np, torch
 
 p = argparse.ArgumentParser()
-p.add_argument('--opt', required=True, choices=['adamw', 'muon', 'soap', 'kronq', 'kronqf', 'kronq_main', 'krylov'])
+p.add_argument('--opt', required=True, choices=['adamw', 'muon', 'soap', 'kronq', 'kronqf', 'kronq_main', 'kronm_main', 'krylov'])
+p.add_argument('--km_rule', default='crit', choices=['crit', 'const'], help='kronm_main (TEST variant, kronm_main.py): per-mode momentum beta_k = (1 - sqrt(lr lam_k / lam_max))^2 (crit) or one beta = --b1 for every mode (const)'); p.add_argument('--km_beta_max', type=float, default=0.999, help='kronm_main crit: upper bound on beta_k')
+p.add_argument('--rollout', type=int, default=0, help='turb: after training, roll the emulator forward this many steps (of lead) from --rollout_starts start frames spread over the validation slab; emits roll_nmse / roll_acc per horizon (step = horizon)'); p.add_argument('--rollout_starts', type=int, default=64)
 p.add_argument('--kr_M', type=int, default=3, help='krylov: CG iterations (Krylov terms) on the batch'); p.add_argument('--kr_mom', type=float, default=0.0, help='krylov: heavy-ball momentum on the scaled step'); p.add_argument('--kr_gamma', type=float, default=1e-3, help='krylov: damping relative to the Rayleigh quotient E^T K E / E^T E'); p.add_argument('--kr_decay', type=int, default=1, help='krylov: 1 = linear decay of the output-space radius rem ||E|| to 0')
 p.add_argument('--width', type=int, default=512); p.add_argument('--depth', type=int, default=2)
 p.add_argument('--p', type=float, default=2.0, help='target roughness exponent (0 smooth, 2 rough)')
@@ -107,7 +109,7 @@ if a.problem == 'field':
         v = torch.fft.ifft2(torch.fft.fft2(u) * PK).real if PK is not None else u.clone(); v = v / v.std(dim=(1, 2), keepdim=True)
         return u.reshape(m, -1).float(), torch.tanh(2 * v).reshape(m, -1).float()
 elif a.problem == 'turb':               # 2D turbulence one-step emulator (Flop_Constrained_Temporal_Scaling data, coarsened; make_turb_cache.py)
-    Z = np.load(a.turb_cache); TM, TS = float(Z['mean']), float(Z['std']); TDEV = 'cpu' if a.turb_cpu else DEV
+    Z = np.load(a.turb_cache); TM, TS = float(Z['mean']), float(Z['std']); TLEAD = int(Z['lead']); TDEV = 'cpu' if a.turb_cpu else DEV
     def prep(x, y, dev):
         x = (torch.tensor(x, device=dev) - TM) / TS; y = (torch.tensor(y, device=dev) - TM) / TS
         if a.turb_target == 'delta': y = y - x
@@ -192,7 +194,7 @@ KQ = None; KR = None
 if a.opt == 'krylov':
     from krylov_step import KrylovStep
     KR = KrylovStep(lins, a, DEV, torch.nn.functional.gelu)
-if a.opt == 'kronq_main':                              # THE MAIN OPTIMIZER (kronq_main.py); the research options are refused, not ignored
+if a.opt in ('kronq_main', 'kronm_main'):             # THE MAIN OPTIMIZER (kronq_main.py); the research options are refused, not ignored
     _REMOVED = ('rem', 'cap', 'slow_adapt', 'xfold', 'u_decay', 'hyper_budget', 'wd_gate', 'lr_track', 'rem_check', 'rem_iter', 'clip_grad', 'rem_val',
                 'ls_val', 'rem_val_track', 'zbud', 'spike_diag', 'mech', 'wd', 'orig', 'orig_hp', 'refresh_hp', 'reorth_transport', 'rot_hp', 'preflight',
                 'alloc', 'alloc2', 'sphere', 'ekfac', 'gnls', 'mom_adapt', 'S_identity', 'A_identity', 'freeze_after', 'track', 'acf', 'kappa_diag',
@@ -200,6 +202,8 @@ if a.opt == 'kronq_main':                              # THE MAIN OPTIMIZER (kro
     _bad = [k for k in _REMOVED if getattr(a, k, 0) not in (0, 0.0, '', None, False)] + (['rule'] if a.rule != 'sign' else [])
     if _bad: p.error(f'--opt kronq_main is the main optimizer only; these research options are not part of it: {_bad} (decay: use --wd_abs)')
     from kronq_main import KronQ
+    if a.opt == 'kronm_main':                         # TEST variant: per-mode heavy-ball momentum in KronQ's basis (kronm_main.py)
+        import functools; from kronm_main import KronM; KronQ = functools.partial(KronM, rule=a.km_rule, beta_max=a.km_beta_max)
     make_KQ = lambda lins_, a_: KronQ(lins_, torch.nn.functional.gelu, NOUT, lambda shape: torch.randint(0, 2, shape, device=DEV, generator=gtrain).float() * 2 - 1,
                                       a_.lr, DEV, block=a_.block, b1=a_.b1, beta_u=a_.beta_u, u_clamp=a_.u_clamp, reltol=a_.reltol, beta_stats=a_.beta_stats,
                                       eig_iters=a_.eig_iters, refresh=a_.refresh, adapt_refresh=a_.adapt_refresh, refresh_min=a_.refresh_min,
@@ -327,7 +331,7 @@ else:
             s_['hv'] = (torch.zeros(o, device=DEV), torch.zeros(i + 1, device=DEV)) if a.compress else torch.zeros(o, i + 1, device=DEV)
         st.append(s_)
 def opt_state_bytes():
-    if a.opt in ('kronqf', 'kronq_main'): return KQ.state_bytes()
+    if a.opt in ('kronqf', 'kronq_main', 'kronm_main'): return KQ.state_bytes()
     if a.opt == 'krylov': return KR.state_bytes()
     if a.opt == 'adamw':
         return sum(nbytes(t) for s in opt.state.values() for t in s.values() if torch.is_tensor(t) and t.numel() > 1)
@@ -417,7 +421,7 @@ for step in range(1, a.steps + 1):
     for q in lins.parameters(): q.grad = None
     if KQ is not None:
         for W in KQ.Wt: W.grad = None
-    keep_now = (a.opt == 'kronq' and (need_stats or a.bcurv or a.gnls)) or a.opt in ('kronqf', 'kronq_main')
+    keep_now = (a.opt == 'kronq' and (need_stats or a.bcurv or a.gnls)) or a.opt in ('kronqf', 'kronq_main', 'kronm_main')
     if a.opt == 'krylov':
         t0 = time.time(); KR.step(step, (decay if a.kr_decay else 1.0), xb, yb, emit if a.diag else None, step % a.eval_every == 0 or step == a.steps); sync(); tm['upd'] += time.time() - t0
         out = None
@@ -436,7 +440,7 @@ for step in range(1, a.steps + 1):
             dA = (s_['R'].rot(at_b, 'R', False) ** 2).mean(0); dS = (s_['L'].rot(gz_b[l].T, 'L', False) ** 2).mean(1)
             bc.append((dS[:, None] * dA[None, :]) * (2.0 / NOUT))
     sync(); tm['fb'] += time.time() - t0
-    if a.opt == 'kronq_main':
+    if a.opt in ('kronq_main', 'kronm_main'):
         t0 = time.time(); KQ.step(lr, out); sync(); tm['upd'] += time.time() - t0
     if a.opt == 'kronqf':
         if a.rem_val > 0 or a.ls_val or a.rem_val_track > 0: KQ.xv_fresh = draw(a.batch, gtrain)
@@ -460,7 +464,7 @@ for step in range(1, a.steps + 1):
                     for st_, r_ in SDH: print(f"SPIKE? step {st_}: " + ' '.join(f"{k_} {v_:.3g}" for k_, v_ in r_.items()), flush=True)
                 SDMIN[0] = min(SDMIN[0], pl)
     with torch.no_grad():
-        if a.opt in ('kronqf', 'kronq_main', 'krylov'): pass
+        if a.opt in ('kronqf', 'kronq_main', 'kronm_main', 'krylov'): pass
         elif a.opt == 'adamw':
             for g_ in opt.param_groups: g_['lr'] = lr
             t0 = time.time(); opt.step(); sync(); tm['upd'] += time.time() - t0
@@ -655,6 +659,16 @@ for step in range(1, a.steps + 1):
 peak = torch.cuda.max_memory_allocated() if DEV == 'cuda' else 0
 sb = opt_state_bytes()
 VAL_FINAL = [r_['value'] for r_ in rows if r_['metric'] == 'val'][-1]; VAL_BEST = min(r_['value'] for r_ in rows if r_['metric'] == 'val' and math.isfinite(r_['value']))
+if a.problem == 'turb' and a.rollout > 0:          # forward prediction: the trained emulator iterated from validation frames
+    with torch.no_grad():
+        span = TLEAD * a.rollout; st0 = torch.linspace(0, XVA.shape[0] - 1 - span, a.rollout_starts, device=XVA.device).long()
+        xr = XVA[st0].clone(); var0 = float(XVA.var()); tr0 = time.time()
+        for k_ in range(1, a.rollout + 1):
+            fo = forward(xr) * YSC; xr = xr + fo if a.turb_target == 'delta' else fo
+            xt = XVA[st0 + TLEAD * k_]
+            emit('roll_nmse', float(((xr - xt) ** 2).mean()) / var0, k_)
+            emit('roll_acc', float(((xr * xt).sum(1) / (xr.norm(dim=1) * xt.norm(dim=1) + 1e-30)).mean()), k_)
+        print('rollout nmse ' + ' '.join(f"h{r_['step']}:{r_['value']:.3g}" for r_ in rows if r_['metric'] == 'roll_nmse' and r_['step'] in (1, 2, 5, 10, 20, 50, 100, 200)) + f' ({time.time() - tr0:.1f}s)', flush=True)
 if a.problem == 'turb' and a.turb_onepass: emit('turb_passes', PERM['passes'] + PERM['i'] / NTR, a.steps)
 for k_, v_ in (('val_final', VAL_FINAL), ('val_best', VAL_BEST), ('state_bytes', sb), ('state_per_param', sb / (4 * P)),
                ('peak_mem_bytes', peak), ('t_fb', tm['fb']), ('t_stats', tm['stats']), ('t_eig', tm['eig']), ('t_upd', tm['upd']), ('wall_total', time.time() - t_start)):
