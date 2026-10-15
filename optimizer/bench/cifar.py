@@ -10,6 +10,7 @@ Optimizers (--opt):
   muon   Muon (third_party/muon, SingleDeviceMuonWithAuxAdam, unmodified) on the 4-D conv kernels of layer1-4; AdamW (--lr_aux)
          on the stem conv, the classifier and the BatchNorm parameters
   kronq  KronQ (../llm/kronq_lm.py, the main optimizer's method; conv layers as KFC matrices) on every conv and the classifier;
+         --beta_u 0 freezes the per-mode multipliers at 1 (ablation), --u_clamp none removes the clamp;
          AdamW (--lr_aux) on BatchNorm; decoupled decay --wd as the decay per step at peak lr (kronq_main convention)
 
 Everything goes to --out (default $SCRATCH/kronq_bench/cifar100/<name>): config.json (arguments, git commit, uncommitted files,
@@ -39,9 +40,15 @@ p.add_argument('--max_steps', type=int, default=0, help='stop after this many st
 # KronQ options (defaults = the main optimizer's)
 p.add_argument('--block', type=int, default=256); p.add_argument('--stats_every', type=int, default=1)
 p.add_argument('--stats_rows', type=int, default=0, help='rows (image x position pairs) per layer for the factor statistics; 0 = all'); p.add_argument('--conv_images', type=int, default=32); p.add_argument('--probe', default='fisher', choices=['fisher', 'emp'])
-p.add_argument('--log_u_every', type=int, default=10, help='epochs between logs of the learned-weight clamp fractions')
+p.add_argument('--beta_u', type=float, default=0.01, help='KronQ: learning rate of the per-mode log-multipliers u (0 = multipliers frozen at 1)')
+p.add_argument('--u_clamp', default='4.6', help="KronQ: bound on |u| (multiplier in [e^-c, e^c]); 'none' = no clamp")
+p.add_argument('--u_sample_every', type=int, default=50, help='KronQ: steps between samples of the per-layer multiplier statistics')
 a = p.parse_args()
-if a.wd is None: a.wd = dict(sgd=5e-4, adamw=5e-2, soap=1e-2, muon=0.0, kronq=5e-5)[a.opt]
+# default weight decay and its source: sgd 5e-4 (standard CIFAR recipe, L2); kronq 1e-3 per step at peak lr (the method's documented
+# finite-data setting, optimizer/README.md, OPTIMIZER_PLAN 2b); soap 1e-2 and muon 0 (their implementations' defaults); adamw 5e-2 (a
+# common CIFAR choice, untuned)
+if a.wd is None: a.wd = dict(sgd=5e-4, adamw=5e-2, soap=1e-2, muon=0.0, kronq=1e-3)[a.opt]
+U_CLAMP = float('inf') if str(a.u_clamp).lower() == 'none' else float(a.u_clamp)
 a.name = a.name or f'{a.opt}_lr{a.lr:g}_wd{a.wd:g}_s{a.seed}'
 a.out = a.out or os.path.expandvars(f'$SCRATCH/kronq_bench/cifar100/{a.name}')
 dev = torch.device(a.device if torch.cuda.is_available() or a.device == 'cpu' else 'cpu')
@@ -114,7 +121,12 @@ elif a.opt == 'muon':
 else:
     from kronq_lm import KronQLM
     kq = KronQLM(model, lr=a.lr, lr_adam=a.lr_aux, loss='ce', probe=a.probe, exclude=(), block=a.block, stats_every=a.stats_every,
-                 conv_images=a.conv_images, stats_rows=a.stats_rows, weight_decay=a.wd, seed=a.seed)
+                 conv_images=a.conv_images, stats_rows=a.stats_rows, weight_decay=a.wd, seed=a.seed, beta_u=a.beta_u, u_clamp=U_CLAMP)
+    # per-layer multiplier statistics, sampled every u_sample_every steps (on the device; read once per epoch). "At the clamp" =
+    # |u| >= 4.59 (the default bound 4.6 as stored in bf16); without a clamp the same level counts how often it WOULD have acted.
+    U_REF = 4.59
+    uacc = {L.name: torch.zeros(4, device=dev) for L in kq.layers}      # [at-level fraction, same at lr > 1e-8, samples, samples lr > 1e-8]
+    umax = {L.name: torch.zeros((), device=dev) for L in kq.layers}
 base_lrs = None if kq else [g['lr'] for g in opt.param_groups]
 print(f'ResNet-18: {nparam / 1e6:.2f}M parameters; {steps_per_epoch} steps/epoch, {total} steps; '
       + (f'KronQ layers {len(kq.layers)}, AdamW tensors {sum(len(g["params"]) for g in kq.adam.param_groups)}' if kq else a.opt), flush=True)
@@ -151,6 +163,13 @@ for ep in range(a.epochs):
         loss = F.cross_entropy(out.float(), y)
         if kq:
             kq.backward(loss, out); kq.step(a.lr * f); kq.zero_grad()
+            if a.beta_u > 0 and step % a.u_sample_every == 0:
+                ok = float(a.lr * f > 1e-8)
+                with torch.no_grad():
+                    for L in kq.layers:
+                        ua = L.u.float().abs(); fr = (ua >= U_REF).float().mean()
+                        uacc[L.name] += torch.stack([fr, fr * ok, torch.ones_like(fr), torch.full_like(fr, ok)])
+                        umax[L.name] = torch.maximum(umax[L.name], ua.max())
         else:
             for g, lr0 in zip(opt.param_groups, base_lrs): g['lr'] = lr0 * f
             loss.backward()
@@ -165,17 +184,27 @@ for ep in range(a.epochs):
     rec = dict(epoch=ep + 1, step=step, lr=a.lr * sched(max(step - 1, 0)), train_loss=train_loss, train_acc=(tc / max(nb * a.batch, 1)).item(),
                test_loss=test_loss, test_acc=test_acc, train_time_s=round(t_train, 1), ms_per_step=round(1e3 * t_train / max(step, 1), 2),
                peak_mem_gb=round(torch.cuda.max_memory_allocated() / 2 ** 30, 2) if dev.type == 'cuda' else 0.0, opt_state_mb=round(state_bytes() / 2 ** 20, 1))
-    if kq and ((ep + 1) % a.log_u_every == 0 or ep + 1 == a.epochs or step >= total):
-        us = kq.u_stats().values()
-        rec.update(u_at_upper_max=max(v['at_upper'] for v in us), u_at_lower_max=max(v['at_lower'] for v in us),
-                   u_med_abs_max=max(v['med_abs'] for v in us))
+    if kq:                                                       # per-layer: clamp fraction (epoch mean of samples), max |u|, median |u|, |W|
+        layers = {}; num = den_ = num_ok = 0.0
+        with torch.no_grad():
+            for L in kq.layers:
+                acc = uacc[L.name].tolist(); n_ = L.u.numel()
+                fr = acc[0] / acc[2] if acc[2] else 0.0; fr_ok = acc[1] / acc[3] if acc[3] else 0.0
+                layers[L.name] = dict(clamp=round(fr, 6), clamp_lr_ok=round(fr_ok, 6), umax=round(float(umax[L.name]), 3),
+                                      umed=round(float(L.u.float().abs().median()), 4), wnorm=round(float(L.mod.weight.norm()), 4))
+                num += fr * n_; num_ok += fr_ok * n_; den_ += n_
+                uacc[L.name].zero_(); umax[L.name].zero_()
+        rec.update(clamp_frac=round(num / den_, 6), clamp_frac_lr_ok=round(num_ok / den_, 6),
+                   clamp_frac_max_layer=max(v['clamp'] for v in layers.values()), umax_all=max(v['umax'] for v in layers.values()),
+                   layers=layers)
     logf.write(json.dumps(rec) + '\n'); logf.flush()
-    print(' '.join(f'{k} {v:.4g}' if isinstance(v, float) else f'{k} {v}' for k, v in rec.items()), flush=True)
+    print(' '.join(f'{k} {v:.4g}' if isinstance(v, float) else f'{k} {v}' for k, v in rec.items() if k != 'layers'), flush=True)
     if diverged or step >= total: break
 
 summ = dict(name=a.name, opt=a.opt, lr=a.lr, wd=a.wd, seed=a.seed, epochs_done=ep + 1, steps=step, final_test_acc=test_acc, best_test_acc=best,
             final_test_loss=test_loss, ms_per_step=rec['ms_per_step'], peak_mem_gb=rec['peak_mem_gb'], opt_state_mb=rec['opt_state_mb'],
             params_m=round(nparam / 1e6, 3), diverged=diverged, finished=time.strftime('%Y-%m-%d %H:%M:%S'))
+if kq: summ.update(beta_u=a.beta_u, u_clamp=a.u_clamp, stats_rows=a.stats_rows)
 json.dump(summ, open(os.path.join(a.out, 'summary.json'), 'w'), indent=1)
 torch.save(model.state_dict(), os.path.join(a.out, 'model.pt'))
 print('SUMMARY ' + json.dumps(summ), flush=True)
