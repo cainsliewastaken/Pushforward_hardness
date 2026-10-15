@@ -42,6 +42,10 @@ CODE: optimizer/kronq_main.py (class KronQ, --opt kronq_main), self-contained, o
 configuration exactly on CPU. USE IT AS: --preset current (scale_study.py; sets every option above in one place; explicit options override; the result files record
 the resolved configuration). Add --lr 2e-4 --wd_abs 1e-3 on finite data. The cap is removed from the method: --cap now defaults to 0
 (kept only to reproduce old runs). Every new launcher must use the preset, not a hand-written option list.
+UPDATE 2026-10-14 (user decision): kronq_main no longer stores the previous push. It is rebuilt from the momentum and log-weight
+before they are updated, which saves 2 bytes per parameter with the method unchanged. The match to the research configuration is
+now to bf16 rounding of exp(u) in the hypergradient, not to every digit. CPU, 200 steps, 3 seeds: losses within 0.1-3.5 %, against
+0-3 % for a 1e-7 input nudge (optimizer/README.md). Optimizer state: momentum + log-weight (bf16) plus the block factors.
 
 ## 3. Results with the hybrid (TF32)
 

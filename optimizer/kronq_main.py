@@ -6,7 +6,8 @@ The method, and nothing else (OPTIMIZER_PLAN.md section 2b):
   - the weights are fp32 master weights in ORDINARY coordinates (the network is a plain MLP: one product per layer);
   - each step the gradient is rotated into the basis, there: momentum (b1), push = learned per-mode weight x sign(momentum), the learned
     log-weight updated by the one-step hypergradient with a rank-one normaliser (memory 100), clamped at +-u_clamp; the push is rotated
-    back and applied with the scheduled learning rate;
+    back and applied with the scheduled learning rate; the previous push the hypergradient needs is rebuilt from the momentum and the
+    log-weight before they are updated, not stored (optimizer state: momentum + log-weight, bf16 each, plus the factors);
   - optional decoupled weight decay, given as the decay per step at full lr (`weight_decay`; it follows the lr schedule) - use it on
     finite / replayed data;
   - bases refreshed by `eig_iters` subspace iterations warm-started from the previous basis, on a per-layer adaptive period (relative change
@@ -45,15 +46,19 @@ def _cholqr(Y, passes=3, tol=1e-5):
     return V
 
 
-def _update(g, C, u, r_, c_, Dprev, Se, Ae, lr_t, lam_scale, b1, beta_u, u_clamp, reltol):
-    """one layer in the basis: momentum, hypergradient step on the log-weights, push. C, u, r_, c_ updated in place; returns D."""
+def _update(g, C, u, r_, c_, has_prev, Se, Ae, lr_t, lam_scale, b1, beta_u, u_clamp, reltol):
+    """one layer in the basis: momentum, hypergradient step on the log-weights, push. C, u, r_, c_ updated in place; returns D.
+    The previous push D_{t-1} = exp(u_{t-1}) sign(C_{t-1}) on the live modes is not stored: on entry C and u still hold C_{t-1}
+    and u_{t-1}, and the live mask changes only at a refresh, after which has_prev is False (2026-10-14; it used to be kept in
+    bf16, 2 bytes per parameter; the hypergradient now uses exp(u) unrounded, a difference at bf16 rounding)."""
+    lam = Se[:, None] * Ae[None, :] * lam_scale; live = lam > reltol * lam.max()
+    if has_prev:
+        hg = -(lr_t * g) * torch.where(live, torch.exp(u.float()) * torch.sign(C.float()), torch.zeros_like(g)); hg2 = hg * hg
     C.mul_(b1).add_(g.to(C.dtype), alpha=1 - b1); Cf = C.float()
-    if Dprev is not None:
-        hg = -(lr_t * g) * Dprev.float(); hg2 = hg * hg
+    if has_prev:
         r_.mul_(0.99).add_(hg2.mean(1), alpha=0.01); c_.mul_(0.99).add_(hg2.mean(0), alpha=0.01)
         den = (r_[:, None] * c_[None, :] / (r_.mean() + 1e-30)).sqrt()
         u.copy_((u.float() - beta_u * hg / (den + 1e-30)).clamp(-u_clamp, u_clamp).to(u.dtype))
-    lam = Se[:, None] * Ae[None, :] * lam_scale; live = lam > reltol * lam.max()
     return torch.where(live, torch.exp(u.float()) * torch.sign(Cf), torch.zeros_like(Cf))
 try:
     _update_c = torch.compile(_update, dynamic=False)
@@ -133,7 +138,7 @@ class KronQ:
         self.C = [torch.zeros_like(W, dtype=torch.bfloat16 if mom_bf16 else torch.float32) for W in self.Wt]
         self.u = [torch.zeros_like(W, dtype=torch.bfloat16) for W in self.Wt]
         self.hv = [(torch.zeros(W.shape[0], device=dev), torch.zeros(W.shape[1], device=dev)) for W in self.Wt]
-        self.Dprev = [None] * self.L
+        self.has_prev = [False] * self.L                                    # the previous push is rebuilt in _update, not stored
         self.period = [refresh] * self.L; self.next_ref = [1] * self.L
         self.t = 0; self._lr_t = torch.zeros((), device=dev); self.cache = {}
 
@@ -166,7 +171,7 @@ class KronQ:
 
     def state_bytes(self):
         n = lambda x: 0 if x is None else x.numel() * x.element_size()
-        return sum(n(x) for x in self.C + self.u + self.Dprev) + sum(n(r) + n(c) for r, c in self.hv) + sum(B.nbytes() for B in self.A + self.S)
+        return sum(n(x) for x in self.C + self.u) + sum(n(r) + n(c) for r, c in self.hv) + sum(B.nbytes() for B in self.A + self.S)
 
     # ---------------- helpers
     def _to(self, l, M): return self.A[l].cols_to(self.S[l].rows_to(M))          # U_S^T M U_A
@@ -201,16 +206,16 @@ class KronQ:
                     self.u[l] = tr(self.u[l].float(), True).to(self.u[l].dtype)
                     self.hv[l] = (self.S[l].transport(self.hv[l][0][:, None], VS, 'L', True)[:, 0], self.A[l].transport(self.hv[l][1][None, :], VA, 'R', True)[0])
                     Gr[l] = self._to(l, G[l])
-                self.Dprev[l] = None
+                self.has_prev[l] = False
                 if old_ok and h['adapt_refresh'] > 0:
                     gd_new = float((Gr[l] * self._push(l, Gr[l])).sum()); e_ = abs(gd_new - gd_old) / max(abs(gd_new), 1e-300)
                     self.period[l] = int(min(max(self.period[l] * min(max(h['adapt_refresh'] / max(e_, 1e-12), 0.5), 2.0), h['refresh_min']), 1000))
                 self.next_ref[l] = t + self.period[l]
             self._lr_t.fill_(float(lr))
             for l in range(L):                                              # the update in the basis, rotated back and applied
-                D = _update_c(Gr[l], self.C[l], self.u[l], self.hv[l][0], self.hv[l][1], self.Dprev[l], self.S[l].e, self.A[l].e,
+                D = _update_c(Gr[l], self.C[l], self.u[l], self.hv[l][0], self.hv[l][1], self.has_prev[l], self.S[l].e, self.A[l].e,
                               self._lr_t, 2.0 / self.nout, h['b1'], h['beta_u'], h['u_clamp'], h['reltol'])
-                self.Dprev[l] = D.to(self.u[l].dtype)
+                self.has_prev[l] = True
                 with _fp32(): self.Wt[l].data.sub_(lr * self._from(l, D))
             if h['weight_decay'] > 0:                                       # decoupled decay on the weights (not the bias), following the schedule
                 gam = h['weight_decay'] * lr / self.lr_max

@@ -13,8 +13,18 @@ Run it through the harness with the preset (the preset sets every option; explic
     python scale_study.py --preset current --lr 1e-3 ...                    # fresh data (the field problem)
     python scale_study.py --preset current --lr 2e-4 --wd_abs 1e-3 ...     # finite / replayed data (turbulence)
 
-`--preset current` selects `--opt kronq_main`. Equivalence: on CPU it reproduces the research configuration
-`--opt kronqf --orig 1 --orig_hp rot,stats,refresh --qr_guard 1 --cap 0 --rem 0` to every printed digit (200 steps, with and without decay).
+`--preset current` selects `--opt kronq_main`. Equivalence: on CPU it reproduced the research configuration
+`--opt kronqf --orig 1 --orig_hp rot,stats,refresh --qr_guard 1 --cap 0 --rem 0` to every printed digit (200 steps, with and without decay),
+as extracted (commit 9bd2d1a).
+
+Since 2026-10-14 it no longer stores the previous push the hypergradient needs (2 bytes per parameter, in bf16). It is rebuilt
+from the momentum and the log-weight before they are updated, so the method is unchanged. The hypergradient now uses exp(u)
+unrounded instead of the bf16 copy, so the match to that commit is to rounding:
+- identical for the first two steps;
+- after 200 steps (CPU, 3 seeds, with and without decay) the losses are within 0.1-3.5 %, against 0-3 % for the same optimizer
+  with its inputs nudged by 1e-7.
+
+The optimizer state is now momentum + log-weight (bf16 each) plus the block factors.
 
 ## Research code (kept to reproduce the record; do not use for new runs)
 

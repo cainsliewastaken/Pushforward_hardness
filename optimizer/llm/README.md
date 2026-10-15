@@ -79,9 +79,14 @@ d -> 4d -> d):
 
 | Part | Bytes per parameter |
 |---|---|
-| Momentum, learned log-weight, previous push (bf16 each) | 6 |
+| Momentum and learned log-weight (bf16 each); the previous push is rebuilt from them, not stored | 4 |
 | Factors, bases, eigenvalues (fp32), about 10.7 b/d | d = 768: 3.6 · d = 2048: 1.3 · d = 4096: 0.67 · d = 8192: 0.33 |
-| Total | d = 768: 9.6 · d = 2048: 7.3 · d = 4096: 6.7 · d = 8192: 6.3 |
+| Total | d = 768: 7.6 · d = 2048: 5.3 · d = 4096: 4.7 · d = 8192: 4.3 |
+
+The factors stay small because the bases are block-diagonal. For a dimension n, a basis is n/b blocks of b x b, so it stores
+n x b numbers rather than n x n. Full (unblocked) bases for a d -> 4d layer at d = 8192 would be about 4.6 GB in fp32, more than
+the layer's own weights. With blocks of 256 they are about 42 MB. The price is that the basis cannot capture correlations
+between blocks; whether that costs quality against full factors has not been measured for the current version.
 
 For comparison:
 
@@ -91,8 +96,7 @@ For comparison:
 | Muon (momentum) | 2-4 |
 | SOAP with full factors | about 8 for Adam's moments, plus about 30 for its four d x d-sized factors and bases. Implementations cap the factor size, so in practice it is less. |
 
-So above d = 2048, KronQ's state is below AdamW's. Replacing the stored previous push (2 bytes) by its sign (1 bit) together with
-the current weight would bring it to about 4.4 bytes. That is a small change to the method, so it is not made here.
+So KronQ's state is below AdamW's at every width in the table, and approaches Muon's fp32 momentum (4 bytes) at large width.
 
 Transient memory: one layer's fp32 gradient in the basis and its update at a time (the largest layer, a few copies). On the
 statistics micro-batch, the probe needs that micro-batch's activations until its backward is done, as an ordinary backward

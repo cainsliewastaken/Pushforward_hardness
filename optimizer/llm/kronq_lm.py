@@ -61,7 +61,7 @@ class _Layer:
         self.C = torch.zeros(o, n, device=dev, dtype=torch.bfloat16 if mom_bf16 else torch.float32)
         self.u = torch.zeros(o, n, device=dev, dtype=torch.bfloat16)
         self.hv = (torch.zeros(o, device=dev), torch.zeros(n, device=dev))
-        self.Dprev, self.period, self.next_ref = None, refresh, 1
+        self.has_prev, self.period, self.next_ref = False, refresh, 1
         self.z = None; self.order = -1; self.nA = self.nS = None     # captured output; pending batch factors
 
     def grad(self):
@@ -275,7 +275,7 @@ class KronQLM:
                         L.C = tr(L.C.float()).to(L.C.dtype)
                         L.u = tr(L.u.float(), True).to(L.u.dtype)
                         L.hv = (L.S.transport(L.hv[0][:, None], VS, 'L', True)[:, 0], L.A.transport(L.hv[1][None, :], VA, 'R', True)[0])
-                    L.Dprev = None
+                    L.has_prev = False
                     with _fp32(): G = L.to_basis(L.grad())
                     if ok and h['adapt_refresh'] > 0:
                         gd_new = float((G * self._push(L, G)).sum()); e_ = abs(gd_new - gd_old) / max(abs(gd_new), 1e-300)
@@ -285,10 +285,10 @@ class KronQLM:
                     L.next_ref = t + L.period
                 else:
                     with _fp32(): G = L.to_basis(L.grad())
-                D = _update_c(G, L.C, L.u, L.hv[0], L.hv[1], L.Dprev, L.S.e, L.A.e, self._lr_t, self.lam_scale,
+                D = _update_c(G, L.C, L.u, L.hv[0], L.hv[1], L.has_prev, L.S.e, L.A.e, self._lr_t, self.lam_scale,
                               h['b1'], h['beta_u'], h['u_clamp'], h['reltol'])
                 del G
-                L.Dprev = D.to(L.u.dtype)
+                L.has_prev = True
                 with _fp32(): L.apply(lr * L.from_basis(D))
                 del D
             if h['weight_decay'] > 0:                                # decoupled decay on the KronQ weights (not biases), following the schedule
@@ -303,7 +303,7 @@ class KronQLM:
     def state_bytes(self, split=False):
         """optimizer state in bytes: KronQ per-mode state, KronQ factors + bases, AdamW state."""
         n = lambda x: 0 if x is None else x.numel() * x.element_size()
-        per_mode = sum(n(L.C) + n(L.u) + n(L.Dprev) + n(L.hv[0]) + n(L.hv[1]) for L in self.layers)
+        per_mode = sum(n(L.C) + n(L.u) + n(L.hv[0]) + n(L.hv[1]) for L in self.layers)
         factors = sum(L.A.nbytes() + L.S.nbytes() + n(L.A.e) + n(L.S.e) for L in self.layers)
         adam = sum(n(v) for st in self.adam.state.values() for v in st.values() if torch.is_tensor(v)) if self.adam is not None else 0
         return dict(per_mode=per_mode, factors=factors, adam=adam) if split else per_mode + factors + adam
