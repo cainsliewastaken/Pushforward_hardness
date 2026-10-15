@@ -40,7 +40,7 @@ import contextlib, os, sys, torch, torch.nn as nn, torch.nn.functional as F
 import torch.distributed as dist
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from kronq_main import _Basis, _update_c, _fp32          # the main optimizer's own pieces (unchanged)
+from kronq_main import _Basis, _update_c, _fp32, _cholqr   # the main optimizer's own pieces (unchanged)
 
 
 def _no_autocast(x):
@@ -49,9 +49,44 @@ def _no_autocast(x):
 
 
 def _batch_factor(B, Z):
-    """the batch part of _Basis.update: block factors of the rows of Z (same arithmetic)."""
-    m = Z.shape[0]; nb = B.nf * B.b; Zf = Z[:, :nb].reshape(m, B.nf, B.b)
-    return torch.einsum('mkb,mkc->kbc', Zf, Zf) / m, ((Z[:, nb:].T @ Z[:, nb:] / m) if B.rem else None)
+    """the batch part of _Basis.update: block factors of the rows of Z (same quantity as its einsum; written as one strided
+    batched product, which avoids the layout copies the einsum made for many rows - profiled 2026-10-14)."""
+    m = Z.shape[0]; nb = B.nf * B.b; X = Z[:, :nb].reshape(m, B.nf, B.b).transpose(0, 1)      # (blocks, m, b), no copy
+    return torch.bmm(X.transpose(1, 2), X) / m, ((Z[:, nb:].T @ Z[:, nb:] / m) if B.rem else None)
+
+
+def _refresh_many(Bs, iters):
+    """_Basis.refresh (kronq_main) for several bases at once: all full blocks of equal size in one batched subspace iteration +
+    Cholesky-QR, and remainder blocks of equal size likewise. Same per-block arithmetic; the GPU synchronisations inside the QR
+    happen once per group instead of once per basis (profiled 2026-10-14: 42 separate refreshes cost ~30 ms/step on ResNet-18).
+    One difference: a block whose Cholesky fails sends its whole group (not just its own basis) to the Householder fallback,
+    which gives the same basis up to rounding."""
+    it = max(1, iters); groups = {}
+    for B in Bs:
+        groups.setdefault(('full', B.b), []).append(B)
+        if B.rem: groups.setdefault(('rem', B.rem), []).append(B)
+    out = {}
+    for (kind, b), G in groups.items():
+        if kind == 'full':
+            U0 = [B.U if B.U is not None else torch.eye(b, device=B.dev).expand(B.nf, b, b) for B in G]; F0 = [B.F for B in G]
+        else:
+            U0 = [(B.Ur if B.Ur is not None else torch.eye(b, device=B.dev))[None] for B in G]; F0 = [B.Fr[None] for B in G]
+        U = torch.cat(U0); Fc = torch.cat(F0)
+        for _ in range(it): U = _cholqr(torch.bmm(Fc, U))
+        e = torch.einsum('kbc,kbd,kdc->kc', U, Fc, U).clamp(min=0)
+        sizes = [x.shape[0] for x in U0]
+        for B, Ui, ei in zip(G, U.split(sizes), e.split(sizes)): out[(id(B), kind)] = (Ui, ei.reshape(-1))
+    for B in Bs:
+        U, e = out[(id(B), 'full')]
+        if B.rem:
+            Ur, er = out[(id(B), 'rem')]; B.U, B.Ur, B.e = U, Ur[0], torch.cat([e, er])
+        else:
+            B.U, B.Ur, B.e = U, None, e
+
+
+import torch._dynamo as _dynamo                               # one compiled update per layer shape (ResNet-18 has more than 8)
+for _k in ('recompile_limit', 'cache_size_limit'):
+    if hasattr(_dynamo.config, _k): setattr(_dynamo.config, _k, max(getattr(_dynamo.config, _k), 64))
 
 
 class _Layer:
@@ -168,7 +203,10 @@ class KronQLM:
                 raise RuntimeError(f'{L.name}: recorded twice in one statistics step (weight sharing, or capture on more than one '
                                    'micro-batch) - not supported')
             with torch.no_grad(), _fp32(), _no_autocast(inp[0]):   # input factor now (in fp32 even under autocast)
-                a = L.in_rows(inp[0].detach(), self.conv_images).float()
+                nimg = self.conv_images
+                if L.conv and self.stats_tokens:                 # unfold only the images needed for stats_tokens rows
+                    nimg = min(nimg or out.shape[0], max(1, -(-self.stats_tokens // (out.shape[-1] * out.shape[-2]))))
+                a = L.in_rows(inp[0].detach(), nimg).float()
                 if L.has_bias: a = torch.cat([a, torch.ones(a.shape[0], 1, device=a.device)], 1)
                 L.nA = _batch_factor(L.A, self._rows(a))
             L.z, L.order, L.root = out, self._ncap, not inp[0].requires_grad; self._ncap += 1
@@ -280,15 +318,16 @@ class KronQLM:
         with torch.no_grad():
             self._lr_t.fill_(float(lr))
             due = [l for l, L in enumerate(self.layers) if t >= L.next_ref and L.S.F is not None and L.A.F is not None]
-            old = {}
+            old = {}; mine = []
             for l in due:                                            # phase 1: first-order decrease in the old basis; owners refresh
                 L = self.layers[l]; ok = L.S.e is not None and L.A.e is not None; gd = 0.0
                 if ok:
                     with _fp32(): G = L.to_basis(L.grad())
                     gd = float((G * self._push(L, G)).sum()); del G
                 old[l] = (ok, gd, L.S.U, L.S.Ur, L.A.U, L.A.Ur)
-                if l % self.world == self.rank:
-                    with _fp32(): L.S.refresh(h['eig_iters']); L.A.refresh(h['eig_iters'])
+                if l % self.world == self.rank: mine += [L.S, L.A]
+            if mine:
+                with _fp32(): _refresh_many(mine, h['eig_iters'])   # all due bases at once (per-block math of _Basis.refresh)
             for l, L in enumerate(self.layers):                      # phase 2, one layer at a time: refresh bookkeeping, then the step
                 if l in old:
                     ok, gd_old, SU, SUr, AU, AUr = old.pop(l); owner = l % self.world

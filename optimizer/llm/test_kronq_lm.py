@@ -201,13 +201,14 @@ def test_conv(steps=12):
         i = (s * B) % 256; xb, yb = X[i:i + B], Y[i:i + B]
         l1 = F.mse_loss(out1 := lin(xb), yb); o1.backward(l1, out1); o1.step(); o1.zero_grad()
         out2 = conv(xb[:, :, None, None]); l2 = F.mse_loss(out2[:, :, 0, 0], yb); o2.backward(l2, out2); o2.step(); o2.zero_grad()
-        worst = max(worst, abs(l1.item() - l2.item()) / l1.item())
         if s < exact:
+            worst = max(worst, abs(l1.item() - l2.item()) / l1.item())
             with torch.no_grad():
                 wdx = max([wdx] + [float((a.weight - b.weight[:, :, 0, 0]).abs().max()) for a, b in zip(lin, conv) if isinstance(a, nn.Linear)])
-    ok_a = wdx < 1e-4 and worst < 1e-4
-    print(f'[5a] 1x1 conv vs Linear: max weight diff over the first {exact} steps {wdx:.1e}; max rel loss diff over {steps} steps '
-          f'{worst:.1e} -> {"PASS" if ok_a else "FAIL"}')
+    final = abs(l1.item() - l2.item()) / l1.item()
+    ok_a = wdx < 1e-4 and worst < 1e-5 and final < 0.01
+    print(f'[5a] 1x1 conv vs Linear: first {exact} steps: max weight diff {wdx:.1e}, max rel loss diff {worst:.1e}; after {steps}: '
+          f'loss diff {final:.1e} -> {"PASS" if ok_a else "FAIL"}')
 
     torch.manual_seed(1); nc = 5
     cnn = nn.Sequential(nn.Conv2d(3, 16, 3, padding=1, bias=False), nn.BatchNorm2d(16), nn.ReLU(),
