@@ -38,7 +38,7 @@ p.add_argument('--test_subset', type=int, default=0, help='evaluate on only this
 p.add_argument('--max_steps', type=int, default=0, help='stop after this many steps (smoke tests)')
 # KronQ options (defaults = the main optimizer's)
 p.add_argument('--block', type=int, default=256); p.add_argument('--stats_every', type=int, default=1)
-p.add_argument('--conv_images', type=int, default=32); p.add_argument('--probe', default='fisher', choices=['fisher', 'emp'])
+p.add_argument('--stats_rows', type=int, default=0, help='rows (image x position pairs) per layer for the factor statistics; 0 = all'); p.add_argument('--conv_images', type=int, default=32); p.add_argument('--probe', default='fisher', choices=['fisher', 'emp'])
 p.add_argument('--log_u_every', type=int, default=10, help='epochs between logs of the learned-weight clamp fractions')
 a = p.parse_args()
 if a.wd is None: a.wd = dict(sgd=5e-4, adamw=5e-2, soap=1e-2, muon=0.0, kronq=5e-5)[a.opt]
@@ -114,7 +114,7 @@ elif a.opt == 'muon':
 else:
     from kronq_lm import KronQLM
     kq = KronQLM(model, lr=a.lr, lr_adam=a.lr_aux, loss='ce', probe=a.probe, exclude=(), block=a.block, stats_every=a.stats_every,
-                 conv_images=a.conv_images, weight_decay=a.wd, seed=a.seed)
+                 conv_images=a.conv_images, stats_rows=a.stats_rows, weight_decay=a.wd, seed=a.seed)
 base_lrs = None if kq else [g['lr'] for g in opt.param_groups]
 print(f'ResNet-18: {nparam / 1e6:.2f}M parameters; {steps_per_epoch} steps/epoch, {total} steps; '
       + (f'KronQ layers {len(kq.layers)}, AdamW tensors {sum(len(g["params"]) for g in kq.adam.param_groups)}' if kq else a.opt), flush=True)

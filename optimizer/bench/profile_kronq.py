@@ -49,7 +49,7 @@ def clean_ms(kind, **kw):
 print(f'GPU {torch.cuda.get_device_name(0)}, torch {torch.__version__}, batch {B}, {N} timed steps after {WARM} warm-up', flush=True)
 res = {}
 for name, kind, kw in [('SGD', 'sgd', {}), ('KronQ (benchmark settings)', 'kronq', {}), ('KronQ stats_every=4', 'kronq', dict(stats_every=4)),
-                       ('KronQ empirical-Fisher probe', 'kronq', dict(probe='emp')), ('KronQ stats_tokens=8192', 'kronq', dict(stats_tokens=8192)), ('KronQ stats_tokens=8192, stats_every=4', 'kronq', dict(stats_tokens=8192, stats_every=4))]:
+                       ('KronQ empirical-Fisher probe', 'kronq', dict(probe='emp')), ('KronQ stats_rows=8192', 'kronq', dict(stats_rows=8192)), ('KronQ stats_rows=8192, stats_every=4', 'kronq', dict(stats_rows=8192, stats_every=4))]:
     ms, opt, _ = clean_ms(kind, **kw); res[name] = ms
     print(f'[1] {name:32s} {ms:7.1f} ms/step', flush=True)
 nl = len(opt.layers)
@@ -69,7 +69,7 @@ def timed(name, fn):
 
 
 model = make_model()
-opt = KronQLM(model, lr=1e-3, lr_adam=1e-3, loss='ce', exclude=(), weight_decay=5e-5, stats_tokens=8192)
+opt = KronQLM(model, lr=1e-3, lr_adam=1e-3, loss='ce', exclude=(), weight_decay=5e-5, stats_rows=8192)
 patches = [(kronq_lm, '_batch_factor', 'stats: batch factor (hooks)'), (KronQLM, '_ema', 'stats: EMA + all-reduce'),
            (_Basis, 'refresh', 'refresh: subspace iteration + QR'), (KronQLM, '_sync', 'refresh: sync/overlap'),
            (_Basis, 'transport', 'refresh: state transport'), (KronQLM, '_push', 'refresh: first-order decrease'),
@@ -105,7 +105,7 @@ for (obj, attr), fn in orig.items(): setattr(obj, attr, fn)
 
 # ---------------- 3. torch.profiler
 from torch.profiler import profile, ProfilerActivity
-_, opt3, step3 = clean_ms('kronq', stats_tokens=8192)
+_, opt3, step3 = clean_ms('kronq', stats_rows=8192)
 with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA]) as prof:
     for _ in range(10): step3()
     torch.cuda.synchronize()

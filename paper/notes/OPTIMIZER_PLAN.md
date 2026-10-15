@@ -99,6 +99,10 @@ now to bf16 rounding of exp(u) in the hypergradient, not to every digit. CPU, 20
    accumulation: ~fp32 accuracy at 3x TF32 cost (~2.7x faster than fp32). The bases' hi / lo parts change only at a refresh (precompute);
    per step only the gradient and the update are split. On bf16-only hardware ~6 bf16 products for fp32-level accuracy. Needed only where
    the rotations are compute-bound: at width 4096 plain-fp32 rotations showed no measurable cost (overhead-bound), so test at scale.
+   TO TEST (flagged 2026-10-14, user): 3xTF32 must match fp32 before it is used. Unit test done (A100, blocks of 256, gradient with
+   O(1) fast and O(s) slow coefficients, error on the slow coefficients vs float64): fp32 2.0e-5 / 2.0e-3 / 0.20 at s = 1e-3 / 1e-5 /
+   1e-7; 3xTF32 4.1e-5 / 4.0e-3 / 0.41 (2x fp32); TF32 2.5e-2 / 2.5 / 250. Still needed: the rough-field long run (B1024, T10000) with
+   3xTF32 rotations and statistics against the fp32 0.0033 (REPORT 60); TF32 gave 0.0073 there.
 4. CRITICAL BATCH REPORT (no compute): re-summarise scale_crit (223 runs) with best-along-run values now that the spikes are explained.
 5. bf16: the hybrid under bf16 autocast on the rough preset and turbulence.
 6. Notes: correct THEORY.md / MECHANISM.md on the Kronecker basis (section 4).

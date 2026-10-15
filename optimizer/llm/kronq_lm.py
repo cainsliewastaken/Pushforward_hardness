@@ -16,7 +16,7 @@ language model needs:
   - SCALE: the statistics come from ONE micro-batch per statistics step (gradient accumulation over the others as usual), so the
     probe's extra backward costs ~1/3 of one micro-batch, not of the whole step; the statistics are consumed by tensor hooks as
     the probe's gradients pass each layer (no layer-output gradient is kept), and the step runs one layer at a time (no full
-    fp32 copy of all gradients). Optional `stats_tokens` row subsampling;
+    fp32 copy of all gradients). Optional `stats_rows` row subsampling;
   - bf16 autocast: activations and probe gradients are cast to fp32 for the statistics; parameters must stay fp32 (master
     weights); the basis work runs in full fp32 as in kronq_main;
   - data parallel (torch DDP): the gradients are averaged by DDP; the factor statistics are all-reduced here so every rank holds
@@ -137,14 +137,14 @@ class KronQLM:
                  lr_adam=None, adam_betas=(0.9, 0.95), adam_eps=1e-8, adam_wd=0.0,
                  exclude=('lm_head',), max_dim=16384, block=256, b1=0.9, beta_u=0.01, u_clamp=4.6, reltol=1e-12, beta_stats=0.95,
                  eig_iters=2, refresh=20, adapt_refresh=0.1, refresh_min=5, stats_every=1, weight_decay=0.0, mom_bf16=True,
-                 stats_tokens=0, probe_tokens=0, conv_images=32, lam_scale=1.0, stream=True, seed=0):
+                 stats_rows=0, probe_tokens=0, conv_images=32, lam_scale=1.0, stream=True, seed=0):
         assert loss in ('ce', 'mse') and probe in ('fisher', 'emp')
         net = model.module if hasattr(model, 'module') else model            # DDP-wrapped or plain
         self.model, self.lr, self.lr_max = net, lr, (lr if lr_max is None else lr_max)
         self.loss, self.probe, self.draw_probe, self.stream = loss, probe, draw_probe, stream
         self.h = dict(b1=b1, beta_u=beta_u, u_clamp=u_clamp, reltol=reltol, beta_stats=beta_stats, eig_iters=eig_iters,
                       adapt_refresh=adapt_refresh, refresh_min=refresh_min, stats_every=stats_every, weight_decay=weight_decay)
-        self.stats_tokens, self.probe_tokens, self.conv_images, self.lam_scale = stats_tokens, probe_tokens, conv_images, lam_scale
+        self.stats_rows, self.probe_tokens, self.conv_images, self.lam_scale = stats_rows, probe_tokens, conv_images, lam_scale
         self.ddp = dist.is_available() and dist.is_initialized()
         self.rank, self.world = (dist.get_rank(), dist.get_world_size()) if self.ddp else (0, 1)
 
@@ -192,7 +192,7 @@ class KronQLM:
         finally: self._cap = prev if prev is not None else False
 
     def _rows(self, Z):
-        n = self.stats_tokens
+        n = self.stats_rows
         if n and Z.shape[0] > n: Z = Z[torch.randperm(Z.shape[0], device=Z.device, generator=self.gen)[:n]]
         return Z
 
@@ -204,8 +204,8 @@ class KronQLM:
                                    'micro-batch) - not supported')
             with torch.no_grad(), _fp32(), _no_autocast(inp[0]):   # input factor now (in fp32 even under autocast)
                 nimg = self.conv_images
-                if L.conv and self.stats_tokens:                 # unfold only the images needed for stats_tokens rows
-                    nimg = min(nimg or out.shape[0], max(1, -(-self.stats_tokens // (out.shape[-1] * out.shape[-2]))))
+                if L.conv and self.stats_rows:                 # unfold only the images needed for stats_rows rows
+                    nimg = min(nimg or out.shape[0], max(1, -(-self.stats_rows // (out.shape[-1] * out.shape[-2]))))
                 a = L.in_rows(inp[0].detach(), nimg).float()
                 if L.has_bias: a = torch.cat([a, torch.ones(a.shape[0], 1, device=a.device)], 1)
                 L.nA = _batch_factor(L.A, self._rows(a))

@@ -67,7 +67,7 @@ All pass, 2026-10-14:
 |---|---|---|
 | Forward + backward | 6NP | the baseline |
 | Probe | about 2NP/M per statistics step | the only part that grows with the token count. About 1/(3M) of the step at `stats_every=1`; under 1 % for M >= 32, or for M >= 8 with `stats_every=4`. `probe='emp'`: 0. |
-| Statistics | 2b x (inputs + outputs) per token, on one micro-batch | small; `stats_tokens` subsamples rows |
+| Statistics | 2b x (inputs + outputs) per token, on one micro-batch | small; `stats_rows` subsamples rows |
 | Rotations | about 8bP per step, independent of N | fp32 (no TF32); about 0.2 % at 4M tokens per step |
 | Refresh | about 4 x dim x b^2 per side, every 5-1000 steps, spread across ranks | small in FLOPs. Each refresh synchronises the GPU a few times per layer, which is latency, not FLOPs. Batching same-shape layers would remove most of it (not done). |
 | All-reducing the statistics | the input and output factors (dim x b floats per side per layer) per statistics step | about 0.17 bytes per parameter. At 70B that is about 8 % of a bf16 gradient all-reduce if done every step, under 1 % at `stats_every=10`. A reduce-scatter (each rank keeping only its own blocks) would cut it further (not done). |
